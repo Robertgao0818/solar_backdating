@@ -124,26 +124,43 @@ def parse_availability_output(text: str) -> list[str]:
     return sorted(dates)
 
 
-def dedupe_info_rows_by_version(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
-    grouped: dict[tuple[str, int], list[Mapping[str, object]]] = {}
+def dedupe_info_rows_by_date(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    """Deduplicate GEHI info rows by (anchor_id, capture_date).
+
+    Each distinct capture_date is preserved as one vintage row regardless of
+    Google's internal `version` label. GEHI returns multiple capture_dates
+    sharing a single version (e.g. v296 spans 2010-06 through 2021-04 in JHB
+    CBD); each labeled date is a distinct timestamp the user cares about,
+    so collapsing them by version drops most of the vintage list and breaks
+    bisection / progressive walk_back. If multiple rows share an exact
+    (anchor_id, capture_date), keep the lowest version number for stable
+    ordering.
+    """
+    grouped: dict[tuple[str, str], list[Mapping[str, object]]] = {}
     for row in rows:
-        key = (str(row.get("anchor_id", "")), int(row["version"]))
+        key = (str(row.get("anchor_id", "")), str(row["capture_date"]))
         grouped.setdefault(key, []).append(row)
 
     out: list[dict[str, object]] = []
-    for (_anchor_id, _version), items in sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1])):
-        sorted_items = sorted(items, key=lambda item: str(item["capture_date"]))
+    for (_anchor_id, _capture_date), items in sorted(
+        grouped.items(), key=lambda kv: (kv[0][0], kv[0][1])
+    ):
+        sorted_items = sorted(items, key=lambda item: int(item["version"]))
         first = dict(sorted_items[0])
-        dates = sorted({str(item["capture_date"]) for item in sorted_items})
-        first["capture_date"] = dates[0]
-        first["capture_date_min"] = dates[0]
-        first["capture_date_max"] = dates[-1]
-        first["all_capture_dates"] = ";".join(dates)
-        first["n_date_labels"] = len(dates)
-        first["version_dedupe_key"] = f"{first.get('anchor_id', '')}:{first['version']}"
-        return_fields = {k: first[k] for k in first}
-        out.append(return_fields)
+        versions = sorted({int(item["version"]) for item in sorted_items})
+        first["capture_date_min"] = first["capture_date"]
+        first["capture_date_max"] = first["capture_date"]
+        first["all_capture_dates"] = first["capture_date"]
+        first["n_date_labels"] = 1
+        first["version_dedupe_key"] = f"{first.get('anchor_id', '')}:{first['capture_date']}"
+        first["all_versions"] = ";".join(str(v) for v in versions)
+        first["n_versions_at_date"] = len(versions)
+        out.append(first)
     return out
+
+
+# Backward-compat alias for any callers still importing the old name.
+dedupe_info_rows_by_version = dedupe_info_rows_by_date
 
 
 def ensure_review_png(tif_path: Path) -> Path:

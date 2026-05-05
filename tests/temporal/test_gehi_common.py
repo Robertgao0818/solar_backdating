@@ -4,7 +4,8 @@ from scripts.temporal.gehi_common import (
     anchor_bbox_args,
     anchor_location_arg,
     decode_gehi_output,
-    dedupe_info_rows_by_version,
+    dedupe_info_rows_by_date,
+    dedupe_info_rows_by_version,  # backward-compat alias
     parse_availability_output,
     parse_info_output,
 )
@@ -44,19 +45,41 @@ class GehiCommonTests(unittest.TestCase):
             ],
         )
 
-    def test_dedupe_info_rows_by_anchor_version(self):
+    def test_dedupe_info_rows_by_date_preserves_each_capture_date(self):
+        """Distinct capture_dates that share a version must each survive — the previous
+        version-based dedupe collapsed 74 GEHI vintages to 15 in JHB CBD and broke
+        progressive walk_back / bisection."""
         rows = [
             {"anchor_id": "a1", "capture_date": "2015-08-30", "version": 277, "zoom": 19},
             {"anchor_id": "a1", "capture_date": "2015-11-30", "version": 277, "zoom": 19},
+            {"anchor_id": "a1", "capture_date": "2017-09-30", "version": 296, "zoom": 19},
+            {"anchor_id": "a1", "capture_date": "2018-04-30", "version": 296, "zoom": 19},
             {"anchor_id": "a1", "capture_date": "2024-02-29", "version": 1010, "zoom": 19},
         ]
-        deduped = dedupe_info_rows_by_version(rows)
-        self.assertEqual(len(deduped), 2)
+        deduped = dedupe_info_rows_by_date(rows)
+        self.assertEqual(len(deduped), 5)
+        dates = [r["capture_date"] for r in deduped]
+        self.assertEqual(dates, ["2015-08-30", "2015-11-30", "2017-09-30", "2018-04-30", "2024-02-29"])
+        first = deduped[0]
+        self.assertEqual(first["version"], 277)
+        self.assertEqual(first["n_date_labels"], 1)
+        self.assertEqual(first["version_dedupe_key"], "a1:2015-08-30")
+
+    def test_dedupe_info_rows_collapses_exact_duplicates(self):
+        """Same anchor + same capture_date → keep one row; capture lowest version for stability."""
+        rows = [
+            {"anchor_id": "a1", "capture_date": "2015-08-30", "version": 277, "zoom": 19},
+            {"anchor_id": "a1", "capture_date": "2015-08-30", "version": 296, "zoom": 19},
+        ]
+        deduped = dedupe_info_rows_by_date(rows)
+        self.assertEqual(len(deduped), 1)
         self.assertEqual(deduped[0]["version"], 277)
-        self.assertEqual(deduped[0]["capture_date"], "2015-08-30")
-        self.assertEqual(deduped[0]["capture_date_max"], "2015-11-30")
-        self.assertEqual(deduped[0]["all_capture_dates"], "2015-08-30;2015-11-30")
-        self.assertEqual(deduped[0]["version_dedupe_key"], "a1:277")
+        self.assertEqual(deduped[0]["all_versions"], "277;296")
+        self.assertEqual(deduped[0]["n_versions_at_date"], 2)
+
+    def test_dedupe_alias_backward_compat(self):
+        """dedupe_info_rows_by_version is preserved as an alias to avoid breaking imports."""
+        self.assertIs(dedupe_info_rows_by_version, dedupe_info_rows_by_date)
 
     def test_parse_availability_output_from_utf16_chooser_output(self):
         raw = "[0]  2015/11/30  [1]  2015/08/30  [Esc]  Exit".encode("utf-16le")
