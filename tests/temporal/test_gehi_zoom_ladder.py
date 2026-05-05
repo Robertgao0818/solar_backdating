@@ -258,6 +258,144 @@ def test_single_zoom_ladder_acts_as_pre_ladder_default(anchor, tmp_path: Path) -
     assert len(runner.calls) == 1
 
 
+def test_failed_attempt_partial_file_is_quarantined(anchor, tmp_path: Path) -> None:
+    """A failed GEHI run that wrote a non-empty partial must not poison idempotent re-runs."""
+    plan = {
+        20: {"returncode": 2, "writes_file": True, "stderr": "broken at z=20 but wrote partial"},
+        19: {"returncode": 0, "writes_file": True},
+    }
+    runner = _make_runner(plan, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2015-08-30",
+        version=200,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        runner=runner,
+    )
+    assert result.status == "ok"
+    assert result.actual_zoom == 19
+    z20_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2015-08-30", "200", 20)
+    assert not z20_path.exists(), "leftover partial at failed z=20 must be deleted"
+    z19_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2015-08-30", "200", 19)
+    assert z19_path.exists()
+
+
+def test_idempotent_skip_does_not_pick_quarantined_partial(anchor, tmp_path: Path) -> None:
+    """Re-running after a partial-cleanup must not silently use the bad file."""
+    plan_run1 = {
+        20: {"returncode": 2, "writes_file": True, "stderr": "broken"},
+        19: {"returncode": 0, "writes_file": True},
+    }
+    runner1 = _make_runner(plan_run1, tmp_path)
+    download_chip_with_zoom_ladder(
+        anchor, capture_date="2015-08-30", version=200,
+        zoom_ladder=(20, 19), output_root=tmp_path, runner=runner1,
+    )
+    runner2 = _make_runner({}, tmp_path)
+    result2 = download_chip_with_zoom_ladder(
+        anchor, capture_date="2015-08-30", version=200,
+        zoom_ladder=(20, 19), output_root=tmp_path, runner=runner2,
+    )
+    assert result2.status == "skipped_existing"
+    assert result2.actual_zoom == 19, "must NOT report z=20 since the partial was quarantined"
+    assert len(runner2.calls) == 0
+
+
+def test_runner_exception_quarantines_partial(anchor, tmp_path: Path) -> None:
+    """Exception path must also clean up any partial file the runner wrote before raising."""
+    z20_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2024-06-15", "999", 20)
+
+    def runner(cmd_args, *, executable, timeout):
+        zoom = None
+        out_path = None
+        for i, arg in enumerate(cmd_args):
+            if arg == "--zoom":
+                zoom = int(cmd_args[i + 1])
+            elif arg == "--output":
+                out_path = Path(cmd_args[i + 1])
+        if zoom == 20:
+            assert out_path is not None
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"PARTIAL_BEFORE_TIMEOUT")
+            raise TimeoutError("simulated mid-write timeout")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(b"OK_AT_Z19")
+        return GehiRunResult(args=tuple(str(a) for a in cmd_args), returncode=0, stdout="", stderr="")
+
+    result = download_chip_with_zoom_ladder(
+        anchor, capture_date="2024-06-15", version=999,
+        zoom_ladder=(20, 19), output_root=tmp_path, runner=runner,
+    )
+    assert result.status == "ok"
+    assert result.actual_zoom == 19
+    assert not z20_path.exists()
+
+
+def test_vintage_check_skips_zoom_when_date_not_in_catalog(anchor, tmp_path: Path) -> None:
+    """When provenance catalog says z=20 has no vintage for this date, skip without calling GEHI."""
+    catalogs = {20: {"2024-06-15"}, 19: {"2015-08-30", "2024-06-15"}}
+
+    def vintage_check(zoom: int, capture_date: str) -> bool:
+        return capture_date in catalogs.get(zoom, set())
+
+    plan = {19: {"returncode": 0, "writes_file": True}}
+    runner = _make_runner(plan, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2015-08-30",
+        version=200,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        runner=runner,
+        vintage_check=vintage_check,
+    )
+    assert result.status == "ok"
+    assert result.actual_zoom == 19
+    assert [c["zoom"] for c in runner.calls] == [19], "z=20 must be skipped without GEHI call"
+
+
+def test_vintage_check_passes_when_catalog_has_date(anchor, tmp_path: Path) -> None:
+    catalogs = {20: {"2024-06-15"}}
+
+    def vintage_check(zoom: int, capture_date: str) -> bool:
+        return capture_date in catalogs.get(zoom, set())
+
+    plan = {20: {"returncode": 0, "writes_file": True}}
+    runner = _make_runner(plan, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2024-06-15",
+        version=999,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        runner=runner,
+        vintage_check=vintage_check,
+    )
+    assert result.status == "ok"
+    assert result.actual_zoom == 20
+    assert len(runner.calls) == 1
+
+
+def test_vintage_check_all_zooms_excluded_returns_failed(anchor, tmp_path: Path) -> None:
+    def always_false(_zoom: int, _date: str) -> bool:
+        return False
+
+    runner = _make_runner({}, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2030-01-01",
+        version=1,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        runner=runner,
+        vintage_check=always_false,
+    )
+    assert result.status == "all_zooms_failed"
+    assert "vintage_check_failed" in (result.error or "")
+    assert len(runner.calls) == 0
+
+
 def test_runner_exception_falls_through_to_next_zoom(anchor, tmp_path: Path) -> None:
     plan = {
         20: {"returncode": 0, "writes_file": True},

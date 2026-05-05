@@ -105,6 +105,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--allow-nearest", action="store_true", help="Do not pass GEHI --exact-date.")
+    parser.add_argument(
+        "--allow-failures",
+        action="store_true",
+        help="Exit 0 even if some candidates failed at every ladder zoom. Default: exit 1 on any all_zooms_failed.",
+    )
     return parser.parse_args()
 
 
@@ -158,6 +163,18 @@ def _chip_path_for(output_root: Path, anchor_id: str, capture_date: str, version
     )
 
 
+def _quarantine_partial(out_path: Path) -> None:
+    """Remove a leftover output file from a failed GEHI attempt so idempotent
+    re-runs do not later mistake it for a successful download. Called after any
+    non-success path in `download_chip_with_zoom_ladder`.
+    """
+    try:
+        if out_path.exists():
+            out_path.unlink()
+    except OSError:
+        pass
+
+
 def download_chip_with_zoom_ladder(
     anchor: Mapping[str, object],
     *,
@@ -175,14 +192,21 @@ def download_chip_with_zoom_ladder(
     allow_nearest: bool = False,
     runner: Callable[..., GehiRunResult] = run_gehi,
     raw_log_callback: Callable[[Mapping[str, object]], None] | None = None,
+    vintage_check: Callable[[int, str], bool] | None = None,
 ) -> DownloadResult:
     """Download a chip at the first zoom in `zoom_ladder` that succeeds.
 
     Idempotent: scans the ladder for an existing non-empty chip first and
     returns it (preferring the highest-quality / earliest-in-ladder match)
     without re-running GEHI. On miss, attempts each zoom in ladder order;
-    falls back to next zoom on non-zero return code or empty output. Returns
-    a `DownloadResult` describing the outcome.
+    falls back to next zoom on non-zero return code, empty output, runner
+    exception, or `vintage_check(zoom, capture_date) is False`. Any non-empty
+    file left by a failed attempt is removed so a later run re-attempts cleanly.
+
+    `vintage_check` is an optional provenance gate: when supplied, the ladder
+    skips any zoom whose vintage catalog does not contain `capture_date`. The
+    intended source is a per-anchor, per-zoom GEHI info catalog cached by the
+    caller (see `make_vintage_check` in run_adaptive_scan).
     """
     if not zoom_ladder:
         raise ValueError("zoom_ladder must be non-empty")
@@ -211,6 +235,35 @@ def download_chip_with_zoom_ladder(
     last_error: str | None = None
     lower_left, upper_right = anchor_bbox_args(anchor)
     for zoom in ladder:
+        if vintage_check is not None:
+            try:
+                vintage_present = bool(vintage_check(zoom, capture_date))
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"vintage_check raised at z={zoom}: {type(exc).__name__}: {exc}"
+                if raw_log_callback is not None:
+                    raw_log_callback(
+                        {
+                            "anchor_id": anchor_id,
+                            "capture_date": capture_date,
+                            "version": version_str,
+                            "zoom_attempt": zoom,
+                            "skip_reason": last_error,
+                        }
+                    )
+                continue
+            if not vintage_present:
+                last_error = f"vintage_check_failed at z={zoom}: capture_date {capture_date} not in catalog"
+                if raw_log_callback is not None:
+                    raw_log_callback(
+                        {
+                            "anchor_id": anchor_id,
+                            "capture_date": capture_date,
+                            "version": version_str,
+                            "zoom_attempt": zoom,
+                            "skip_reason": last_error,
+                        }
+                    )
+                continue
         out_path = _chip_path_for(output_root, anchor_id, capture_date, version_str, zoom)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         cmd_args: list[object] = [
@@ -240,6 +293,7 @@ def download_chip_with_zoom_ladder(
             result = runner(cmd_args, executable=gehi_exe, timeout=timeout)
         except Exception as exc:
             last_error = f"runner exception at z={zoom}: {type(exc).__name__}: {exc}"
+            _quarantine_partial(out_path)
             if raw_log_callback is not None:
                 raw_log_callback(
                     {
@@ -269,9 +323,11 @@ def download_chip_with_zoom_ladder(
             )
         if result.returncode != 0:
             last_error = f"GEHI returncode={result.returncode} at z={zoom}: {result.stderr[:300] or result.stdout[:300]}"
+            _quarantine_partial(out_path)
             continue
         if not out_path.exists() or out_path.stat().st_size == 0:
             last_error = f"GEHI succeeded but output file empty/missing at z={zoom}"
+            _quarantine_partial(out_path)
             continue
         return DownloadResult(
             anchor_id=anchor_id,
@@ -371,6 +427,15 @@ def main() -> None:
     write_csv_rows(args.manifest, manifest_rows, FIELDS)
     print(f"Wrote {len(manifest_rows)} GEHI image artifact rows -> {args.manifest}")
     print(f"Wrote raw GEHI download log -> {args.raw_log}")
+
+    failed_rows = [r for r in manifest_rows if str(r.get("status", "")).startswith("all_zooms_failed")]
+    if failed_rows and not args.allow_failures:
+        sample = failed_rows[0]
+        raise SystemExit(
+            f"FAIL: {len(failed_rows)}/{len(manifest_rows)} candidates failed at every ladder zoom. "
+            f"Sample: anchor={sample.get('anchor_id')} date={sample.get('capture_date')} status={sample.get('status')}. "
+            f"Pass --allow-failures to exit 0 anyway."
+        )
 
 
 if __name__ == "__main__":

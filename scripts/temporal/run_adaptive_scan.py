@@ -176,6 +176,35 @@ def execute_round_dry_run(
     return rnd
 
 
+def make_vintage_check(
+    anchor: dict[str, str],
+    *,
+    primary_zoom_dates: set[str],
+    primary_zoom: int,
+    config: AdaptiveScanConfig,
+) -> "Callable[[int, str], bool]":
+    """Build a vintage_check Callable for `download_chip_with_zoom_ladder`.
+
+    The primary zoom (typically info_zoom = 19) reuses the catalog already
+    fetched by `_fetch_real_vintages`. Other ladder zooms lazy-fetch their
+    own catalogs via `gehi_info` on first lookup, then cache. Returns False
+    when the requested capture_date is not present at the requested zoom.
+    """
+    from typing import Callable as _Callable  # local import to avoid stub leakage
+
+    catalogs: dict[int, set[str]] = {primary_zoom: set(primary_zoom_dates)}
+
+    def check(zoom: int, capture_date: str) -> bool:
+        if zoom not in catalogs:
+            from scripts.temporal.gehi_info import fetch_vintages_for_anchor
+
+            rows = fetch_vintages_for_anchor(anchor, zoom=zoom)
+            catalogs[zoom] = {str(r.get("capture_date", ""))[:10] for r in rows if r.get("capture_date")}
+        return capture_date[:10] in catalogs[zoom]
+
+    return check
+
+
 def execute_round_real(
     rnd: Round,
     anchor: dict[str, str],
@@ -184,6 +213,7 @@ def execute_round_real(
     chips_dir: Path,
     audit_dir: Path,
     gemini_config,  # GeminiClientConfig - imported lazily
+    vintage_check=None,
 ) -> Round:
     """Download chips for each pick (zoom ladder), batch-score with Gemini, return Round with results."""
     import json as _json
@@ -202,6 +232,7 @@ def execute_round_real(
             version=pick.version,
             zoom_ladder=config.download_zoom_ladder,
             output_root=chips_dir,
+            vintage_check=vintage_check,
         )
         download_outcomes.append((pick, outcome))
 
@@ -356,6 +387,15 @@ def run_one_anchor(
 
     profile = dry_run_profile_for(anchor_id) if dry_run else None
     vintages = dry_run_vintages(anchor_id) if dry_run else _fetch_real_vintages(anchor, config)
+    vintage_check = None
+    if not dry_run:
+        primary_dates = {v.capture_date[:10] for v in vintages}
+        vintage_check = make_vintage_check(
+            anchor,
+            primary_zoom_dates=primary_dates,
+            primary_zoom=config.info_zoom,
+            config=config,
+        )
 
     max_iter = 32
     for _ in range(max_iter):
@@ -377,6 +417,7 @@ def run_one_anchor(
             rnd = execute_round_real(
                 rnd, anchor, config,
                 chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=gemini_config,
+                vintage_check=vintage_check,
             )
         state.rounds.append(rnd)
         state.next_action = "decide_next_action"
