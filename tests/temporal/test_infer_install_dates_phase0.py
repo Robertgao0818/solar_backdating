@@ -162,15 +162,23 @@ def test_done_appears_inverted_interval_flagged() -> None:
     assert interval.earliest_present_date == "2022-06-15"
 
 
-def test_done_installed_during_census_inverted_interval_flagged() -> None:
-    """Defensive: latest_absent_date past census_mid_date downgrades to low + flags notes."""
+def test_done_installed_during_census_marker_missed_pv_promotion() -> None:
+    """Census-GT prior post-hoc check: latest_absent_date >= census_mid_date implies
+    marker fell off the PV (anchor is GT-positive at census), so status flips
+    from done_installed_during_census to done_ambiguous_marker_missed_pv with
+    blanked interval and low confidence."""
     state = _state_with(
         "done_installed_during_census",
         [_result("2024-11-01", present=False)],
     )
     interval = infer_one(state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"))
+    assert interval.status == "done_ambiguous_marker_missed_pv"
     assert interval.confidence == "low"
-    assert "inverted_interval" in interval.notes
+    assert interval.install_interval_start == ""
+    assert interval.install_interval_end == ""
+    assert interval.install_mid_estimate == ""
+    assert "marker_missed_pv" in interval.notes
+    assert "contradicts census-GT prior" in interval.notes
 
 
 def test_done_installed_during_census_medium_when_old_absent() -> None:

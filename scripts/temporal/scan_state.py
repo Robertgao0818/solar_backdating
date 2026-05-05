@@ -32,6 +32,12 @@ TERMINAL_STATUSES = {
     "done_ambiguous_gemini_failed",
     "done_ambiguous_no_recent_anchor",
     "done_ambiguous_orchestrator_error",
+    # Post-hoc status assigned in inference layer when scan_state.status =
+    # done_installed_during_census but latest_absent_date >= census_imagery_mid_date,
+    # contradicting the GT prior that the anchor is PV-positive at census time.
+    # Means: marker likely fell on a roof aisle / shadow / wrong segment and
+    # missed the PV — needs human review.
+    "done_ambiguous_marker_missed_pv",
 }
 ALL_STATUSES = {"scanning", *TERMINAL_STATUSES}
 

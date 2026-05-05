@@ -163,13 +163,72 @@ def dedupe_info_rows_by_date(rows: Sequence[Mapping[str, object]]) -> list[dict[
 dedupe_info_rows_by_version = dedupe_info_rows_by_date
 
 
-def ensure_review_png(tif_path: Path) -> Path:
+def _draw_anchor_marker(
+    img,
+    *,
+    color: tuple[int, int, int] = (255, 215, 0),
+    ring_radius_pct: float = 0.18,
+    ring_stroke: int = 3,
+    inner_arm_pct: float = 0.04,
+    inner_thickness: int = 2,
+) -> None:
+    """Draw a yellow ring + tiny + at the chip center marking the anchor extent.
+
+    The ring covers ~36% of the chip diameter (radius = 18% of short side) to
+    approximate the anchor's source_area_m2 footprint (~6-7m radius for a typical
+    100-150 m² installation in a 36m × 36m chip). This widens the judgment area
+    from a single pixel to the actual install extent, so cases where the centroid
+    falls on a roof shadow / aisle between PV arrays no longer get misjudged as
+    'absent'.
+
+    Visual contract for the prompt:
+      - yellow ring outline = "search this region for PV"
+      - small + inside = "this is the centroid (anchor location anchor)"
+
+    Sizes are image-relative so z=19 (~67px) and z=20 (~135px) chips both get
+    a legible marker without occluding the roof.
+
+    Rationale (P1 fix, 2026-05-05): single-pixel + marker placed Gemini's
+    attention too narrowly. a000003 (PV in 4 distinct arrays around but not at
+    centroid) and a000007 (centroid fell on a dark roof shadow with PV around)
+    were misjudged as absent. The ring widens to anchor extent without losing
+    the precise centroid cue.
+    """
+    from PIL import ImageDraw
+
+    w, h = img.size
+    cx, cy = w // 2, h // 2
+    short = min(w, h)
+    ring_r = max(6, int(short * ring_radius_pct))
+    inner_arm = max(3, int(short * inner_arm_pct))
+    inner_half_t = max(1, inner_thickness // 2) if inner_thickness >= 2 else 0
+    draw = ImageDraw.Draw(img)
+    # Ring outline (anchor extent)
+    for offset in range(ring_stroke):
+        r = ring_r - offset
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=color)
+    # Inner + at centroid
+    draw.rectangle(
+        [cx - inner_arm, cy - inner_half_t - 0, cx + inner_arm, cy + inner_half_t + (1 if inner_half_t == 0 else 0)],
+        fill=color,
+    )
+    draw.rectangle(
+        [cx - inner_half_t - 0, cy - inner_arm, cx + inner_half_t + (1 if inner_half_t == 0 else 0), cy + inner_arm],
+        fill=color,
+    )
+
+
+def ensure_review_png(tif_path: Path, *, anchor_marker: bool = True) -> Path:
     """Convert a GEHI GeoTIFF chip to a sibling PNG suitable for Gemini vision review.
 
     Gemini's image input accepts PNG/JPEG/WEBP/HEIC/HEIF — not TIFF — so chips
     must be transcoded before being sent. The PNG lives next to the TIFF
     (same stem, .png extension); the TIFF is left untouched as the canonical
     artifact for provenance.
+
+    `anchor_marker=True` (default) draws a small yellow + at the chip center
+    so the prompt can explicitly point Gemini at the anchor location. Pass
+    False for raw transcoding (e.g., debugging chip alignment).
 
     Idempotent: if a non-empty PNG already exists with mtime >= the TIFF's
     mtime, returns it without re-encoding. Non-TIFF inputs (e.g. .jpg) are
@@ -192,6 +251,8 @@ def ensure_review_png(tif_path: Path) -> Path:
     with Image.open(tif_path) as img:
         if img.mode not in ("RGB", "RGBA"):
             img = img.convert("RGB")
+        if anchor_marker:
+            _draw_anchor_marker(img)
         png_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(png_path, format="PNG")
     return png_path

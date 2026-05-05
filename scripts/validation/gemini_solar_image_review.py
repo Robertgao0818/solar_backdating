@@ -63,18 +63,31 @@ BATCH_PROMPT_TEMPLATE = """You are reviewing N={count} high-resolution image chi
 Each chip is independent — do not assume any temporal or spatial relationship between chips.
 Chips are presented in input order; index them 1..N matching that order.
 
+ANCHOR MARKER: every chip has a small yellow + cross drawn at the chip center.
+That marker pinpoints the specific rooftop / roof segment we are scoring.
+Decide pv_present based on whether PV modules are visible AT the marker (or on
+the roof segment that contains the marker) — not based on PV anywhere in the
+scene. A neighbouring building's PV array, or an off-center roof element that
+happens to look dark/rectangular, must be reported as pv_present=false.
+
 Return ONLY JSONL — one JSON object per line, exactly N lines, in input order.
 No prose, no markdown fences, no array wrapper. Schema per line:
 
 {{"chip_index": <int>, "pv_present": true|false|null, "confidence": <0.0-1.0>,
  "quality_flag": "usable"|"ambiguous"|"unusable",
- "evidence": "<specific visual description, e.g. '6 dark rectangular modules on south slope'>",
+ "evidence": "<specific visual description, e.g. '6 dark rectangular modules on south slope at marker'>",
  "notes": "<short caveats if any>"}}
 
 Rules:
-- Use pv_present=null only when the chip is too blurry, occluded, badly cropped, or unusable.
-- Do NOT count skylights, roof vents, HVAC units, water heaters, or shadows as PV.
-- The evidence field must describe what you actually see in that specific chip — not generic claims.
+- Use pv_present=null when the marker is occluded, the chip is too blurry, or
+  the marker falls off the visible roof (e.g., tall-building viewing-angle
+  clipping where the anchor roof isn't in the dominant scene element).
+- Do NOT count skylights, roof vents, HVAC units, water heaters, painted
+  dark-blue/black flat roof sections, construction-site materials, or
+  shadows as PV. PV must show a regular grid pattern of rectangular module
+  borders — not a single uniform dark surface.
+- The evidence field must describe what you actually see at the marker in
+  that specific chip — not generic claims.
 - Output exactly {count} lines. One JSON object per line. No surrounding text.
 """
 
@@ -457,14 +470,73 @@ def _call_gemini(
     return response_text(raw), raw
 
 
+def _identify_census_reference_chip(
+    picks: list[BatchPick], census_mid_date_iso: str | None
+) -> tuple[int | None, str | None]:
+    """Pick the latest chip in the batch dated >= census_mid_date - 6 months.
+
+    Returns (chip_index, capture_date) or (None, None) if no chip qualifies
+    (e.g. walk_back rounds where every pick is pre-census).
+    """
+    if not census_mid_date_iso:
+        return None, None
+    threshold = census_mid_date_iso  # ISO YYYY-MM-DD; lex compare matches date order
+    # Strip 6 months: subtract from year if month >= 7 else year-1, month+6.
+    try:
+        y, m, d = int(threshold[:4]), int(threshold[5:7]), int(threshold[8:10])
+    except ValueError:
+        return None, None
+    if m > 6:
+        threshold = f"{y:04d}-{m - 6:02d}-{d:02d}"
+    else:
+        threshold = f"{y - 1:04d}-{m + 6:02d}-{d:02d}"
+    in_census = [(p.capture_date, p.chip_index) for p in picks if p.capture_date >= threshold]
+    if not in_census:
+        return None, None
+    capture_date, chip_index = max(in_census, key=lambda x: x[0])
+    return chip_index, capture_date
+
+
+def _build_batch_prompt(
+    picks: list[BatchPick], census_mid_date_iso: str | None = None
+) -> str:
+    """Render BATCH_PROMPT_TEMPLATE plus an optional census-reference clause.
+
+    When the batch contains a chip from the census period, append a clause
+    telling Gemini that this specific chip is GT-known to have PV at the
+    yellow ring marker. This calibrates "what does PV look like AT THIS
+    SPECIFIC ROOF" for the older chips in the same batch — handling the
+    appearance variation across imagery vintages, lighting, and zoom levels.
+    """
+    base = BATCH_PROMPT_TEMPLATE.format(count=len(picks))
+    ref_idx, ref_date = _identify_census_reference_chip(picks, census_mid_date_iso)
+    if ref_idx is None:
+        return base
+    suffix = (
+        f"\nCALIBRATION: chip {ref_idx} (capture_date {ref_date}) is the most recent\n"
+        "imagery in this batch and is from the census period. Each anchor is a known\n"
+        "PV installation per the higher-level ground truth, so chip {ref_idx} should\n"
+        "show PV at the yellow ring marker. Use it to calibrate panel appearance for\n"
+        "this exact roof: same building, same roof material, same orientation. If chip\n"
+        "{ref_idx} clearly shows PV at the marker, label it pv_present=true; if you\n"
+        "cannot see PV at the marker in chip {ref_idx}, that means the marker is not\n"
+        "well-positioned for this anchor and you should label that chip\n"
+        "quality_flag='ambiguous' rather than absent. Do NOT propagate the GT-prior to\n"
+        "other chips — score each older chip on its own visual evidence at the marker,\n"
+        "using chip {ref_idx} only as appearance-calibration reference.\n"
+    ).replace("{ref_idx}", str(ref_idx))
+    return base + suffix
+
+
 def _attempt_batch(
     picks: list[BatchPick],
     *,
     config: GeminiClientConfig,
     poster: Callable[..., dict[str, Any]] | None,
+    census_mid_date_iso: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[int], str, str | None]:
     """Single batch attempt. Returns (valid_parsed, missing_indices, raw_text, error)."""
-    prompt = BATCH_PROMPT_TEMPLATE.format(count=len(picks))
+    prompt = _build_batch_prompt(picks, census_mid_date_iso=census_mid_date_iso)
     max_tokens = config.max_tokens_per_chip * len(picks) + 256
     try:
         raw_text, _raw_json = _call_gemini(
@@ -521,6 +593,7 @@ def score_batch_with_fallback(
     config: GeminiClientConfig,
     audit_writer: Callable[[dict[str, Any]], None] | None = None,
     poster: Callable[..., dict[str, Any]] | None = None,
+    census_mid_date_iso: str | None = None,
 ) -> list[GeminiObservation]:
     """Score N chips in one batch call following Q5.6 (a') retry policy:
 
@@ -537,7 +610,9 @@ def score_batch_with_fallback(
     if not picks:
         return []
 
-    valid1, missing1, raw1, err1 = _attempt_batch(picks, config=config, poster=poster)
+    valid1, missing1, raw1, err1 = _attempt_batch(
+        picks, config=config, poster=poster, census_mid_date_iso=census_mid_date_iso
+    )
     if audit_writer is not None:
         audit_writer(
             {
@@ -553,7 +628,9 @@ def score_batch_with_fallback(
     if len(valid1) == len(picks) and not missing1:
         return [_to_observation(p, decision_source="gemini_batch", raw=raw1) for p in valid1]
 
-    valid2, missing2, raw2, err2 = _attempt_batch(picks, config=config, poster=poster)
+    valid2, missing2, raw2, err2 = _attempt_batch(
+        picks, config=config, poster=poster, census_mid_date_iso=census_mid_date_iso
+    )
     if audit_writer is not None:
         audit_writer(
             {

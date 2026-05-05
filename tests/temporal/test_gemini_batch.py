@@ -18,9 +18,12 @@ from typing import Any
 import pytest
 
 from scripts.validation.gemini_solar_image_review import (
+    BATCH_PROMPT_TEMPLATE,
     BatchPick,
     GeminiClientConfig,
     GeminiObservation,
+    _build_batch_prompt,
+    _identify_census_reference_chip,
     parse_jsonl_lenient,
     score_batch_with_fallback,
     validate_observation_schema,
@@ -311,3 +314,57 @@ def test_openai_format_returns_choices_message_content(picks, gemini_config) -> 
     obs = score_batch_with_fallback(picks, config=openai_config, poster=poster)
     assert len(obs) == 3
     assert all(o.pv_present is True for o in obs)
+
+
+def _make_picks(dates: list[str], tmp_path: Path) -> list[BatchPick]:
+    out: list[BatchPick] = []
+    for i, d in enumerate(dates):
+        chip = tmp_path / f"chip_{i+1}.png"
+        chip.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 32)
+        out.append(BatchPick(chip_index=i + 1, capture_date=d, version=0, chip_path=chip))
+    return out
+
+
+def test_identify_census_reference_picks_latest_in_census_window(tmp_path: Path) -> None:
+    picks = _make_picks(["2018-03-30", "2021-04-30", "2024-02-29", "2025-05-30"], tmp_path)
+    idx, dt = _identify_census_reference_chip(picks, "2024-06-30")
+    # Threshold = 2024-06-30 minus 6mo = 2023-12-30; latest >= threshold is 2025-05-30
+    assert idx == 4
+    assert dt == "2025-05-30"
+
+
+def test_identify_census_reference_returns_none_for_walk_back_batch(tmp_path: Path) -> None:
+    """Walk-back rounds with all picks pre-census get no reference clause."""
+    picks = _make_picks(["2009-03-12", "2013-12-30", "2017-12-30"], tmp_path)
+    idx, dt = _identify_census_reference_chip(picks, "2024-06-30")
+    assert idx is None
+    assert dt is None
+
+
+def test_identify_census_reference_disabled_when_no_date_provided(tmp_path: Path) -> None:
+    picks = _make_picks(["2024-06-30"], tmp_path)
+    idx, dt = _identify_census_reference_chip(picks, None)
+    assert idx is None and dt is None
+
+
+def test_build_batch_prompt_omits_calibration_clause_without_census(tmp_path: Path) -> None:
+    picks = _make_picks(["2018-06-30", "2020-01-01"], tmp_path)
+    prompt = _build_batch_prompt(picks, census_mid_date_iso=None)
+    assert "CALIBRATION:" not in prompt
+    assert prompt.startswith(BATCH_PROMPT_TEMPLATE.format(count=2))
+
+
+def test_build_batch_prompt_includes_calibration_clause_when_reference_present(tmp_path: Path) -> None:
+    picks = _make_picks(["2018-06-30", "2024-02-29", "2025-05-30"], tmp_path)
+    prompt = _build_batch_prompt(picks, census_mid_date_iso="2024-06-30")
+    assert "CALIBRATION:" in prompt
+    assert "chip 3" in prompt  # latest pick is index 3
+    assert "2025-05-30" in prompt
+    assert "ground truth" in prompt
+    assert "GT-prior" in prompt
+
+
+def test_build_batch_prompt_no_clause_for_old_only_batch(tmp_path: Path) -> None:
+    picks = _make_picks(["2009-03-12", "2014-04-30"], tmp_path)
+    prompt = _build_batch_prompt(picks, census_mid_date_iso="2024-06-30")
+    assert "CALIBRATION:" not in prompt

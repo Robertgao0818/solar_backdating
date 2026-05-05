@@ -217,11 +217,20 @@ def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path)
         base.install_mid_estimate = census_mid_date.isoformat()
         base.confidence = _confidence_for_census(gap_days)
         if start_d >= census_mid_date:
+            # Post-hoc census-GT prior check: each anchor is from channel2_micro T1
+            # GT — the census-period imagery is known to have PV. If the latest scan
+            # observation is absent at or after census_mid_date, the algorithm is
+            # contradicting that prior. Most plausible cause: marker fell on a roof
+            # aisle / shadow / wrong segment and missed the PV.
+            base.status = "done_ambiguous_marker_missed_pv"
             base.confidence = "low"
+            base.install_interval_start = ""
+            base.install_interval_end = ""
+            base.install_mid_estimate = ""
             base.notes = (
-                f"{state.notes} | inverted_interval: latest_absent {latest_absent.capture_date} "
-                f">= census_mid_date {census_mid_date.isoformat()} (synthetic vintage past census, "
-                f"real data should not hit this)"
+                f"{state.notes} | marker_missed_pv: latest_absent {latest_absent.capture_date} "
+                f">= census_mid_date {census_mid_date.isoformat()} contradicts census-GT prior "
+                f"(anchor is PV-positive at census per channel2_micro T1 GT). Needs human review."
             ).strip(" |")
         return base
 

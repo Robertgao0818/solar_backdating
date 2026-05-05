@@ -104,6 +104,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Delete and recreate every scan_state. Default behavior is resume from existing state.",
     )
+    parser.add_argument(
+        "--census-mid-date-override",
+        type=str,
+        default=None,
+        help="Override census_imagery_mid_date lookup from regions.yaml. ISO YYYY-MM-DD. "
+        "Used as the GT-prior anchor for Gemini calibration prompts. Default: lookup from "
+        "core.region_registry per anchor's region_key.",
+    )
     return parser.parse_args()
 
 
@@ -268,6 +276,7 @@ def execute_round_real(
     audit_dir: Path,
     gemini_config,  # GeminiClientConfig - imported lazily
     vintage_check=None,
+    census_mid_date_iso: str | None = None,
 ) -> Round:
     """Download chips for each pick (zoom ladder), batch-score with Gemini, return Round with results."""
     import json as _json
@@ -300,7 +309,10 @@ def execute_round_real(
                 audit_fh.write(_json.dumps(payload, ensure_ascii=False) + "\n")
 
             observations = score_batch_with_fallback(
-                score_picks, config=gemini_config, audit_writer=_audit
+                score_picks,
+                config=gemini_config,
+                audit_writer=_audit,
+                census_mid_date_iso=census_mid_date_iso,
             )
 
     obs_by_original: dict[int, object] = {}
@@ -413,6 +425,7 @@ def run_one_anchor(
     chips_dir: Path | None = None,
     audit_dir: Path | None = None,
     gemini_config=None,
+    census_mid_date_iso: str | None = None,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
     state_path = state_path_for(anchor_id, scan_states_dir)
@@ -463,6 +476,7 @@ def run_one_anchor(
                 rnd, anchor, config,
                 chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=gemini_config,
                 vintage_check=vintage_check,
+                census_mid_date_iso=census_mid_date_iso,
             )
         state.rounds.append(rnd)
         state.next_action = "decide_next_action"
@@ -502,6 +516,36 @@ def summarize(states: Iterable[ScanState]) -> None:
         print(f"  {status}: {by_status[status]}")
 
 
+def _resolve_census_mid_date(anchor: dict[str, str], override: str | None) -> str | None:
+    """Look up census_imagery_mid_date for the anchor's region.
+
+    For Phase-0 we hardcode the mapping region_key -> default census layer.
+    Real workflow will pass --layer-id explicitly, but this smoke run only has
+    one census layer per region (vexcel_2024 for JHB).
+    """
+    if override:
+        return override
+    try:
+        from core.region_registry import get_imagery_layer  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001
+        return None
+    region_key = anchor.get("region_key", "").strip()
+    if not region_key:
+        return None
+    layer_for_region = {
+        "johannesburg": "vexcel_2024",
+        "cape_town": "aerial_2025",
+    }
+    layer_id = layer_for_region.get(region_key)
+    if not layer_id:
+        return None
+    try:
+        layer = get_imagery_layer(region_key, layer_id)
+    except Exception:  # noqa: BLE001
+        return None
+    return layer.census_imagery_mid_date
+
+
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
@@ -523,6 +567,7 @@ def main() -> None:
     for anchor in anchors:
         anchor_id = anchor["anchor_id"]
         marker = "[DRY]" if args.dry_run else "[RUN]"
+        census_mid = _resolve_census_mid_date(anchor, args.census_mid_date_override)
         try:
             state = run_one_anchor(
                 anchor,
@@ -533,6 +578,7 @@ def main() -> None:
                 chips_dir=args.chips_dir,
                 audit_dir=args.audit_dir,
                 gemini_config=gemini_config,
+                census_mid_date_iso=census_mid,
             )
         except Exception as exc:
             state = _record_orchestrator_failure(
