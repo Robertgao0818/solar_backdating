@@ -9,12 +9,30 @@ anchor_manifest:
   anchor_policy: gt_centroid_buffered_bbox
 
 geid_download:
+  provider_status: legacy_fallback
   zoom_from: 21
   zoom_to: 21
   requested_date_month_day: "06-15"
   save_root: "/home/gaosh/zasolar_data/geid_raw/temporal_anchor_presence"
   legacy_windows_staging_root: "D:\\ZAsolar\\geid_raw\\temporal_anchor_presence"
   downloader_bridge: "/home/gaosh/projects/geid_reverse_engineering/python/geid_historical_cli_batch.py"
+  sunset_condition: "Archive after GEHI completes 18-anchor run and install-interval QA is accepted."
+
+gehi_download:
+  provider_status: primary_candidate
+  executable: "/home/gaosh/zasolar_data/tools/GEHistoricalImagery/GEHistoricalImagery"
+  provider: "TM"
+  vintage_probe_zoom: 19
+  download_zoom_candidates: [19, 20, 21]
+  default_download_zoom: 19
+  min_probe_date: "2009-01-01"
+  max_probe_date: "2025-12-31"
+  require_exact_date: true
+  require_complete_coverage_for_catalog: true
+  output_root: "/home/gaosh/zasolar_data/geid_temporal/gehi_chips"
+  cache_policy: "use_GEHistoricalImagery_default_cache"
+  coordinate_order_policy: "wrapper converts anchor lon/lat fields to GEHI LAT,LONG CLI args"
+  vintage_dedupe_key: ["anchor_id", "version"]
 
 presence_scoring:
   task_type: anchor_conditioned_binary_presence

@@ -49,6 +49,15 @@ PYTHONPATH order is enforced by `scripts/activate_env.sh`:
 3. New probe / temporal data products go to `~/zasolar_data/`, not into
    git. Only schema fixtures (`data/examples/*.example.csv`) are committed.
 4. `.env.gemini.local` and any API keys: never commit.
+5. GEHistoricalImagery (`GEHI`) is the primary candidate provider for new
+   historical imagery work. Probe vintages at z=19. Treat z=20/z=21 as
+   optional download upgrades only after confirming the same vintage exists.
+   GEHI CLI coordinates are `LAT,LONG`; anchor manifests remain lon/lat and
+   wrappers own the conversion.
+6. Keep CSV/JSONL/Parquet as stage contracts. DuckDB is acceptable as a local
+   query layer; do not introduce a PostGIS service during the pilot.
+7. Deduplicate GEHI vintage candidates by `(anchor_id, version)`. Do not use
+   `(anchor_id, capture_date)` as the uniqueness key.
 
 ## Coordination with main repo
 

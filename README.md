@@ -21,8 +21,13 @@ free-detection prototype (see
 
 Phase-0: anchor-presence scoring with Gemini visual review for QA. Active
 modules:
-- `scripts/temporal/` — anchor manifest, historical downloader, presence scorer, install-date inference
-- `scripts/validation/` — GEID vintage probe, Gemini single-image review
+- `scripts/temporal/` — anchor manifest, GEHI/legacy GEID downloader wrappers, presence scorer, install-date inference
+- `scripts/validation/` — legacy GEID vintage probe, Gemini single-image review
+
+Current provider decision: GEHistoricalImagery Time Machine is the primary
+candidate for historical imagery. Vintage discovery uses `z=19`; higher zooms
+are optional download upgrades only when that exact vintage exists. See
+[`docs/gehi_temporal_replacement_plan.md`](docs/gehi_temporal_replacement_plan.md).
 
 ## Plugin model
 
