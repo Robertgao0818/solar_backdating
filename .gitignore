@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local env files / secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Virtualenvs (this repo shares main repo's .venv, but guard anyway)
+.venv/
+venv/
+
+# Data — externalized to ~/zasolar_data/. Only data/examples/ is committed.
+data/geid_temporal
+data/geid_temporal/
+data/geid_vintage_probe
+data/geid_vintage_probe/
+data/anchors_*/
+data/install_dates_*/
+data/raw/
+data/cache/
+
+# Outputs
+outputs/
+results/
+*.gpkg
+*.pkl
+*.npy
+*.npz
+*.tif
+*.tiff
+*.png
+*.jpg
+*.jpeg
+!data/examples/*.png
+!data/examples/*.jpg
+!docs/**/*.png
+!docs/**/*.jpg
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Project-specific transient
+.tmp/
+.cache/
+.config/
+.local/

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solar-backdating"
+version = "0.1.0"
+description = "Location-conditioned PV install-date inference. Plugin of ZAsolar main repo."
+requires-python = ">=3.11"
+# Runtime dependencies are inherited from the shared ZAsolar venv via
+# scripts/activate_env.sh. This block is informational only — the canonical
+# requirements file is ZAsolar/requirements.txt. Listed here for reference and
+# in case the plugin is ever installed standalone.
+dependencies = [
+    "rasterio",
+    "geopandas",
+    "shapely",
+    "pyproj",
+    "pyyaml",
+    "numpy",
+    "pandas",
+    "pillow",
+    "requests",
+    "python-dotenv",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
