@@ -22,7 +22,7 @@ from typing import Any
 
 SPEC_VERSION = "phase0_v2"
 
-ROUND_TYPES = {"initial", "walk_back", "bisection", "tail"}
+ROUND_TYPES = {"initial", "walk_back", "bisection", "tail", "anchor_recovery"}
 
 TERMINAL_STATUSES = {
     "done_appears",

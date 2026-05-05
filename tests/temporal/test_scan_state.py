@@ -167,16 +167,7 @@ def test_decide_next_action_first_call_plans_initial(sample_anchor: dict[str, st
     assert action.round.round_id == 1
 
 
-def test_decide_next_action_terminates_after_round_in_task_a(sample_anchor: dict[str, str]) -> None:
-    config = AdaptiveScanConfig()
-    state = create_scan_state(sample_anchor)
-    state.rounds.append(
-        Round(round_id=1, round_type="initial", window_start_date=None, window_end_date=None, completed=True)
-    )
-    vintages = [VintageEntry(capture_date=f"{y}-06-01", version=y) for y in range(2018, 2025)]
-    action = decide_next_action(state, vintages, config)
-    assert isinstance(action, TerminateAction)
-    assert action.status == "done_appears"
+# Task A stub test removed; replaced by full case A-E coverage in test_scan_decision.py
 
 
 def test_initial_round_uses_primary_zoom_from_ladder() -> None:

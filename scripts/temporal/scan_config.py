@@ -29,6 +29,7 @@ class AdaptiveScanConfig:
     spec_version: str = "phase0_v1"
     download_zoom_ladder: tuple[int, ...] = (20, 19)
     info_zoom: int = 19
+    max_anchor_recovery_rounds: int = 2
 
 
 def load_config(path: Path | None = None) -> AdaptiveScanConfig:
@@ -54,4 +55,5 @@ def load_config(path: Path | None = None) -> AdaptiveScanConfig:
         spec_version=str(section.get("spec_version", "phase0_v1")),
         download_zoom_ladder=ladder_tuple,
         info_zoom=int(section.get("info_zoom", 19)),
+        max_anchor_recovery_rounds=int(section.get("max_anchor_recovery_rounds", 2)),
     )

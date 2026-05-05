@@ -61,3 +61,4 @@ adaptive_scan:
   bisection_window: open
   download_zoom_ladder: [20, 19]
   info_zoom: 19
+  max_anchor_recovery_rounds: 2
