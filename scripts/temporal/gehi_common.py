@@ -146,6 +146,40 @@ def dedupe_info_rows_by_version(rows: Sequence[Mapping[str, object]]) -> list[di
     return out
 
 
+def ensure_review_png(tif_path: Path) -> Path:
+    """Convert a GEHI GeoTIFF chip to a sibling PNG suitable for Gemini vision review.
+
+    Gemini's image input accepts PNG/JPEG/WEBP/HEIC/HEIF — not TIFF — so chips
+    must be transcoded before being sent. The PNG lives next to the TIFF
+    (same stem, .png extension); the TIFF is left untouched as the canonical
+    artifact for provenance.
+
+    Idempotent: if a non-empty PNG already exists with mtime >= the TIFF's
+    mtime, returns it without re-encoding. Non-TIFF inputs (e.g. .jpg) are
+    returned unchanged.
+    """
+    if tif_path.suffix.lower() not in (".tif", ".tiff"):
+        return tif_path
+    png_path = tif_path.with_suffix(".png")
+    try:
+        if (
+            png_path.exists()
+            and png_path.stat().st_size > 0
+            and png_path.stat().st_mtime >= tif_path.stat().st_mtime
+        ):
+            return png_path
+    except OSError:
+        pass
+    from PIL import Image
+
+    with Image.open(tif_path) as img:
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(png_path, format="PNG")
+    return png_path
+
+
 def assert_gehi_success(result: GehiRunResult, *, allow_availability_chooser_exit: bool = False) -> None:
     if result.returncode == 0:
         return

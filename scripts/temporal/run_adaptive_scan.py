@@ -56,7 +56,13 @@ DEFAULT_SCAN_STATES_DIR = Path.home() / "zasolar_data/geid_temporal/jhb_vexcel10
 DEFAULT_CHIPS_DIR = Path.home() / "zasolar_data/geid_temporal/gehi_chips"
 DEFAULT_AUDIT_DIR = Path.home() / "zasolar_data/geid_temporal/jhb_vexcel10_smoke/gemini_audit"
 DEFAULT_CONFIG_YAML = PROJECT_ROOT / "configs" / "geid_anchor_presence.yaml"
-DEFAULT_GEMINI_ENV = PROJECT_ROOT / ".env.gemini.local"
+
+
+def _default_gemini_env() -> Path:
+    """Reuse the gemini reviewer's resolver: subrepo first, then ZASOLAR_ROOT."""
+    from scripts.validation.gemini_solar_image_review import _resolve_default_env_file
+
+    return _resolve_default_env_file()
 
 DRY_RUN_PROFILE_LABELS = (
     "appears_2015",
@@ -81,7 +87,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chips-dir", type=Path, default=DEFAULT_CHIPS_DIR, help="Where GEHI chips are written")
     parser.add_argument("--audit-dir", type=Path, default=DEFAULT_AUDIT_DIR, help="Per-anchor per-round Gemini audit JSONL")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_YAML)
-    parser.add_argument("--gemini-env-file", type=Path, default=DEFAULT_GEMINI_ENV)
+    parser.add_argument(
+        "--gemini-env-file",
+        type=Path,
+        default=None,
+        help="Override .env.gemini.local lookup. Default: subrepo .env.gemini.local, falling back to $ZASOLAR_ROOT/.env.gemini.local.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -205,6 +216,49 @@ def make_vintage_check(
     return check
 
 
+def _build_batch_picks_with_remap(
+    download_outcomes,
+    review_asset_resolver,
+):
+    """Renumber successful downloads to dense batch indices 1..N for Gemini.
+
+    The Gemini batch prompt asks the model to emit `chip_index` values in
+    `1..N` matching the input order, where N is the number of images in the
+    batch — not the original Pick.chip_index. If we passed the sparse
+    original indices (e.g. when one pick failed to download), Gemini's
+    `chip_index=2` in a 4-image batch would not refer to the original
+    Pick(chip_index=2). Renumber here, then map observations back to
+    original chip_index in `execute_round_real`.
+
+    `review_asset_resolver(tif_path) -> review_path` converts each successful
+    download path to the format Gemini accepts (PNG/JPEG); typically
+    `gehi_common.ensure_review_png`.
+
+    Returns `(batch_picks, batch_to_original)` where `batch_to_original`
+    maps the dense batch index back to the original `pick.chip_index`.
+    """
+    from scripts.validation.gemini_solar_image_review import BatchPick
+
+    batch_picks: list[BatchPick] = []
+    batch_to_original: dict[int, int] = {}
+    for pick, outcome in download_outcomes:
+        if outcome.status not in ("ok", "skipped_existing") or outcome.path is None:
+            continue
+        review_path = review_asset_resolver(outcome.path)
+        batch_idx = len(batch_picks) + 1
+        batch_picks.append(
+            BatchPick(
+                chip_index=batch_idx,
+                chip_path=review_path,
+                capture_date=pick.capture_date,
+                version=str(pick.version),
+                actual_zoom=outcome.actual_zoom,
+            )
+        )
+        batch_to_original[batch_idx] = pick.chip_index
+    return batch_picks, batch_to_original
+
+
 def execute_round_real(
     rnd: Round,
     anchor: dict[str, str],
@@ -218,11 +272,9 @@ def execute_round_real(
     """Download chips for each pick (zoom ladder), batch-score with Gemini, return Round with results."""
     import json as _json
 
+    from scripts.temporal.gehi_common import ensure_review_png
     from scripts.temporal.gehi_download import download_chip_with_zoom_ladder
-    from scripts.validation.gemini_solar_image_review import (
-        BatchPick,
-        score_batch_with_fallback,
-    )
+    from scripts.validation.gemini_solar_image_review import score_batch_with_fallback
 
     download_outcomes: list[tuple[Pick, object]] = []
     for pick in rnd.picks:
@@ -236,20 +288,8 @@ def execute_round_real(
         )
         download_outcomes.append((pick, outcome))
 
-    score_picks: list[BatchPick] = []
-    download_by_index: dict[int, object] = {}
-    for pick, outcome in download_outcomes:
-        download_by_index[pick.chip_index] = outcome
-        if outcome.status in ("ok", "skipped_existing") and outcome.path:
-            score_picks.append(
-                BatchPick(
-                    chip_index=pick.chip_index,
-                    chip_path=outcome.path,
-                    capture_date=pick.capture_date,
-                    version=str(pick.version),
-                    actual_zoom=outcome.actual_zoom,
-                )
-            )
+    download_by_index: dict[int, object] = {pick.chip_index: outcome for pick, outcome in download_outcomes}
+    score_picks, batch_to_original = _build_batch_picks_with_remap(download_outcomes, ensure_review_png)
 
     audit_path = audit_dir / anchor["anchor_id"] / f"round_{rnd.round_id}.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -263,7 +303,12 @@ def execute_round_real(
                 score_picks, config=gemini_config, audit_writer=_audit
             )
 
-    obs_by_index = {o.chip_index: o for o in observations}
+    obs_by_original: dict[int, object] = {}
+    for obs in observations:
+        original = batch_to_original.get(obs.chip_index)
+        if original is not None:
+            obs_by_original[original] = obs
+
     rnd_results: list[RoundResult] = []
     for pick in rnd.picks:
         outcome = download_by_index[pick.chip_index]
@@ -284,7 +329,7 @@ def execute_round_real(
                 )
             )
             continue
-        obs = obs_by_index.get(pick.chip_index)
+        obs = obs_by_original.get(pick.chip_index)
         if obs is None:
             rnd_results.append(
                 RoundResult(
@@ -469,7 +514,8 @@ def main() -> None:
 
     gemini_config = None
     if not args.dry_run:
-        gemini_config = _load_gemini_config(args.gemini_env_file)
+        env_file = args.gemini_env_file or _default_gemini_env()
+        gemini_config = _load_gemini_config(env_file)
         args.chips_dir.mkdir(parents=True, exist_ok=True)
         args.audit_dir.mkdir(parents=True, exist_ok=True)
 
