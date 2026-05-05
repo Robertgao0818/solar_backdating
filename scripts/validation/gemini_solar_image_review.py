@@ -60,8 +60,14 @@ or shadows as PV panels.
 
 
 BATCH_PROMPT_TEMPLATE = """You are reviewing N={count} high-resolution image chips for rooftop solar PV.
-Each chip is independent — do not assume any temporal or spatial relationship between chips.
-Chips are presented in input order; index them 1..N matching that order.
+All chips show the SAME rooftop location at different capture dates — the
+building outline, roof material, and roof structure are the same across chips;
+only the panel installation status changes over time. Score each chip independently
+on whether PV is visible at the marker, but USE this same-roof consistency to
+distinguish real PV (which has a fixed installation footprint at the marker
+once installed) from skylights / vents / other roof features (which appear
+identically across all dates regardless of PV status). Chips are presented in
+input order; index them 1..N matching that order.
 
 ANCHOR MARKER: every chip has a small yellow + cross drawn at the chip center.
 That marker pinpoints the specific rooftop / roof segment we are scoring.
