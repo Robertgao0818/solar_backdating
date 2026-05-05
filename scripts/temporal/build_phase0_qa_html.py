@@ -28,12 +28,9 @@ from scripts.temporal.scan_state import RoundResult, ScanState, load_scan_state
 DEFAULT_SCAN_STATES_DIR = (
     Path.home() / "zasolar_data/geid_temporal/jhb_vexcel10_smoke/scan_states"
 )
-DEFAULT_INTERVALS_CSV = (
-    Path.home() / "zasolar_data/geid_temporal/jhb_vexcel10_smoke/install_intervals.csv"
-)
-DEFAULT_OUTPUT_HTML = (
-    Path.home() / "zasolar_data/geid_temporal/jhb_vexcel10_smoke/phase0_qa.html"
-)
+# --intervals-csv and --output defaults are resolved at runtime from
+# <scan-states-dir>.parent so a custom --scan-states-dir doesn't silently
+# read from / write into the JHB smoke run directory.
 THUMBNAIL_SIZE = 200
 PLACEHOLDER_PIXEL = (
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA"
@@ -47,15 +44,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--intervals-csv",
         type=Path,
-        default=DEFAULT_INTERVALS_CSV,
-        help="Optional install_intervals.csv from infer_install_dates.py. If missing, headers are derived from scan_state alone.",
+        default=None,
+        help="Install intervals CSV. Default: <scan-states-dir>/../install_intervals.csv "
+        "(co-located with the scan run). If missing on disk, headers fall back to scan_state alone.",
     )
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_HTML)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output HTML path. Default: <scan-states-dir>/../phase0_qa.html",
+    )
     parser.add_argument("--thumbnail-size", type=int, default=THUMBNAIL_SIZE)
     parser.add_argument(
         "--max-anchors",
         type=int,
         help="Optional cap on anchor count for quick iteration",
+    )
+    parser.add_argument(
+        "--allow-load-failures",
+        action="store_true",
+        help="Continue and emit HTML even if some scan_state files fail to load. "
+        "Default behavior is to abort, which prevents producing a QA page that silently "
+        "drops anchors due to spec_version mismatch or corrupt JSON.",
     )
     return parser.parse_args()
 
@@ -244,7 +254,19 @@ def main() -> None:
     args = parse_args()
     if not args.scan_states_dir.exists():
         raise SystemExit(f"Scan states dir not found: {args.scan_states_dir}")
-    intervals = load_intervals(args.intervals_csv)
+
+    intervals_csv = (
+        args.intervals_csv
+        if args.intervals_csv is not None
+        else args.scan_states_dir.parent / "install_intervals.csv"
+    )
+    output_html = (
+        args.output
+        if args.output is not None
+        else args.scan_states_dir.parent / "phase0_qa.html"
+    )
+
+    intervals = load_intervals(intervals_csv)
     state_files = sorted(args.scan_states_dir.glob("*.json"))
     if args.max_anchors is not None:
         state_files = state_files[: args.max_anchors]
@@ -252,22 +274,36 @@ def main() -> None:
         raise SystemExit(f"No scan_state JSON files in {args.scan_states_dir}")
 
     states: list[tuple[ScanState, dict[str, str], Path]] = []
+    load_failures: list[tuple[Path, str]] = []
     for state_path in state_files:
         try:
             state = load_scan_state(state_path)
         except Exception as exc:  # noqa: BLE001
             print(f"[WARN] failed to load {state_path}: {exc}", file=sys.stderr)
+            load_failures.append((state_path, str(exc)))
             continue
         if state is None:
             continue
         interval_row = intervals.get(state.anchor_id, {})
         states.append((state, interval_row, state_path))
 
+    if load_failures and not args.allow_load_failures:
+        raise SystemExit(
+            f"{len(load_failures)} scan_state file(s) failed to load: "
+            f"{[str(p) for p, _ in load_failures]}. "
+            f"Aborting to avoid emitting a QA page with missing anchors. "
+            f"Pass --allow-load-failures to override."
+        )
+    if not states:
+        raise SystemExit(
+            f"Zero scan_states rendered from {len(state_files)} file(s); refusing to emit empty HTML."
+        )
+
     html_text = render_html(states, args.thumbnail_size)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(html_text, encoding="utf-8")
-    print(f"Wrote Phase-0 QA HTML ({len(states)} anchors) -> {args.output}")
-    print(f"Page size: {args.output.stat().st_size / 1024:.1f} KB")
+    output_html.parent.mkdir(parents=True, exist_ok=True)
+    output_html.write_text(html_text, encoding="utf-8")
+    print(f"Wrote Phase-0 QA HTML ({len(states)} anchors) -> {output_html}")
+    print(f"Page size: {output_html.stat().st_size / 1024:.1f} KB")
 
 
 if __name__ == "__main__":

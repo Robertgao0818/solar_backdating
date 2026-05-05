@@ -143,6 +143,25 @@ def test_done_installed_during_census_uses_census_upper_bound() -> None:
     assert interval.confidence == "high"
 
 
+def test_done_appears_inverted_interval_flagged() -> None:
+    """Defensive: corrupt scan_state where a present observation predates an absent."""
+    state = _state_with(
+        "done_appears",
+        [
+            _result("2022-06-15", present=True),
+            _result("2024-01-15", present=False),
+        ],
+    )
+    interval = infer_one(state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"))
+    assert interval.confidence == "low"
+    assert "inverted_interval" in interval.notes
+    assert interval.install_interval_start == ""
+    assert interval.install_interval_end == ""
+    assert interval.install_mid_estimate == ""
+    assert interval.latest_absent_date == "2024-01-15"
+    assert interval.earliest_present_date == "2022-06-15"
+
+
 def test_done_installed_during_census_inverted_interval_flagged() -> None:
     """Defensive: latest_absent_date past census_mid_date downgrades to low + flags notes."""
     state = _state_with(
@@ -270,6 +289,96 @@ def test_write_intervals_round_trip(tmp_path: Path) -> None:
     assert row["install_interval_start"] == "2020-04-15"
     assert row["install_mid_estimate"] == "2020-06-15"
     assert row["confidence"] == "high"
+
+
+def test_cli_default_output_derives_from_scan_states_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without --output, CSV must land beside the scan_states dir, not in the JHB smoke path."""
+    states_dir = tmp_path / "custom_run" / "scan_states"
+    states_dir.mkdir(parents=True)
+    s1 = _state_with(
+        "done_appears",
+        [_result("2020-04-15", present=False), _result("2020-08-15", present=True)],
+        anchor_id="a000001",
+    )
+    save_scan_state(s1, state_path_for(s1.anchor_id, states_dir))
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "infer_install_dates.py",
+            "--scan-states-dir", str(states_dir),
+            "--census-mid-date", "2024-06-30",
+        ],
+    )
+    from scripts.temporal.infer_install_dates import main as infer_main
+    infer_main()
+
+    expected_output = tmp_path / "custom_run" / "install_intervals.csv"
+    assert expected_output.exists()
+    with expected_output.open("r", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1
+    assert rows[0]["anchor_id"] == "a000001"
+
+
+def test_cli_aborts_on_load_failure_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A corrupt scan_state.json must abort the run instead of producing a partial CSV."""
+    states_dir = tmp_path / "scan_states"
+    states_dir.mkdir()
+    good = _state_with(
+        "done_appears",
+        [_result("2020-04-15", present=False), _result("2020-08-15", present=True)],
+        anchor_id="a000001",
+    )
+    save_scan_state(good, state_path_for(good.anchor_id, states_dir))
+    (states_dir / "a000002.json").write_text("{not valid json", encoding="utf-8")
+
+    output_path = tmp_path / "install_intervals.csv"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "infer_install_dates.py",
+            "--scan-states-dir", str(states_dir),
+            "--output", str(output_path),
+            "--census-mid-date", "2024-06-30",
+        ],
+    )
+    from scripts.temporal.infer_install_dates import main as infer_main
+    with pytest.raises(SystemExit) as exc_info:
+        infer_main()
+    assert "failed to load" in str(exc_info.value)
+    assert not output_path.exists()
+
+
+def test_cli_allow_load_failures_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--allow-load-failures lets the run finish with a partial CSV."""
+    states_dir = tmp_path / "scan_states"
+    states_dir.mkdir()
+    good = _state_with(
+        "done_appears",
+        [_result("2020-04-15", present=False), _result("2020-08-15", present=True)],
+        anchor_id="a000001",
+    )
+    save_scan_state(good, state_path_for(good.anchor_id, states_dir))
+    (states_dir / "a000002.json").write_text("{not valid json", encoding="utf-8")
+
+    output_path = tmp_path / "install_intervals.csv"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "infer_install_dates.py",
+            "--scan-states-dir", str(states_dir),
+            "--output", str(output_path),
+            "--census-mid-date", "2024-06-30",
+            "--allow-load-failures",
+        ],
+    )
+    from scripts.temporal.infer_install_dates import main as infer_main
+    infer_main()
+    assert output_path.exists()
+    with output_path.open("r", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1
 
 
 def test_cli_walks_scan_states_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

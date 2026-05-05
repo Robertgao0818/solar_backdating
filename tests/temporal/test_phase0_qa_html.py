@@ -180,6 +180,68 @@ def test_load_intervals_keys_by_anchor_id(tmp_path: Path) -> None:
     assert out["a"]["confidence"] == "high"
 
 
+def test_cli_default_paths_derive_from_scan_states_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without --intervals-csv or --output, both must be co-located with the scan run."""
+    run_dir = tmp_path / "custom_run"
+    states_dir = run_dir / "scan_states"
+    states_dir.mkdir(parents=True)
+    s1 = _state_with("done_appears", [_result("2020-04-15", present=False), _result("2020-08-15", present=True)])
+    s1.anchor_id = "a000001"
+    save_scan_state(s1, state_path_for(s1.anchor_id, states_dir))
+
+    intervals_csv = run_dir / "install_intervals.csv"
+    with intervals_csv.open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=["anchor_id", "status", "confidence"])
+        w.writeheader()
+        w.writerow({"anchor_id": "a000001", "status": "done_appears", "confidence": "high"})
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_phase0_qa_html.py",
+            "--scan-states-dir", str(states_dir),
+            "--thumbnail-size", "64",
+        ],
+    )
+    from scripts.temporal.build_phase0_qa_html import main as build_main
+    build_main()
+
+    expected_output = run_dir / "phase0_qa.html"
+    assert expected_output.exists()
+    text = expected_output.read_text(encoding="utf-8")
+    assert "a000001" in text
+    assert "conf-high" in text
+
+
+def test_cli_aborts_on_load_failure_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A corrupt scan_state.json must abort the HTML render instead of dropping the anchor silently."""
+    states_dir = tmp_path / "scan_states"
+    states_dir.mkdir()
+    good = _state_with(
+        "done_appears",
+        [_result("2020-04-15", present=False), _result("2020-08-15", present=True)],
+    )
+    good.anchor_id = "a000001"
+    save_scan_state(good, state_path_for(good.anchor_id, states_dir))
+    (states_dir / "a000002.json").write_text("{not valid json", encoding="utf-8")
+
+    out_html = tmp_path / "phase0_qa.html"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_phase0_qa_html.py",
+            "--scan-states-dir", str(states_dir),
+            "--output", str(out_html),
+            "--thumbnail-size", "64",
+        ],
+    )
+    from scripts.temporal.build_phase0_qa_html import main as build_main
+    with pytest.raises(SystemExit) as exc_info:
+        build_main()
+    assert "failed to load" in str(exc_info.value)
+    assert not out_html.exists()
+
+
 def test_end_to_end_renders_valid_html(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Drive main() with synthetic scan_states and intervals; verify HTML is non-trivial."""
     states_dir = tmp_path / "scan_states"
