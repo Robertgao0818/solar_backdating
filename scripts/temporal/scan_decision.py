@@ -49,7 +49,7 @@ def select_evenly_spaced_picks(
     vintages: list[VintageEntry],
     *,
     target_count: int,
-    zoom: int,
+    requested_zoom: int,
 ) -> list[Pick]:
     """Return up to `target_count` picks anchored at two ends with middle evenly spaced.
 
@@ -78,7 +78,7 @@ def select_evenly_spaced_picks(
         unique_indices.sort()
         chosen = [vintages[i] for i in unique_indices]
     return [
-        Pick(chip_index=i + 1, capture_date=v.capture_date, version=v.version, zoom=zoom)
+        Pick(chip_index=i + 1, capture_date=v.capture_date, version=v.version, requested_zoom=requested_zoom)
         for i, v in enumerate(chosen)
     ]
 
@@ -105,7 +105,7 @@ def plan_initial_round(
         window = sorted_vintages
         notes = f"round1_floor_degraded=true (no vintage >= {floor_year})"
     picks = select_evenly_spaced_picks(
-        window, target_count=config.picks_per_round, zoom=config.download_zoom_ladder[-1]
+        window, target_count=config.picks_per_round, requested_zoom=config.download_zoom_ladder[0]
     )
     return Round(
         round_id=1,

@@ -83,11 +83,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--limit-anchors", type=int, help="Process only the first N anchors")
     parser.add_argument(
-        "--resume",
+        "--force-restart",
         action="store_true",
-        help="Resume terminal scan_states (skip them) and continue mid-scan ones",
+        help="Delete and recreate every scan_state. Default behavior is resume from existing state.",
     )
-    parser.add_argument("--force-restart", action="store_true", help="Delete and recreate every scan_state")
     return parser.parse_args()
 
 
@@ -157,7 +156,7 @@ def dry_run_gemini_result(
         evidence=f"stub evidence for {profile.label}",
         notes=notes,
         chip_path="",
-        zoom=pick.zoom,
+        actual_zoom=pick.requested_zoom,
     )
 
 
@@ -203,7 +202,7 @@ def run_one_anchor(
         return state
 
     profile = dry_run_profile_for(anchor_id) if dry_run else None
-    vintages = dry_run_vintages(anchor_id) if dry_run else _fetch_real_vintages(anchor)
+    vintages = dry_run_vintages(anchor_id) if dry_run else _fetch_real_vintages(anchor, config)
 
     max_iter = 32
     for _ in range(max_iter):
@@ -228,7 +227,7 @@ def run_one_anchor(
     raise RuntimeError(f"Scan loop exceeded {max_iter} rounds for {anchor_id}")
 
 
-def _fetch_real_vintages(anchor: dict[str, str]) -> list[VintageEntry]:
+def _fetch_real_vintages(anchor: dict[str, str], config: AdaptiveScanConfig) -> list[VintageEntry]:
     raise NotImplementedError(
         "Real vintage fetch via gehi_info is not wired in Task A. Use --dry-run."
     )
@@ -260,17 +259,45 @@ def main() -> None:
     states: list[ScanState] = []
     for anchor in anchors:
         anchor_id = anchor["anchor_id"]
-        state = run_one_anchor(
-            anchor,
-            config,
-            args.scan_states_dir,
-            dry_run=args.dry_run,
-            force_restart=args.force_restart,
-        )
         marker = "[DRY]" if args.dry_run else "[RUN]"
-        print(f"{marker} {anchor_id}: status={state.status} rounds={len(state.rounds)}")
+        try:
+            state = run_one_anchor(
+                anchor,
+                config,
+                args.scan_states_dir,
+                dry_run=args.dry_run,
+                force_restart=args.force_restart,
+            )
+        except Exception as exc:
+            state = _record_orchestrator_failure(
+                anchor, args.scan_states_dir, exc
+            )
+            print(f"{marker} {anchor_id}: ERROR status={state.status} reason={exc!r}")
+        else:
+            print(f"{marker} {anchor_id}: status={state.status} rounds={len(state.rounds)}")
         states.append(state)
     summarize(states)
+
+
+def _record_orchestrator_failure(
+    anchor: dict[str, str], scan_states_dir: Path, exc: BaseException
+) -> ScanState:
+    """Persist a terminal scan_state when run_one_anchor raises, so the batch can continue.
+
+    Reuses any pre-existing rounds (so partial progress is preserved) and tags
+    the state as `done_ambiguous_orchestrator_error` with the exception summary
+    in `notes`. Never re-raises — the batch loop owns continuation.
+    """
+    state_path = state_path_for(anchor["anchor_id"], scan_states_dir)
+    state = load_scan_state(state_path)
+    if state is None:
+        state = create_scan_state(anchor)
+    state.status = "done_ambiguous_orchestrator_error"
+    state.next_action = None
+    error_note = f"orchestrator_error: {type(exc).__name__}: {exc}"
+    state.notes = (state.notes + " | " + error_note) if state.notes else error_note
+    save_scan_state(state, state_path)
+    return state
 
 
 if __name__ == "__main__":

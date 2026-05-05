@@ -62,7 +62,7 @@ def test_round_with_results_serializes(tmp_state_dir: Path, sample_anchor: dict[
         round_type="initial",
         window_start_date="2018-06-01",
         window_end_date="2024-09-01",
-        picks=[Pick(chip_index=1, capture_date="2018-06-01", version=101, zoom=19)],
+        picks=[Pick(chip_index=1, capture_date="2018-06-01", version=101, requested_zoom=19)],
         results=[
             RoundResult(
                 chip_index=1,
@@ -74,7 +74,7 @@ def test_round_with_results_serializes(tmp_state_dir: Path, sample_anchor: dict[
                 decision_source="dry_run_stub",
                 evidence="no panels visible",
                 chip_path="",
-                zoom=19,
+                actual_zoom=19,
             )
         ],
         completed=True,
@@ -124,7 +124,7 @@ def test_invalid_round_type_rejected() -> None:
 
 def test_select_evenly_spaced_picks_anchors_endpoints() -> None:
     vintages = [VintageEntry(capture_date=f"2020-{m:02d}-01", version=v) for v, m in enumerate(range(1, 13), start=200)]
-    picks = select_evenly_spaced_picks(vintages, target_count=5, zoom=19)
+    picks = select_evenly_spaced_picks(vintages, target_count=5, requested_zoom=19)
     assert len(picks) == 5
     assert picks[0].capture_date == "2020-01-01"
     assert picks[-1].capture_date == "2020-12-01"
@@ -133,7 +133,7 @@ def test_select_evenly_spaced_picks_anchors_endpoints() -> None:
 
 def test_select_evenly_spaced_picks_returns_all_if_few() -> None:
     vintages = [VintageEntry(capture_date=f"2020-{m:02d}-01", version=200 + m) for m in (1, 6)]
-    picks = select_evenly_spaced_picks(vintages, target_count=5, zoom=19)
+    picks = select_evenly_spaced_picks(vintages, target_count=5, requested_zoom=19)
     assert len(picks) == 2
     assert [p.capture_date for p in picks] == ["2020-01-01", "2020-06-01"]
 
@@ -177,3 +177,53 @@ def test_decide_next_action_terminates_after_round_in_task_a(sample_anchor: dict
     action = decide_next_action(state, vintages, config)
     assert isinstance(action, TerminateAction)
     assert action.status == "done_appears"
+
+
+def test_initial_round_uses_primary_zoom_from_ladder() -> None:
+    config = AdaptiveScanConfig(download_zoom_ladder=(20, 19))
+    vintages = [VintageEntry(capture_date=f"{y}-06-01", version=y) for y in range(2018, 2025)]
+    state = ScanState(anchor_id="a", region_key="r", grid_id="g")
+    action = decide_next_action(state, vintages, config)
+    assert isinstance(action, ExecuteRoundAction)
+    assert all(p.requested_zoom == 20 for p in action.round.picks)
+
+
+def test_orchestrator_failure_persists_terminal_state(
+    tmp_state_dir: Path, sample_anchor: dict[str, str]
+) -> None:
+    from scripts.temporal.run_adaptive_scan import _record_orchestrator_failure
+
+    state = _record_orchestrator_failure(
+        sample_anchor, tmp_state_dir, RuntimeError("simulated GEHI timeout")
+    )
+    assert state.status == "done_ambiguous_orchestrator_error"
+    assert state.is_terminal
+    assert "RuntimeError" in state.notes
+    loaded = load_scan_state(state_path_for(state.anchor_id, tmp_state_dir))
+    assert loaded is not None
+    assert loaded.status == "done_ambiguous_orchestrator_error"
+
+
+def test_orchestrator_failure_preserves_existing_rounds(
+    tmp_state_dir: Path, sample_anchor: dict[str, str]
+) -> None:
+    from scripts.temporal.run_adaptive_scan import _record_orchestrator_failure
+
+    state = create_scan_state(sample_anchor)
+    state.rounds.append(
+        Round(
+            round_id=1,
+            round_type="initial",
+            window_start_date="2018-06-01",
+            window_end_date="2024-06-01",
+            completed=True,
+        )
+    )
+    save_scan_state(state, state_path_for(state.anchor_id, tmp_state_dir))
+
+    failed = _record_orchestrator_failure(
+        sample_anchor, tmp_state_dir, ValueError("bad bbox")
+    )
+    assert failed.status == "done_ambiguous_orchestrator_error"
+    assert len(failed.rounds) == 1
+    assert failed.rounds[0].round_id == 1

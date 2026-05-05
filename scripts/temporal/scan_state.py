@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SPEC_VERSION = "phase0_v1"
+SPEC_VERSION = "phase0_v2"
 
 ROUND_TYPES = {"initial", "walk_back", "bisection", "tail"}
 
@@ -31,6 +31,7 @@ TERMINAL_STATUSES = {
     "done_ambiguous_nonmonotonic",
     "done_ambiguous_gemini_failed",
     "done_ambiguous_no_recent_anchor",
+    "done_ambiguous_orchestrator_error",
 }
 ALL_STATUSES = {"scanning", *TERMINAL_STATUSES}
 
@@ -49,7 +50,7 @@ class Pick:
     chip_index: int
     capture_date: str
     version: int
-    zoom: int
+    requested_zoom: int
 
 
 @dataclass
@@ -64,7 +65,7 @@ class RoundResult:
     evidence: str = ""
     notes: str = ""
     chip_path: str = ""
-    zoom: int | None = None
+    actual_zoom: int | None = None
 
 
 @dataclass
