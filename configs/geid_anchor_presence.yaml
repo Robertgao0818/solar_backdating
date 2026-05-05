@@ -50,3 +50,14 @@ breakpoint_inference:
   min_consecutive_present: 1
   use_capture_date_before_requested_date: true
   monotonicity_policy: flag_later_absence_as_ambiguous
+
+adaptive_scan:
+  spec_version: phase0_v1
+  round_1_floor_year: 2018
+  walk_back_years: 5
+  picks_per_round: 5
+  tail_round_threshold: 3
+  case_e_failure_pct: 50.0
+  bisection_window: open
+  download_zoom_ladder: [20, 19]
+  info_zoom: 19
