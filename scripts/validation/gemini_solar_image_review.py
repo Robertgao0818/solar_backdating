@@ -1,0 +1,448 @@
+#!/usr/bin/env python3
+"""Run Sub2API/Gemini vision checks on rooftop-solar image chips.
+
+This is an AI-assisted QA helper. Its outputs are model observations, not
+human-reviewed prediction footprints.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import csv
+import json
+import mimetypes
+import os
+import re
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import requests
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_default_env_file() -> Path:
+    """Find .env.gemini.local. Prefer subrepo-local; fall back to ZAsolar main repo."""
+    local = PROJECT_ROOT / ".env.gemini.local"
+    if local.exists():
+        return local
+    zasolar_root = os.environ.get("ZASOLAR_ROOT", "/home/gaosh/projects/ZAsolar")
+    main_local = Path(zasolar_root) / ".env.gemini.local"
+    if main_local.exists():
+        return main_local
+    return local  # nonexistent default; load_env_file returns {} and CLI/env vars take over
+
+
+DEFAULT_ENV_FILE = _resolve_default_env_file()
+DEFAULT_TIMEOUT_SEC = 120
+API_FORMATS = {"openai", "native"}
+
+DEFAULT_PROMPT = """You are reviewing high-resolution aerial or satellite image chips for rooftop solar PV.
+
+Return only valid JSON with this schema:
+{
+  "pv_present": true | false | null,
+  "confidence": 0.0-1.0,
+  "quality_flag": "usable" | "ambiguous" | "unusable",
+  "evidence": "short visual evidence",
+  "notes": "short caveats if any"
+}
+
+Use pv_present=null only when the chip is too blurry, occluded, badly cropped,
+or otherwise not interpretable. Do not count skylights, roof vents, HVAC units,
+or shadows as PV panels.
+"""
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in {"'", '"'}
+        ):
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def env_value(env_file_values: dict[str, str], key: str, default: str = "") -> str:
+    return os.environ.get(key) or env_file_values.get(key) or default
+
+
+def normalize_root_url(base_url: str) -> str:
+    return base_url.rstrip("/")
+
+
+def normalize_openai_url(base_url: str) -> str:
+    base = normalize_root_url(base_url)
+    if base.endswith("/v1"):
+        return base
+    return f"{base}/v1"
+
+
+def auth_headers(api_key: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def image_data_url(path: Path) -> str:
+    mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def image_inline_data(path: Path) -> dict[str, str]:
+    mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {"mime_type": mime, "data": encoded}
+
+
+def read_prompt(args: argparse.Namespace) -> str:
+    if args.prompt_file:
+        return args.prompt_file.read_text(encoding="utf-8")
+    if args.prompt:
+        return args.prompt
+    return DEFAULT_PROMPT
+
+
+def extract_json_object(text: str) -> Any:
+    stripped = text.strip()
+    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.S)
+    if fenced:
+        stripped = fenced.group(1).strip()
+
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(stripped[start : end + 1])
+    raise ValueError(f"could not find a complete JSON object in response: {stripped[:200]!r}")
+
+
+def build_message_content(prompt: str, image_paths: list[Path]) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for path in image_paths:
+        if not path.exists():
+            raise FileNotFoundError(path)
+        content.append({"type": "image_url", "image_url": {"url": image_data_url(path)}})
+    return content
+
+
+def build_native_parts(prompt: str, image_paths: list[Path]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = [{"text": prompt}]
+    for path in image_paths:
+        if not path.exists():
+            raise FileNotFoundError(path)
+        parts.append({"inline_data": image_inline_data(path)})
+    return parts
+
+
+def post_chat_completion(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    image_paths: list[Path],
+    max_tokens: int,
+    timeout: int,
+) -> dict[str, Any]:
+    endpoint = f"{normalize_openai_url(base_url)}/chat/completions"
+    payload = {
+        "model": model,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "messages": [
+            {
+                "role": "user",
+                "content": build_message_content(prompt, image_paths),
+            }
+        ],
+    }
+
+    response = requests.post(
+        endpoint,
+        headers=auth_headers(api_key),
+        data=json.dumps(payload),
+        timeout=timeout,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        body = response.text[:2000]
+        raise RuntimeError(
+            f"{response.status_code} {response.reason} from {endpoint}: {body}"
+        ) from exc
+    return response.json()
+
+
+def post_native_generate_content(
+    *,
+    base_url: str,
+    native_path: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    image_paths: list[Path],
+    max_tokens: int,
+    timeout: int,
+) -> dict[str, Any]:
+    root = normalize_root_url(base_url)
+    path = "/" + native_path.strip("/")
+    endpoint = f"{root}{path}/models/{model}:generateContent"
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": build_native_parts(prompt, image_paths),
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": max_tokens,
+        },
+    }
+
+    response = requests.post(
+        endpoint,
+        headers=auth_headers(api_key),
+        data=json.dumps(payload),
+        timeout=timeout,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        body = response.text[:2000]
+        raise RuntimeError(
+            f"{response.status_code} {response.reason} from {endpoint}: {body}"
+        ) from exc
+    return response.json()
+
+
+def response_text(response_json: dict[str, Any]) -> str:
+    choices = response_json.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, ensure_ascii=False)
+
+
+def native_response_text(response_json: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for candidate in response_json.get("candidates") or []:
+        content = candidate.get("content") or {}
+        for part in content.get("parts") or []:
+            text = part.get("text")
+            if text:
+                chunks.append(text)
+    return "\n".join(chunks)
+
+
+def review_one(
+    *,
+    image_path: Path,
+    reference_images: list[Path],
+    base_url: str,
+    api_key: str,
+    model: str,
+    api_format: str,
+    native_path: str,
+    prompt: str,
+    max_tokens: int,
+    timeout: int,
+) -> dict[str, Any]:
+    started = time.time()
+    image_paths = [*reference_images, image_path]
+    record: dict[str, Any] = {
+        "image_path": str(image_path),
+        "reference_images": [str(p) for p in reference_images],
+        "model": model,
+        "api_format": api_format,
+        "ok": False,
+    }
+    try:
+        if api_format == "native":
+            raw = post_native_generate_content(
+                base_url=base_url,
+                native_path=native_path,
+                api_key=api_key,
+                model=model,
+                prompt=prompt,
+                image_paths=image_paths,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+            content = native_response_text(raw)
+        else:
+            raw = post_chat_completion(
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                prompt=prompt,
+                image_paths=image_paths,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+            content = response_text(raw)
+        record["response_text"] = content
+        try:
+            record["parsed"] = extract_json_object(content)
+        except Exception as exc:  # noqa: BLE001 - preserve raw content for audit.
+            record["parse_error"] = str(exc)
+        record["ok"] = True
+    except Exception as exc:  # noqa: BLE001 - batch jobs should keep going.
+        record["error"] = str(exc)
+    record["elapsed_sec"] = round(time.time() - started, 3)
+    return record
+
+
+def image_paths_from_manifest(path: Path, image_column: str) -> list[Path]:
+    rows: list[Path] = []
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        if image_column not in (reader.fieldnames or []):
+            raise ValueError(
+                f"column {image_column!r} not found in {path}; "
+                f"available={reader.fieldnames}"
+            )
+        for row in reader:
+            value = (row.get(image_column) or "").strip()
+            if value:
+                rows.append(Path(value))
+    return rows
+
+
+def list_models(base_url: str, api_key: str, timeout: int) -> None:
+    root = normalize_root_url(base_url)
+    endpoints = [
+        f"{normalize_openai_url(base_url)}/models",
+        f"{root}/v1beta/models",
+        f"{root}/antigravity/v1beta/models",
+    ]
+    for endpoint in endpoints:
+        print(f"\n# {endpoint}")
+        try:
+            response = requests.get(endpoint, headers=auth_headers(api_key), timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: {exc}")
+            continue
+        print(json.dumps(data, ensure_ascii=False, indent=2)[:8000])
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("images", nargs="*", type=Path, help="Image chips to review.")
+    parser.add_argument("--manifest", type=Path, help="Optional CSV manifest with image paths.")
+    parser.add_argument("--image-column", default="image_path", help="CSV column for --manifest.")
+    parser.add_argument(
+        "--reference-image",
+        action="append",
+        type=Path,
+        default=[],
+        help="Optional reference image included before each target image. Repeatable.",
+    )
+    parser.add_argument("--output", type=Path, help="JSONL output path. Defaults to stdout.")
+    parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
+    parser.add_argument("--base-url", help="Sub2API root URL. Defaults to GOOGLE_GEMINI_BASE_URL.")
+    parser.add_argument("--api-key", help="API key. Defaults to GEMINI_API_KEY.")
+    parser.add_argument("--model", help="Model id. Defaults to GEMINI_MODEL.")
+    parser.add_argument(
+        "--api-format",
+        choices=sorted(API_FORMATS),
+        help="API shape to call. Defaults to GEMINI_API_FORMAT or native.",
+    )
+    parser.add_argument(
+        "--native-path",
+        help="Native Gemini path under the base URL. Defaults to GEMINI_NATIVE_PATH or /v1beta.",
+    )
+    parser.add_argument("--prompt", help="Inline prompt override.")
+    parser.add_argument("--prompt-file", type=Path, help="Prompt file override.")
+    parser.add_argument("--max-tokens", type=int, default=1024)
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SEC)
+    parser.add_argument("--limit", type=int, help="Process only the first N images.")
+    parser.add_argument("--list-models", action="store_true", help="Print model lists and exit.")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    env_file_values = load_env_file(args.env_file)
+
+    base_url = args.base_url or env_value(env_file_values, "GOOGLE_GEMINI_BASE_URL")
+    api_key = args.api_key or env_value(env_file_values, "GEMINI_API_KEY")
+    model = args.model or env_value(env_file_values, "GEMINI_MODEL", "gemini-3-flash-preview")
+    api_format = args.api_format or env_value(env_file_values, "GEMINI_API_FORMAT", "native")
+    native_path = args.native_path or env_value(env_file_values, "GEMINI_NATIVE_PATH", "/v1beta")
+    if not base_url:
+        raise SystemExit("Missing GOOGLE_GEMINI_BASE_URL or --base-url")
+    if not api_key:
+        raise SystemExit("Missing GEMINI_API_KEY or --api-key")
+    if api_format not in API_FORMATS:
+        raise SystemExit(f"Unsupported API format {api_format!r}; choose one of {sorted(API_FORMATS)}")
+
+    if args.list_models:
+        list_models(base_url, api_key, args.timeout)
+        return 0
+
+    images = list(args.images)
+    if args.manifest:
+        images.extend(image_paths_from_manifest(args.manifest, args.image_column))
+    if args.limit is not None:
+        images = images[: args.limit]
+    if not images:
+        raise SystemExit("No images supplied. Pass image paths or --manifest.")
+
+    prompt = read_prompt(args)
+    out_fh = args.output.open("w", encoding="utf-8") if args.output else sys.stdout
+    try:
+        for image in images:
+            record = review_one(
+                image_path=image,
+                reference_images=args.reference_image,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                api_format=api_format,
+                native_path=native_path,
+                prompt=prompt,
+                max_tokens=args.max_tokens,
+                timeout=args.timeout,
+            )
+            out_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            out_fh.flush()
+    finally:
+        if args.output:
+            out_fh.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
