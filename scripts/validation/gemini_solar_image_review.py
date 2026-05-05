@@ -16,8 +16,9 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -55,6 +56,26 @@ Return only valid JSON with this schema:
 Use pv_present=null only when the chip is too blurry, occluded, badly cropped,
 or otherwise not interpretable. Do not count skylights, roof vents, HVAC units,
 or shadows as PV panels.
+"""
+
+
+BATCH_PROMPT_TEMPLATE = """You are reviewing N={count} high-resolution image chips for rooftop solar PV.
+Each chip is independent — do not assume any temporal or spatial relationship between chips.
+Chips are presented in input order; index them 1..N matching that order.
+
+Return ONLY JSONL — one JSON object per line, exactly N lines, in input order.
+No prose, no markdown fences, no array wrapper. Schema per line:
+
+{{"chip_index": <int>, "pv_present": true|false|null, "confidence": <0.0-1.0>,
+ "quality_flag": "usable"|"ambiguous"|"unusable",
+ "evidence": "<specific visual description, e.g. '6 dark rectangular modules on south slope'>",
+ "notes": "<short caveats if any>"}}
+
+Rules:
+- Use pv_present=null only when the chip is too blurry, occluded, badly cropped, or unusable.
+- Do NOT count skylights, roof vents, HVAC units, water heaters, or shadows as PV.
+- The evidence field must describe what you actually see in that specific chip — not generic claims.
+- Output exactly {count} lines. One JSON object per line. No surrounding text.
 """
 
 
@@ -262,6 +283,326 @@ def native_response_text(response_json: dict[str, Any]) -> str:
             if text:
                 chunks.append(text)
     return "\n".join(chunks)
+
+
+@dataclass
+class BatchPick:
+    """A single chip to score in a batch call. Audit fields are not sent to Gemini."""
+
+    chip_index: int
+    chip_path: Path
+    capture_date: str = ""
+    version: str | int = ""
+    actual_zoom: int | None = None
+
+
+@dataclass
+class GeminiObservation:
+    chip_index: int
+    pv_present: bool | None
+    confidence: float | None
+    quality_flag: str
+    evidence: str
+    notes: str
+    decision_source: str  # "gemini_batch" | "gemini_per_image" | "gemini_failed"
+    raw_response: str = ""
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class GeminiClientConfig:
+    base_url: str
+    api_key: str
+    model: str = "gemini-3-flash-preview"
+    api_format: str = "native"
+    native_path: str = "/v1beta"
+    max_tokens_per_chip: int = 600
+    timeout: int = DEFAULT_TIMEOUT_SEC
+
+
+def parse_jsonl_lenient(text: str, expected_count: int) -> tuple[list[dict[str, Any]], list[int]]:
+    """Parse JSONL output, salvaging valid rows. Returns (parsed_dicts_in_order, missing_chip_indices).
+
+    Tolerant to:
+    - Markdown fences (```...```), stripped
+    - Lines that are not valid JSON (skipped)
+    - Out-of-order chip_index values
+    - chip_index values outside [1..expected_count] (rejected)
+    - Duplicate chip_index (last wins)
+    """
+    lines = [line for line in text.splitlines() if line.strip()]
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+
+    parsed_by_index: dict[int, dict[str, Any]] = {}
+    for line in lines:
+        candidate = line.strip()
+        if not candidate or not candidate.startswith("{"):
+            continue
+        try:
+            obj = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict) or "chip_index" not in obj:
+            continue
+        try:
+            idx = int(obj["chip_index"])
+        except (TypeError, ValueError):
+            continue
+        if 1 <= idx <= expected_count:
+            parsed_by_index[idx] = obj
+
+    ordered = [parsed_by_index[i] for i in sorted(parsed_by_index)]
+    missing = [i for i in range(1, expected_count + 1) if i not in parsed_by_index]
+    return ordered, missing
+
+
+def validate_observation_schema(obj: dict[str, Any]) -> bool:
+    if not all(k in obj for k in ("chip_index", "pv_present", "confidence", "quality_flag")):
+        return False
+    pv = obj.get("pv_present")
+    if pv is not None and not isinstance(pv, bool):
+        return False
+    conf = obj.get("confidence")
+    if conf is not None and not isinstance(conf, (int, float)):
+        return False
+    if obj.get("quality_flag") not in ("usable", "ambiguous", "unusable"):
+        return False
+    return True
+
+
+def _to_observation(parsed: dict[str, Any], *, decision_source: str, raw: str = "") -> GeminiObservation:
+    return GeminiObservation(
+        chip_index=int(parsed["chip_index"]),
+        pv_present=parsed.get("pv_present"),
+        confidence=float(parsed["confidence"]) if parsed.get("confidence") is not None else None,
+        quality_flag=str(parsed.get("quality_flag", "unusable")),
+        evidence=str(parsed.get("evidence", "")),
+        notes=str(parsed.get("notes", "")),
+        decision_source=decision_source,
+        raw_response=raw,
+    )
+
+
+def _failed_observation(chip_index: int, error: str) -> GeminiObservation:
+    return GeminiObservation(
+        chip_index=chip_index,
+        pv_present=None,
+        confidence=None,
+        quality_flag="unusable",
+        evidence="",
+        notes=f"gemini_failed: {error[:300]}",
+        decision_source="gemini_failed",
+        error=error,
+    )
+
+
+def _call_gemini(
+    *,
+    image_paths: list[Path],
+    prompt: str,
+    config: GeminiClientConfig,
+    max_tokens: int,
+    poster: Callable[..., dict[str, Any]] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Call Gemini via native or openai format. Returns (response_text, raw_response_json)."""
+    if config.api_format == "native":
+        if poster is None:
+            raw = post_native_generate_content(
+                base_url=config.base_url,
+                native_path=config.native_path,
+                api_key=config.api_key,
+                model=config.model,
+                prompt=prompt,
+                image_paths=image_paths,
+                max_tokens=max_tokens,
+                timeout=config.timeout,
+            )
+        else:
+            raw = poster(
+                api_format="native",
+                base_url=config.base_url,
+                native_path=config.native_path,
+                api_key=config.api_key,
+                model=config.model,
+                prompt=prompt,
+                image_paths=image_paths,
+                max_tokens=max_tokens,
+                timeout=config.timeout,
+            )
+        return native_response_text(raw), raw
+    if poster is None:
+        raw = post_chat_completion(
+            base_url=config.base_url,
+            api_key=config.api_key,
+            model=config.model,
+            prompt=prompt,
+            image_paths=image_paths,
+            max_tokens=max_tokens,
+            timeout=config.timeout,
+        )
+    else:
+        raw = poster(
+            api_format="openai",
+            base_url=config.base_url,
+            api_key=config.api_key,
+            model=config.model,
+            prompt=prompt,
+            image_paths=image_paths,
+            max_tokens=max_tokens,
+            timeout=config.timeout,
+        )
+    return response_text(raw), raw
+
+
+def _attempt_batch(
+    picks: list[BatchPick],
+    *,
+    config: GeminiClientConfig,
+    poster: Callable[..., dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[int], str, str | None]:
+    """Single batch attempt. Returns (valid_parsed, missing_indices, raw_text, error)."""
+    prompt = BATCH_PROMPT_TEMPLATE.format(count=len(picks))
+    max_tokens = config.max_tokens_per_chip * len(picks) + 256
+    try:
+        raw_text, _raw_json = _call_gemini(
+            image_paths=[p.chip_path for p in picks],
+            prompt=prompt,
+            config=config,
+            max_tokens=max_tokens,
+            poster=poster,
+        )
+    except Exception as exc:  # noqa: BLE001 - retry layer treats all errors uniformly.
+        return [], [p.chip_index for p in picks], "", f"{type(exc).__name__}: {exc}"
+
+    parsed, missing = parse_jsonl_lenient(raw_text, len(picks))
+    valid = [p for p in parsed if validate_observation_schema(p)]
+    valid_indices = {int(p["chip_index"]) for p in valid}
+    final_missing = [i for i in range(1, len(picks) + 1) if i not in valid_indices]
+    return valid, final_missing, raw_text, None
+
+
+def _attempt_per_image(
+    pick: BatchPick,
+    *,
+    config: GeminiClientConfig,
+    poster: Callable[..., dict[str, Any]] | None,
+) -> GeminiObservation:
+    prompt = DEFAULT_PROMPT
+    try:
+        raw_text, _raw = _call_gemini(
+            image_paths=[pick.chip_path],
+            prompt=prompt,
+            config=config,
+            max_tokens=config.max_tokens_per_chip,
+            poster=poster,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _failed_observation(pick.chip_index, f"per_image_call_error: {type(exc).__name__}: {exc}")
+
+    try:
+        parsed = extract_json_object(raw_text)
+    except Exception as exc:  # noqa: BLE001
+        return _failed_observation(pick.chip_index, f"per_image_parse_error: {exc}")
+
+    if not isinstance(parsed, dict):
+        return _failed_observation(pick.chip_index, "per_image_response_not_object")
+    parsed.setdefault("chip_index", pick.chip_index)
+    if not validate_observation_schema(parsed):
+        return _failed_observation(pick.chip_index, f"per_image_schema_invalid: {raw_text[:300]}")
+    return _to_observation(parsed, decision_source="gemini_per_image", raw=raw_text)
+
+
+def score_batch_with_fallback(
+    picks: list[BatchPick],
+    *,
+    config: GeminiClientConfig,
+    audit_writer: Callable[[dict[str, Any]], None] | None = None,
+    poster: Callable[..., dict[str, Any]] | None = None,
+) -> list[GeminiObservation]:
+    """Score N chips in one batch call following Q5.6 (a') retry policy:
+
+    1. Batch attempt 1.
+    2. If schema/row-count not satisfied, batch attempt 2 with the same prompt.
+    3. Salvage the best attempt's valid rows.
+    4. For each missing chip_index, run per-image fallback.
+    5. Any chip still unresolved is recorded as `gemini_failed`.
+
+    `audit_writer` receives one dict per attempt (batch attempts) plus one dict
+    per per-image fallback. `poster` is overridable for tests; default goes
+    through `_call_gemini` which uses requests.
+    """
+    if not picks:
+        return []
+
+    valid1, missing1, raw1, err1 = _attempt_batch(picks, config=config, poster=poster)
+    if audit_writer is not None:
+        audit_writer(
+            {
+                "stage": "batch_attempt_1",
+                "n_picks": len(picks),
+                "n_valid": len(valid1),
+                "missing_indices": missing1,
+                "error": err1,
+                "raw_response": raw1,
+            }
+        )
+
+    if len(valid1) == len(picks) and not missing1:
+        return [_to_observation(p, decision_source="gemini_batch", raw=raw1) for p in valid1]
+
+    valid2, missing2, raw2, err2 = _attempt_batch(picks, config=config, poster=poster)
+    if audit_writer is not None:
+        audit_writer(
+            {
+                "stage": "batch_attempt_2",
+                "n_picks": len(picks),
+                "n_valid": len(valid2),
+                "missing_indices": missing2,
+                "error": err2,
+                "raw_response": raw2,
+            }
+        )
+
+    if len(valid2) == len(picks) and not missing2:
+        return [_to_observation(p, decision_source="gemini_batch", raw=raw2) for p in valid2]
+
+    salvaged_attempts = [(valid1, raw1), (valid2, raw2)]
+    best_valid, best_raw = max(salvaged_attempts, key=lambda v: len(v[0]))
+    salvaged_indices = {int(p["chip_index"]) for p in best_valid}
+    salvaged_obs = [_to_observation(p, decision_source="gemini_batch", raw=best_raw) for p in best_valid]
+
+    fallback_obs: list[GeminiObservation] = []
+    for pick in picks:
+        if pick.chip_index in salvaged_indices:
+            continue
+        per_image = _attempt_per_image(pick, config=config, poster=poster)
+        if audit_writer is not None:
+            audit_writer(
+                {
+                    "stage": "per_image_fallback",
+                    "chip_index": pick.chip_index,
+                    "result": {
+                        "decision_source": per_image.decision_source,
+                        "pv_present": per_image.pv_present,
+                        "quality_flag": per_image.quality_flag,
+                        "error": per_image.error,
+                        "raw_response": per_image.raw_response,
+                    },
+                }
+            )
+        fallback_obs.append(per_image)
+
+    by_index = {o.chip_index: o for o in (*salvaged_obs, *fallback_obs)}
+    out: list[GeminiObservation] = []
+    for pick in picks:
+        if pick.chip_index in by_index:
+            out.append(by_index[pick.chip_index])
+        else:
+            out.append(_failed_observation(pick.chip_index, "no_observation_after_fallback"))
+    return out
 
 
 def review_one(

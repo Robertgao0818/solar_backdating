@@ -53,7 +53,10 @@ from scripts.temporal.scan_state import (
 
 DEFAULT_ANCHORS_CSV = Path.home() / "zasolar_data/geid_temporal/jhb_vexcel10_smoke/anchors.csv"
 DEFAULT_SCAN_STATES_DIR = Path.home() / "zasolar_data/geid_temporal/jhb_vexcel10_smoke/scan_states"
+DEFAULT_CHIPS_DIR = Path.home() / "zasolar_data/geid_temporal/gehi_chips"
+DEFAULT_AUDIT_DIR = Path.home() / "zasolar_data/geid_temporal/jhb_vexcel10_smoke/gemini_audit"
 DEFAULT_CONFIG_YAML = PROJECT_ROOT / "configs" / "geid_anchor_presence.yaml"
+DEFAULT_GEMINI_ENV = PROJECT_ROOT / ".env.gemini.local"
 
 DRY_RUN_PROFILE_LABELS = (
     "appears_2015",
@@ -75,7 +78,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--anchors-csv", type=Path, default=DEFAULT_ANCHORS_CSV)
     parser.add_argument("--scan-states-dir", type=Path, default=DEFAULT_SCAN_STATES_DIR)
+    parser.add_argument("--chips-dir", type=Path, default=DEFAULT_CHIPS_DIR, help="Where GEHI chips are written")
+    parser.add_argument("--audit-dir", type=Path, default=DEFAULT_AUDIT_DIR, help="Per-anchor per-round Gemini audit JSONL")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_YAML)
+    parser.add_argument("--gemini-env-file", type=Path, default=DEFAULT_GEMINI_ENV)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -170,10 +176,154 @@ def execute_round_dry_run(
     return rnd
 
 
-def execute_round_real(rnd: Round, anchor: dict[str, str], config: AdaptiveScanConfig) -> Round:
-    raise NotImplementedError(
-        "Real round execution requires Tasks C+D (gehi_download zoom ladder + "
-        "gemini batch mode). Run with --dry-run for now."
+def execute_round_real(
+    rnd: Round,
+    anchor: dict[str, str],
+    config: AdaptiveScanConfig,
+    *,
+    chips_dir: Path,
+    audit_dir: Path,
+    gemini_config,  # GeminiClientConfig - imported lazily
+) -> Round:
+    """Download chips for each pick (zoom ladder), batch-score with Gemini, return Round with results."""
+    import json as _json
+
+    from scripts.temporal.gehi_download import download_chip_with_zoom_ladder
+    from scripts.validation.gemini_solar_image_review import (
+        BatchPick,
+        score_batch_with_fallback,
+    )
+
+    download_outcomes: list[tuple[Pick, object]] = []
+    for pick in rnd.picks:
+        outcome = download_chip_with_zoom_ladder(
+            anchor,
+            capture_date=pick.capture_date,
+            version=pick.version,
+            zoom_ladder=config.download_zoom_ladder,
+            output_root=chips_dir,
+        )
+        download_outcomes.append((pick, outcome))
+
+    score_picks: list[BatchPick] = []
+    download_by_index: dict[int, object] = {}
+    for pick, outcome in download_outcomes:
+        download_by_index[pick.chip_index] = outcome
+        if outcome.status in ("ok", "skipped_existing") and outcome.path:
+            score_picks.append(
+                BatchPick(
+                    chip_index=pick.chip_index,
+                    chip_path=outcome.path,
+                    capture_date=pick.capture_date,
+                    version=str(pick.version),
+                    actual_zoom=outcome.actual_zoom,
+                )
+            )
+
+    audit_path = audit_dir / anchor["anchor_id"] / f"round_{rnd.round_id}.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    observations = []
+    if score_picks:
+        with audit_path.open("w", encoding="utf-8") as audit_fh:
+            def _audit(payload: dict) -> None:
+                audit_fh.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+
+            observations = score_batch_with_fallback(
+                score_picks, config=gemini_config, audit_writer=_audit
+            )
+
+    obs_by_index = {o.chip_index: o for o in observations}
+    rnd_results: list[RoundResult] = []
+    for pick in rnd.picks:
+        outcome = download_by_index[pick.chip_index]
+        if outcome.status not in ("ok", "skipped_existing") or outcome.path is None:
+            rnd_results.append(
+                RoundResult(
+                    chip_index=pick.chip_index,
+                    capture_date=pick.capture_date,
+                    version=pick.version,
+                    pv_present=None,
+                    confidence=None,
+                    quality_flag="unusable",
+                    decision_source="gemini_failed",
+                    evidence="",
+                    notes=f"download_failed: status={outcome.status} error={outcome.error or ''}"[:300],
+                    chip_path="",
+                    actual_zoom=outcome.actual_zoom,
+                )
+            )
+            continue
+        obs = obs_by_index.get(pick.chip_index)
+        if obs is None:
+            rnd_results.append(
+                RoundResult(
+                    chip_index=pick.chip_index,
+                    capture_date=pick.capture_date,
+                    version=pick.version,
+                    pv_present=None,
+                    confidence=None,
+                    quality_flag="unusable",
+                    decision_source="gemini_failed",
+                    evidence="",
+                    notes="missing observation in batch results",
+                    chip_path=str(outcome.path),
+                    actual_zoom=outcome.actual_zoom,
+                )
+            )
+            continue
+        rnd_results.append(
+            RoundResult(
+                chip_index=pick.chip_index,
+                capture_date=pick.capture_date,
+                version=pick.version,
+                pv_present=obs.pv_present,
+                confidence=obs.confidence,
+                quality_flag=obs.quality_flag,
+                decision_source=obs.decision_source,
+                evidence=obs.evidence,
+                notes=obs.notes,
+                chip_path=str(outcome.path),
+                actual_zoom=outcome.actual_zoom,
+            )
+        )
+
+    rnd.results = rnd_results
+    rnd.completed = True
+    rnd.failed = False
+    return rnd
+
+
+def _load_gemini_config(env_file: Path):
+    """Load GeminiClientConfig from .env.gemini.local. Lazy import to avoid hard dep in dry-run."""
+    from scripts.validation.gemini_solar_image_review import (
+        API_FORMATS,
+        GeminiClientConfig,
+        env_value,
+        load_env_file,
+    )
+
+    env = load_env_file(env_file)
+    base_url = env_value(env, "GOOGLE_GEMINI_BASE_URL")
+    api_key = env_value(env, "GEMINI_API_KEY")
+    model = env_value(env, "GEMINI_MODEL", "gemini-3-flash-preview")
+    api_format = env_value(env, "GEMINI_API_FORMAT", "native")
+    native_path = env_value(env, "GEMINI_NATIVE_PATH", "/v1beta")
+    if not base_url:
+        raise SystemExit(
+            f"Missing GOOGLE_GEMINI_BASE_URL (set in {env_file} or env). Use --dry-run if you want to skip Gemini."
+        )
+    if not api_key:
+        raise SystemExit(
+            f"Missing GEMINI_API_KEY (set in {env_file} or env). Use --dry-run if you want to skip Gemini."
+        )
+    if api_format not in API_FORMATS:
+        raise SystemExit(f"Unsupported GEMINI_API_FORMAT={api_format!r}; choose {sorted(API_FORMATS)}")
+    return GeminiClientConfig(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        api_format=api_format,
+        native_path=native_path,
     )
 
 
@@ -184,6 +334,9 @@ def run_one_anchor(
     *,
     dry_run: bool,
     force_restart: bool,
+    chips_dir: Path | None = None,
+    audit_dir: Path | None = None,
+    gemini_config=None,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
     state_path = state_path_for(anchor_id, scan_states_dir)
@@ -220,7 +373,11 @@ def run_one_anchor(
             assert profile is not None
             rnd = execute_round_dry_run(rnd, profile)
         else:
-            rnd = execute_round_real(rnd, anchor, config)
+            assert chips_dir is not None and audit_dir is not None and gemini_config is not None
+            rnd = execute_round_real(
+                rnd, anchor, config,
+                chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=gemini_config,
+            )
         state.rounds.append(rnd)
         state.next_action = "decide_next_action"
         save_scan_state(state, state_path)
@@ -269,6 +426,12 @@ def main() -> None:
     if not anchors:
         raise SystemExit("Anchors CSV produced 0 rows.")
 
+    gemini_config = None
+    if not args.dry_run:
+        gemini_config = _load_gemini_config(args.gemini_env_file)
+        args.chips_dir.mkdir(parents=True, exist_ok=True)
+        args.audit_dir.mkdir(parents=True, exist_ok=True)
+
     states: list[ScanState] = []
     for anchor in anchors:
         anchor_id = anchor["anchor_id"]
@@ -280,6 +443,9 @@ def main() -> None:
                 args.scan_states_dir,
                 dry_run=args.dry_run,
                 force_restart=args.force_restart,
+                chips_dir=args.chips_dir,
+                audit_dir=args.audit_dir,
+                gemini_config=gemini_config,
             )
         except Exception as exc:
             state = _record_orchestrator_failure(
