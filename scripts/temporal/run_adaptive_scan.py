@@ -228,9 +228,22 @@ def run_one_anchor(
 
 
 def _fetch_real_vintages(anchor: dict[str, str], config: AdaptiveScanConfig) -> list[VintageEntry]:
-    raise NotImplementedError(
-        "Real vintage fetch via gehi_info is not wired in Task A. Use --dry-run."
-    )
+    """Fetch the deduped GEHI vintage catalog for an anchor at config.info_zoom."""
+    from scripts.temporal.gehi_info import fetch_vintages_for_anchor
+
+    rows = fetch_vintages_for_anchor(anchor, zoom=config.info_zoom)
+    out: list[VintageEntry] = []
+    for r in rows:
+        capture_date = str(r.get("capture_date", "")).strip()
+        version_raw = r.get("version")
+        if not capture_date or version_raw in (None, ""):
+            continue
+        try:
+            version = int(version_raw)
+        except (TypeError, ValueError):
+            continue
+        out.append(VintageEntry(capture_date=capture_date, version=version))
+    return out
 
 
 def summarize(states: Iterable[ScanState]) -> None:
