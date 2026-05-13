@@ -1,5 +1,7 @@
 # GEID Temporal Anchor-Presence Detection Architecture
 
+> **Status (2026-05-13):** Superseded by [`gehi_temporal_replacement_plan.md`](gehi_temporal_replacement_plan.md). GEID downloader removed; GEHI is the production provider. This doc is kept as historical design context — the anchor-presence/breakpoint architecture is reused, only the imagery source changed. Provider-specific sections (GEID CLI bridge, `export_geid_temporal_tasks.py`, `download_geid_historical_direct.py`) describe deleted code.
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task if this evolves beyond the initial skeleton.
 
 **Goal:** Infer rooftop PV installation timing by anchoring on known installation locations, downloading GEID historical chips, scoring PV presence/absence per capture date, and finding the first stable absent→present breakpoint.

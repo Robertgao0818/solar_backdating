@@ -90,9 +90,18 @@ Optional local query layer:
 
 ## Legacy Sunset
 
-Keep `download_geid_historical_direct.py` and the GEID CLI bridge until GEHI
-has completed the 18-anchor run and install intervals pass review. After that,
-move the old provider code to `scripts/temporal/legacy/` and stop updating it.
+**Completed 2026-05-13.** GEHI is the sole download path. Removed:
+
+- `scripts/temporal/download_geid_historical_direct.py` (GEID direct downloader)
+- `scripts/temporal/export_geid_temporal_tasks.py` (GEID CLI task exporter)
+- `tests/temporal/test_download_geid_historical_direct.py`
+
+`geid_temporal_common.py` stays as the shared CSV/IO/path utility module for
+the temporal pipeline (used by all `gehi_*.py` wrappers); the module name is
+legacy but the contents are provider-agnostic.
+
+`~/zasolar_data/geid_raw/` remains on disk as historical mosaic input for
+Phase 0 cross-checks against GEHI candidates.
 
 ## 18-Anchor Run
 
