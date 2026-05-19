@@ -18,8 +18,11 @@ from scripts.temporal.gehi_download import DownloadResult
 from scripts.temporal.run_adaptive_scan import (
     _build_batch_picks_with_remap,
     _default_gemini_env,
+    _score_batch_picks_chunked,
 )
+from scripts.temporal.scan_config import AdaptiveScanConfig
 from scripts.temporal.scan_state import Pick
+from scripts.validation.gemini_solar_image_review import BatchPick, GeminiObservation
 
 
 def _ok_outcome(path: Path, *, zoom: int = 20) -> DownloadResult:
@@ -171,3 +174,59 @@ def test_default_gemini_env_falls_back_to_zasolar_root(tmp_path: Path, monkeypat
 
     resolved = _default_gemini_env()
     assert resolved == main_env
+
+
+def test_score_batch_picks_chunked_enforces_date_limit(tmp_path: Path, monkeypatch) -> None:
+    from scripts.validation import gemini_solar_image_review as g
+
+    score_picks: list[BatchPick] = []
+    batch_to_original: dict[int, int] = {}
+    for idx in range(1, 8):
+        chip = tmp_path / f"chip_{idx}.png"
+        chip.write_bytes(b"PNG")
+        score_picks.append(
+            BatchPick(
+                chip_index=idx,
+                chip_path=chip,
+                capture_date=f"2020-01-{idx:02d}",
+                version=idx,
+                actual_zoom=20,
+            )
+        )
+        batch_to_original[idx] = idx + 100
+
+    chunk_sizes: list[int] = []
+    seen_indices: list[list[int]] = []
+
+    def fake_score_batch(picks, *, config, audit_writer, census_mid_date_iso):
+        chunk_sizes.append(len(picks))
+        seen_indices.append([p.chip_index for p in picks])
+        audit_writer({"stage": "batch_attempt_1", "n_picks": len(picks)})
+        return [
+            GeminiObservation(
+                chip_index=p.chip_index,
+                pv_present=True,
+                confidence=0.9,
+                quality_flag="usable",
+                evidence="ok",
+                notes="",
+                decision_source="gemini_batch",
+            )
+            for p in picks
+        ]
+
+    monkeypatch.setattr(g, "score_batch_with_fallback", fake_score_batch)
+    audits: list[dict[str, Any]] = []
+    obs_by_original = _score_batch_picks_chunked(
+        score_picks,
+        batch_to_original,
+        config=AdaptiveScanConfig(gemini_max_dates_per_call=5),
+        gemini_config=object(),
+        audit_writer=audits.append,
+        census_mid_date_iso=None,
+    )
+
+    assert chunk_sizes == [5, 2]
+    assert seen_indices == [[1, 2, 3, 4, 5], [1, 2]]
+    assert sorted(obs_by_original) == [101, 102, 103, 104, 105, 106, 107]
+    assert {a["batch_chunk_index"] for a in audits} == {1, 2}

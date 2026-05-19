@@ -198,10 +198,11 @@ def download_chip_with_zoom_ladder(
 
     Idempotent: scans the ladder for an existing non-empty chip first and
     returns it (preferring the highest-quality / earliest-in-ladder match)
-    without re-running GEHI. On miss, attempts each zoom in ladder order;
-    falls back to next zoom on non-zero return code, empty output, runner
-    exception, or `vintage_check(zoom, capture_date) is False`. Any non-empty
-    file left by a failed attempt is removed so a later run re-attempts cleanly.
+    without re-running GEHI, but only if the optional `vintage_check` still
+    admits that zoom/date. On miss, attempts each zoom in ladder order; falls
+    back to next zoom on non-zero return code, empty output, runner exception,
+    or `vintage_check(zoom, capture_date) is False`. Any non-empty file left
+    by a failed attempt is removed so a later run re-attempts cleanly.
 
     `vintage_check` is an optional provenance gate: when supplied, the ladder
     skips any zoom whose vintage catalog does not contain `capture_date`. The
@@ -213,11 +214,43 @@ def download_chip_with_zoom_ladder(
     anchor_id = str(anchor["anchor_id"])
     version_str = str(version).strip()
     ladder = tuple(int(z) for z in zoom_ladder)
+    last_error: str | None = None
 
     if not overwrite:
         for zoom in ladder:
             candidate_path = _chip_path_for(output_root, anchor_id, capture_date, version_str, zoom)
             if candidate_path.exists() and candidate_path.stat().st_size > 0:
+                if vintage_check is not None:
+                    try:
+                        vintage_present = bool(vintage_check(zoom, capture_date))
+                    except Exception as exc:  # noqa: BLE001
+                        last_error = f"vintage_check raised for cached z={zoom}: {type(exc).__name__}: {exc}"
+                        if raw_log_callback is not None:
+                            raw_log_callback(
+                                {
+                                    "anchor_id": anchor_id,
+                                    "capture_date": capture_date,
+                                    "version": version_str,
+                                    "zoom_attempt": zoom,
+                                    "path": str(candidate_path),
+                                    "skip_reason": last_error,
+                                }
+                            )
+                        continue
+                    if not vintage_present:
+                        last_error = f"cached_vintage_check_failed at z={zoom}: capture_date {capture_date} not in catalog"
+                        if raw_log_callback is not None:
+                            raw_log_callback(
+                                {
+                                    "anchor_id": anchor_id,
+                                    "capture_date": capture_date,
+                                    "version": version_str,
+                                    "zoom_attempt": zoom,
+                                    "path": str(candidate_path),
+                                    "skip_reason": last_error,
+                                }
+                            )
+                        continue
                 return DownloadResult(
                     anchor_id=anchor_id,
                     capture_date=capture_date,
@@ -232,7 +265,6 @@ def download_chip_with_zoom_ladder(
                     download_stdout_sha256="",
                 )
 
-    last_error: str | None = None
     lower_left, upper_right = anchor_bbox_args(anchor)
     for zoom in ladder:
         if vintage_check is not None:

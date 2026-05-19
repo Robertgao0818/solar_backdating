@@ -23,7 +23,8 @@ gehi_download:
   executable: "/home/gaosh/zasolar_data/tools/GEHistoricalImagery/GEHistoricalImagery"
   provider: "TM"
   vintage_probe_zoom: 19
-  download_zoom_candidates: [19, 20, 21]
+  discovery_zoom_candidates: [19, 18]
+  download_zoom_candidates: [20, 19, 18]
   default_download_zoom: 19
   min_probe_date: "2009-01-01"
   max_probe_date: "2025-12-31"
@@ -32,7 +33,7 @@ gehi_download:
   output_root: "/home/gaosh/zasolar_data/geid_temporal/gehi_chips"
   cache_policy: "use_GEHistoricalImagery_default_cache"
   coordinate_order_policy: "wrapper converts anchor lon/lat fields to GEHI LAT,LONG CLI args"
-  vintage_dedupe_key: ["anchor_id", "version"]
+  vintage_dedupe_key: ["anchor_id", "capture_date"]
 
 presence_scoring:
   task_type: anchor_conditioned_binary_presence
@@ -59,6 +60,16 @@ adaptive_scan:
   tail_round_threshold: 3
   case_e_failure_pct: 50.0
   bisection_window: open
-  download_zoom_ladder: [20, 19]
+  download_zoom_ladder: [20, 19, 18]
+  discovery_zoom_ladder: [19, 18]
   info_zoom: 19
+  require_complete_coverage_for_catalog: true
+  require_complete_coverage_for_download: true
+  catalog_min_date: "2009-01-01"
+  catalog_max_date: "2025-12-31"
+  availability_parallel: 4
+  gemini_max_dates_per_call: 5
+  gemini_max_targets_per_call: 4
+  gemini_hard_max_targets_per_call: 6
+  gemini_hard_max_cells_per_call: 24
   max_anchor_recovery_rounds: 2

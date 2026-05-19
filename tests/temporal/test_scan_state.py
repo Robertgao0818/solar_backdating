@@ -218,3 +218,74 @@ def test_orchestrator_failure_preserves_existing_rounds(
     assert failed.status == "done_ambiguous_orchestrator_error"
     assert len(failed.rounds) == 1
     assert failed.rounds[0].round_id == 1
+
+
+def test_real_vintage_catalog_uses_bbox_complete_z19_then_z18(monkeypatch) -> None:
+    from scripts.temporal import gehi_availability, gehi_info
+    from scripts.temporal.run_adaptive_scan import _fetch_real_vintage_catalog
+
+    anchor = {"anchor_id": "a", "region_key": "r", "grid_id": "g"}
+
+    def fake_info(_anchor, *, zoom, **_kwargs):
+        rows_by_zoom = {
+            19: [
+                {"capture_date": "2018-06-01", "version": 1901},
+                {"capture_date": "2020-06-01", "version": 1902},
+                {"capture_date": "2024-06-01", "version": 1903},
+            ],
+            18: [
+                {"capture_date": "2010-06-01", "version": 1801},
+                {"capture_date": "2018-06-01", "version": 1802},
+                {"capture_date": "2020-06-01", "version": 1803},
+            ],
+        }
+        return rows_by_zoom[zoom]
+
+    def fake_availability(_anchor, *, zoom, **_kwargs):
+        dates_by_zoom = {
+            19: ["2020-06-01", "2024-06-01"],
+            18: ["2010-06-01", "2018-06-01", "2020-06-01"],
+        }
+        return [{"capture_date": d} for d in dates_by_zoom[zoom]]
+
+    monkeypatch.setattr(gehi_info, "fetch_vintages_for_anchor", fake_info)
+    monkeypatch.setattr(gehi_availability, "fetch_availability_for_anchor", fake_availability)
+
+    config = AdaptiveScanConfig(discovery_zoom_ladder=(19, 18))
+    catalog = _fetch_real_vintage_catalog(anchor, config)
+
+    assert [v.capture_date for v in catalog.vintages] == [
+        "2010-06-01",
+        "2018-06-01",
+        "2020-06-01",
+        "2024-06-01",
+    ]
+    versions = {v.capture_date: v.version for v in catalog.vintages}
+    assert versions["2018-06-01"] == 1802
+    assert versions["2020-06-01"] == 1902
+    assert catalog.available_dates_by_zoom[19] == {"2020-06-01", "2024-06-01"}
+
+
+def test_vintage_check_uses_cached_and_lazy_bbox_availability(monkeypatch) -> None:
+    from scripts.temporal import gehi_availability
+    from scripts.temporal.run_adaptive_scan import make_vintage_check
+
+    calls: list[int] = []
+
+    def fake_availability(_anchor, *, zoom, **_kwargs):
+        calls.append(zoom)
+        return [{"capture_date": "2024-06-01"}] if zoom == 20 else []
+
+    monkeypatch.setattr(gehi_availability, "fetch_availability_for_anchor", fake_availability)
+    check = make_vintage_check(
+        {"anchor_id": "a"},
+        available_dates_by_zoom={19: {"2018-06-01"}},
+        config=AdaptiveScanConfig(download_zoom_ladder=(20, 19)),
+    )
+
+    assert check(19, "2018-06-01")
+    assert calls == []
+    assert check(20, "2024-06-01")
+    assert calls == [20]
+    assert not check(20, "2018-06-01")
+    assert calls == [20]

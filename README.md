@@ -25,9 +25,14 @@ modules:
 - `scripts/validation/` — legacy GEID vintage probe, Gemini single-image review
 
 Current provider decision: GEHistoricalImagery Time Machine is the primary
-candidate for historical imagery. Vintage discovery uses `z=19`; higher zooms
-are optional download upgrades only when that exact vintage exists. See
+candidate for historical imagery. Vintage discovery uses bbox-complete
+availability at `z=19`, with `z=18` as the lower-zoom whole-picture fallback;
+higher zooms are optional download upgrades only when that exact vintage has
+complete chip coverage. See
 [`docs/gehi_temporal_replacement_plan.md`](docs/gehi_temporal_replacement_plan.md).
+Gemini review calls are bounded: default date batches are at most 5 images, and
+multi-target matrix review is capped at 4 targets / 24 date-target cells before
+splitting.
 
 ## Plugin model
 

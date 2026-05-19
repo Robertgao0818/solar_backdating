@@ -98,6 +98,42 @@ Rules:
 """
 
 
+MATRIX_PROMPT_TEMPLATE = """You are reviewing D={date_count} dated image chips for rooftop solar PV.
+Each image shows the SAME chip group at a different capture date. The images
+are presented in date_index order 1..D. Each image is annotated with target
+labels: {target_labels}. Score every target label in every date image.
+
+Return ONLY JSONL — one JSON object per line, exactly D*T={cell_count} lines.
+No prose, no markdown fences, no array wrapper. Schema per line:
+
+{{"cell_index": <int>, "date_index": <int>, "capture_date": "YYYY-MM-DD",
+ "target_id": "<stable target id>", "target_label": "T01",
+ "pv_present": true|false|null, "confidence": <0.0-1.0>,
+ "quality_flag": "usable"|"ambiguous"|"unusable",
+ "evidence": "<specific visual description at this target/date>",
+ "notes": "<short caveats if any>"}}
+
+Rules:
+- Evaluate each target label separately. Do not transfer a PV decision from T01
+  to T02 just because they are nearby.
+- Use pv_present=null when that target label is occluded, too blurry, outside
+  the visible roof, or cannot be interpreted because of viewing-angle/parallax.
+- Do not count PV elsewhere in the chip unless it is on the requested target.
+- Preserve the target_id/target_label mapping exactly as listed below.
+- Output rows in date-major order: date_index 1 all targets, then date_index 2,
+  continuing through date_index D.
+
+Target mapping:
+{target_mapping}
+"""
+
+
+DEFAULT_MAX_MATRIX_DATES = 5
+DEFAULT_MAX_MATRIX_TARGETS = 4
+HARD_MAX_MATRIX_TARGETS = 6
+HARD_MAX_MATRIX_CELLS = 24
+
+
 def load_env_file(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -315,6 +351,21 @@ class BatchPick:
     actual_zoom: int | None = None
 
 
+@dataclass(frozen=True)
+class MatrixTarget:
+    target_id: str
+    target_label: str
+
+
+@dataclass(frozen=True)
+class MatrixDatePick:
+    date_index: int
+    chip_path: Path
+    capture_date: str
+    version: str | int = ""
+    actual_zoom: int | None = None
+
+
 @dataclass
 class GeminiObservation:
     chip_index: int
@@ -324,6 +375,23 @@ class GeminiObservation:
     evidence: str
     notes: str
     decision_source: str  # "gemini_batch" | "gemini_per_image" | "gemini_failed"
+    raw_response: str = ""
+    error: str | None = None
+
+
+@dataclass
+class GeminiMatrixObservation:
+    cell_index: int
+    date_index: int
+    capture_date: str
+    target_id: str
+    target_label: str
+    pv_present: bool | None
+    confidence: float | None
+    quality_flag: str
+    evidence: str
+    notes: str
+    decision_source: str  # "gemini_matrix" | "gemini_failed"
     raw_response: str = ""
     error: str | None = None
 
@@ -378,6 +446,15 @@ def parse_jsonl_lenient(text: str, expected_count: int) -> tuple[list[dict[str, 
     return ordered, missing
 
 
+def _json_candidate_lines(text: str) -> list[str]:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return [line.strip() for line in lines if line.strip().startswith("{")]
+
+
 def validate_observation_schema(obj: dict[str, Any]) -> bool:
     if not all(k in obj for k in ("chip_index", "pv_present", "confidence", "quality_flag")):
         return False
@@ -390,6 +467,109 @@ def validate_observation_schema(obj: dict[str, Any]) -> bool:
     if obj.get("quality_flag") not in ("usable", "ambiguous", "unusable"):
         return False
     return True
+
+
+def validate_matrix_limits(
+    *,
+    date_count: int,
+    target_count: int,
+    max_dates: int = DEFAULT_MAX_MATRIX_DATES,
+    max_targets: int = DEFAULT_MAX_MATRIX_TARGETS,
+    hard_max_targets: int = HARD_MAX_MATRIX_TARGETS,
+    hard_max_cells: int = HARD_MAX_MATRIX_CELLS,
+) -> None:
+    if date_count <= 0:
+        raise ValueError("date_count must be positive")
+    if target_count <= 0:
+        raise ValueError("target_count must be positive")
+    if date_count > max_dates:
+        raise ValueError(f"date_count={date_count} exceeds max_dates={max_dates}")
+    if target_count > max_targets:
+        raise ValueError(f"target_count={target_count} exceeds max_targets={max_targets}")
+    if target_count > hard_max_targets:
+        raise ValueError(f"target_count={target_count} exceeds hard_max_targets={hard_max_targets}")
+    cell_count = date_count * target_count
+    if cell_count > hard_max_cells:
+        raise ValueError(f"cell_count={cell_count} exceeds hard_max_cells={hard_max_cells}")
+
+
+def validate_matrix_observation_schema(
+    obj: dict[str, Any],
+    *,
+    valid_date_indices: set[int],
+    valid_target_labels: set[str],
+    target_ids_by_label: dict[str, str],
+) -> bool:
+    required = (
+        "cell_index",
+        "date_index",
+        "capture_date",
+        "target_id",
+        "target_label",
+        "pv_present",
+        "confidence",
+        "quality_flag",
+    )
+    if not all(k in obj for k in required):
+        return False
+    try:
+        date_index = int(obj["date_index"])
+    except (TypeError, ValueError):
+        return False
+    if date_index not in valid_date_indices:
+        return False
+    target_label = str(obj["target_label"])
+    if target_label not in valid_target_labels:
+        return False
+    if str(obj["target_id"]) != str(target_ids_by_label[target_label]):
+        return False
+    pv = obj.get("pv_present")
+    if pv is not None and not isinstance(pv, bool):
+        return False
+    conf = obj.get("confidence")
+    if conf is not None and not isinstance(conf, (int, float)):
+        return False
+    if obj.get("quality_flag") not in ("usable", "ambiguous", "unusable"):
+        return False
+    return True
+
+
+def parse_matrix_jsonl_lenient(
+    text: str,
+    *,
+    date_picks: list[MatrixDatePick],
+    targets: list[MatrixTarget],
+) -> tuple[list[dict[str, Any]], list[tuple[int, str]]]:
+    valid_date_indices = {p.date_index for p in date_picks}
+    valid_target_labels = {t.target_label for t in targets}
+    target_ids_by_label = {t.target_label: t.target_id for t in targets}
+    parsed_by_key: dict[tuple[int, str], dict[str, Any]] = {}
+
+    for candidate in _json_candidate_lines(text):
+        try:
+            obj = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if not validate_matrix_observation_schema(
+            obj,
+            valid_date_indices=valid_date_indices,
+            valid_target_labels=valid_target_labels,
+            target_ids_by_label=target_ids_by_label,
+        ):
+            continue
+        key = (int(obj["date_index"]), str(obj["target_label"]))
+        parsed_by_key[key] = obj
+
+    expected_keys = [
+        (date_pick.date_index, target.target_label)
+        for date_pick in date_picks
+        for target in targets
+    ]
+    ordered = [parsed_by_key[key] for key in expected_keys if key in parsed_by_key]
+    missing = [key for key in expected_keys if key not in parsed_by_key]
+    return ordered, missing
 
 
 def _to_observation(parsed: dict[str, Any], *, decision_source: str, raw: str = "") -> GeminiObservation:
@@ -405,9 +585,49 @@ def _to_observation(parsed: dict[str, Any], *, decision_source: str, raw: str = 
     )
 
 
+def _to_matrix_observation(parsed: dict[str, Any], *, decision_source: str, raw: str = "") -> GeminiMatrixObservation:
+    return GeminiMatrixObservation(
+        cell_index=int(parsed["cell_index"]),
+        date_index=int(parsed["date_index"]),
+        capture_date=str(parsed["capture_date"]),
+        target_id=str(parsed["target_id"]),
+        target_label=str(parsed["target_label"]),
+        pv_present=parsed.get("pv_present"),
+        confidence=float(parsed["confidence"]) if parsed.get("confidence") is not None else None,
+        quality_flag=str(parsed.get("quality_flag", "unusable")),
+        evidence=str(parsed.get("evidence", "")),
+        notes=str(parsed.get("notes", "")),
+        decision_source=decision_source,
+        raw_response=raw,
+    )
+
+
 def _failed_observation(chip_index: int, error: str) -> GeminiObservation:
     return GeminiObservation(
         chip_index=chip_index,
+        pv_present=None,
+        confidence=None,
+        quality_flag="unusable",
+        evidence="",
+        notes=f"gemini_failed: {error[:300]}",
+        decision_source="gemini_failed",
+        error=error,
+    )
+
+
+def _failed_matrix_observation(
+    *,
+    cell_index: int,
+    date_pick: MatrixDatePick,
+    target: MatrixTarget,
+    error: str,
+) -> GeminiMatrixObservation:
+    return GeminiMatrixObservation(
+        cell_index=cell_index,
+        date_index=date_pick.date_index,
+        capture_date=date_pick.capture_date,
+        target_id=target.target_id,
+        target_label=target.target_label,
         pv_present=None,
         confidence=None,
         quality_flag="unusable",
@@ -685,6 +905,139 @@ def score_batch_with_fallback(
             out.append(by_index[pick.chip_index])
         else:
             out.append(_failed_observation(pick.chip_index, "no_observation_after_fallback"))
+    return out
+
+
+def _build_matrix_prompt(date_picks: list[MatrixDatePick], targets: list[MatrixTarget]) -> str:
+    target_labels = ", ".join(t.target_label for t in targets)
+    target_mapping = "\n".join(f"- {t.target_label}: {t.target_id}" for t in targets)
+    return MATRIX_PROMPT_TEMPLATE.format(
+        date_count=len(date_picks),
+        target_labels=target_labels,
+        cell_count=len(date_picks) * len(targets),
+        target_mapping=target_mapping,
+    )
+
+
+def _attempt_matrix_batch(
+    date_picks: list[MatrixDatePick],
+    targets: list[MatrixTarget],
+    *,
+    config: GeminiClientConfig,
+    poster: Callable[..., dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[tuple[int, str]], str, str | None]:
+    prompt = _build_matrix_prompt(date_picks, targets)
+    cell_count = len(date_picks) * len(targets)
+    max_tokens = max(config.max_tokens_per_chip * len(date_picks), cell_count * 180 + 256)
+    try:
+        raw_text, _raw_json = _call_gemini(
+            image_paths=[p.chip_path for p in date_picks],
+            prompt=prompt,
+            config=config,
+            max_tokens=max_tokens,
+            poster=poster,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return [], [(p.date_index, t.target_label) for p in date_picks for t in targets], "", f"{type(exc).__name__}: {exc}"
+
+    parsed, missing = parse_matrix_jsonl_lenient(
+        raw_text,
+        date_picks=date_picks,
+        targets=targets,
+    )
+    return parsed, missing, raw_text, None
+
+
+def score_target_date_matrix(
+    date_picks: list[MatrixDatePick],
+    targets: list[MatrixTarget],
+    *,
+    config: GeminiClientConfig,
+    audit_writer: Callable[[dict[str, Any]], None] | None = None,
+    poster: Callable[..., dict[str, Any]] | None = None,
+    max_dates: int = DEFAULT_MAX_MATRIX_DATES,
+    max_targets: int = DEFAULT_MAX_MATRIX_TARGETS,
+    hard_max_targets: int = HARD_MAX_MATRIX_TARGETS,
+    hard_max_cells: int = HARD_MAX_MATRIX_CELLS,
+) -> list[GeminiMatrixObservation]:
+    """Score a bounded date x target matrix from shared chip images.
+
+    Inputs are date-major: each `MatrixDatePick` is one image for a chip group,
+    and each target label must already be visibly annotated in every image. The
+    function makes at most two matrix attempts, salvages valid cells from the
+    better attempt, and emits `gemini_failed` rows for missing cells. Missing
+    cells are not retried per target because there is no target-specific crop in
+    this API boundary.
+    """
+    if not date_picks or not targets:
+        return []
+    validate_matrix_limits(
+        date_count=len(date_picks),
+        target_count=len(targets),
+        max_dates=max_dates,
+        max_targets=max_targets,
+        hard_max_targets=hard_max_targets,
+        hard_max_cells=hard_max_cells,
+    )
+
+    valid1, missing1, raw1, err1 = _attempt_matrix_batch(
+        date_picks, targets, config=config, poster=poster
+    )
+    if audit_writer is not None:
+        audit_writer(
+            {
+                "stage": "matrix_attempt_1",
+                "n_dates": len(date_picks),
+                "n_targets": len(targets),
+                "n_cells": len(date_picks) * len(targets),
+                "n_valid": len(valid1),
+                "missing_cells": [f"{d}:{t}" for d, t in missing1],
+                "error": err1,
+                "raw_response": raw1,
+            }
+        )
+
+    if len(valid1) == len(date_picks) * len(targets) and not missing1:
+        return [_to_matrix_observation(p, decision_source="gemini_matrix", raw=raw1) for p in valid1]
+
+    valid2, missing2, raw2, err2 = _attempt_matrix_batch(
+        date_picks, targets, config=config, poster=poster
+    )
+    if audit_writer is not None:
+        audit_writer(
+            {
+                "stage": "matrix_attempt_2",
+                "n_dates": len(date_picks),
+                "n_targets": len(targets),
+                "n_cells": len(date_picks) * len(targets),
+                "n_valid": len(valid2),
+                "missing_cells": [f"{d}:{t}" for d, t in missing2],
+                "error": err2,
+                "raw_response": raw2,
+            }
+        )
+
+    best_valid, best_raw = max(((valid1, raw1), (valid2, raw2)), key=lambda item: len(item[0]))
+    by_key = {(int(p["date_index"]), str(p["target_label"])): p for p in best_valid}
+    out: list[GeminiMatrixObservation] = []
+    cell_index = 1
+    for date_pick in date_picks:
+        for target in targets:
+            key = (date_pick.date_index, target.target_label)
+            if key in by_key:
+                parsed = dict(by_key[key])
+                parsed["cell_index"] = int(parsed.get("cell_index") or cell_index)
+                out.append(_to_matrix_observation(parsed, decision_source="gemini_matrix", raw=best_raw))
+            else:
+                out.append(
+                    _failed_matrix_observation(
+                        cell_index=cell_index,
+                        date_pick=date_pick,
+                        target=target,
+                        error="missing_matrix_cell_after_two_attempts",
+                    )
+                )
+            cell_index += 1
     return out
 
 

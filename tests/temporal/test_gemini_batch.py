@@ -22,11 +22,17 @@ from scripts.validation.gemini_solar_image_review import (
     BatchPick,
     GeminiClientConfig,
     GeminiObservation,
+    MatrixDatePick,
+    MatrixTarget,
     _build_batch_prompt,
+    _build_matrix_prompt,
     _identify_census_reference_chip,
     parse_jsonl_lenient,
+    parse_matrix_jsonl_lenient,
     score_batch_with_fallback,
+    score_target_date_matrix,
     validate_observation_schema,
+    validate_matrix_limits,
 )
 
 
@@ -368,3 +374,144 @@ def test_build_batch_prompt_no_clause_for_old_only_batch(tmp_path: Path) -> None
     picks = _make_picks(["2009-03-12", "2014-04-30"], tmp_path)
     prompt = _build_batch_prompt(picks, census_mid_date_iso="2024-06-30")
     assert "CALIBRATION:" not in prompt
+
+
+def _matrix_dates(tmp_path: Path, dates: list[str]) -> list[MatrixDatePick]:
+    out: list[MatrixDatePick] = []
+    for idx, d in enumerate(dates, start=1):
+        chip = tmp_path / f"matrix_{idx}.png"
+        chip.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 64)
+        out.append(MatrixDatePick(date_index=idx, chip_path=chip, capture_date=d))
+    return out
+
+
+def _matrix_targets(labels: list[str]) -> list[MatrixTarget]:
+    return [MatrixTarget(target_id=f"target_{label.lower()}", target_label=label) for label in labels]
+
+
+def _matrix_response(date_picks: list[MatrixDatePick], targets: list[MatrixTarget]) -> str:
+    rows: list[dict[str, Any]] = []
+    cell_index = 1
+    for date_pick in date_picks:
+        for target in targets:
+            rows.append(
+                {
+                    "cell_index": cell_index,
+                    "date_index": date_pick.date_index,
+                    "capture_date": date_pick.capture_date,
+                    "target_id": target.target_id,
+                    "target_label": target.target_label,
+                    "pv_present": date_pick.date_index >= 2,
+                    "confidence": 0.88,
+                    "quality_flag": "usable",
+                    "evidence": f"{target.target_label} stub",
+                    "notes": "",
+                }
+            )
+            cell_index += 1
+    return _make_jsonl(rows)
+
+
+def test_matrix_limits_reject_too_many_targets() -> None:
+    with pytest.raises(ValueError, match="max_targets"):
+        validate_matrix_limits(date_count=4, target_count=5, max_targets=4)
+
+
+def test_matrix_limits_reject_too_many_cells() -> None:
+    with pytest.raises(ValueError, match="hard_max_cells"):
+        validate_matrix_limits(date_count=5, target_count=5, max_targets=6, hard_max_cells=24)
+
+
+def test_build_matrix_prompt_lists_targets(tmp_path: Path) -> None:
+    date_picks = _matrix_dates(tmp_path, ["2020-01-01", "2024-01-01"])
+    targets = _matrix_targets(["T01", "T02"])
+    prompt = _build_matrix_prompt(date_picks, targets)
+    assert "D=2" in prompt
+    assert "D*T=4" in prompt
+    assert "T01: target_t01" in prompt
+    assert "date-major order" in prompt
+
+
+def test_parse_matrix_jsonl_reports_missing_and_rejects_bad_target(tmp_path: Path) -> None:
+    date_picks = _matrix_dates(tmp_path, ["2020-01-01"])
+    targets = _matrix_targets(["T01", "T02"])
+    text = _make_jsonl(
+        [
+            {
+                "cell_index": 1,
+                "date_index": 1,
+                "capture_date": "2020-01-01",
+                "target_id": "target_t01",
+                "target_label": "T01",
+                "pv_present": True,
+                "confidence": 0.9,
+                "quality_flag": "usable",
+            },
+            {
+                "cell_index": 2,
+                "date_index": 1,
+                "capture_date": "2020-01-01",
+                "target_id": "wrong",
+                "target_label": "T02",
+                "pv_present": False,
+                "confidence": 0.9,
+                "quality_flag": "usable",
+            },
+        ]
+    )
+    parsed, missing = parse_matrix_jsonl_lenient(text, date_picks=date_picks, targets=targets)
+    assert len(parsed) == 1
+    assert missing == [(1, "T02")]
+
+
+def test_score_target_date_matrix_success(tmp_path: Path, gemini_config) -> None:
+    date_picks = _matrix_dates(tmp_path, ["2020-01-01", "2024-01-01"])
+    targets = _matrix_targets(["T01", "T02"])
+    calls: list[dict[str, Any]] = []
+
+    def poster(**kwargs: Any) -> dict[str, Any]:
+        calls.append({"n_images": len(kwargs["image_paths"]), "prompt": kwargs["prompt"]})
+        return _native_response(_matrix_response(date_picks, targets))
+
+    audit: list[dict[str, Any]] = []
+    obs = score_target_date_matrix(
+        date_picks,
+        targets,
+        config=gemini_config,
+        poster=poster,
+        audit_writer=audit.append,
+    )
+    assert len(obs) == 4
+    assert all(o.decision_source == "gemini_matrix" for o in obs)
+    assert calls[0]["n_images"] == 2
+    assert "target_t01" in calls[0]["prompt"]
+    assert audit[0]["stage"] == "matrix_attempt_1"
+
+
+def test_score_target_date_matrix_missing_cells_become_failed(tmp_path: Path, gemini_config) -> None:
+    date_picks = _matrix_dates(tmp_path, ["2020-01-01"])
+    targets = _matrix_targets(["T01", "T02"])
+
+    def poster(**_kwargs: Any) -> dict[str, Any]:
+        partial = _make_jsonl(
+            [
+                {
+                    "cell_index": 1,
+                    "date_index": 1,
+                    "capture_date": "2020-01-01",
+                    "target_id": "target_t01",
+                    "target_label": "T01",
+                    "pv_present": True,
+                    "confidence": 0.9,
+                    "quality_flag": "usable",
+                    "evidence": "ok",
+                    "notes": "",
+                }
+            ]
+        )
+        return _native_response(partial)
+
+    obs = score_target_date_matrix(date_picks, targets, config=gemini_config, poster=poster)
+    by_label = {o.target_label: o for o in obs}
+    assert by_label["T01"].decision_source == "gemini_matrix"
+    assert by_label["T02"].decision_source == "gemini_failed"

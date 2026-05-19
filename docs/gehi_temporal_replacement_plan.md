@@ -14,15 +14,18 @@ contracts remain the stage boundaries.
 
 ## Corrections From GEID V1
 
-- Vintage probing is done at `z=19`, not `z=21`. In South Africa smoke probes,
-  z=21 often exposes only a tiny recent subset; z=19 is the practical
-  install-date sweet spot with useful history and still-readable PV signal.
-- Download zoom is a separate decision. Start with z=19; try z=20/z=21 only
-  when the same vintage exists at higher GSD.
+- Vintage probing is done from explicit bbox availability, not download
+  trial-and-error. Use `z=19` as the primary catalog and `z=18` as the
+  lower-zoom whole-picture fallback. In South Africa smoke probes, z20/z21
+  expose much smaller subsets and should not drive year discovery.
+- Download zoom is a separate decision. Prefer z20 when the same vintage has
+  complete chip coverage; otherwise fall back to z19, then z18. Treat z21 as a
+  manual-inspection upgrade only when exact-date complete coverage is confirmed.
 - Coordinates are converted once at the GEHI wrapper boundary. Anchor CSVs
   store lon/lat fields; GEHI CLI expects `LAT,LONG`.
-- Duplicate candidate vintages are deduped by `(anchor_id, version)`, not by
-  date. Multiple date labels can map to the same mosaic/version.
+- Duplicate candidate vintages are deduped by `(anchor_id, capture_date)`.
+  Multiple date labels can map to the same mosaic/version and must remain
+  separate temporal observations.
 - No PostGIS service in the pilot. CSV/Parquet remain the stage contracts; an
   optional local DuckDB schema is enough for joins and audits.
 
@@ -45,9 +48,11 @@ Minimum smoke:
 2. Run `gehi_info.py --zoom 19` for those anchors and confirm the target date
    appears in GEHI metadata.
 3. Run `gehi_availability.py --zoom 19 --complete` over the anchor bbox and
-   confirm the target dates are complete for the chip.
-4. Run `gehi_download.py --zoom 19 --exact-date` for the selected
-   `(anchor_id, version)` rows.
+   confirm the target dates are complete for the chip; use z18 for lower-zoom
+   coverage fallback.
+4. Run `gehi_download.py --zoom 20,19,18` for the selected
+   `(anchor_id, capture_date)` rows; exact-date mode is the default unless
+   `--allow-nearest` is passed.
 5. Compare downloaded chip date/provenance and visual PV label against the
    existing web-reviewed presence rows.
 
@@ -107,13 +112,14 @@ Phase 0 cross-checks against GEHI candidates.
 
 After Phase 0 passes:
 
-1. Generate the z=19 GEHI candidate catalog for all 18 anchors.
-2. Deduplicate by version and compute per-anchor date spans.
+1. Generate the z19/z18 GEHI bbox-complete candidate catalog for all 18 anchors.
+2. Deduplicate by capture_date and compute per-anchor date spans.
 3. Download only staged candidates: earliest baseline, latest/current, annual
    points, then densify around absent-to-present intervals.
 4. Run Gemini/manual review into the existing `presence_timeseries.csv`
-   schema.
+   schema. For multi-target chip groups, keep automatic Gemini matrix calls
+   bounded to at most 5 dates, 4 targets, and 24 date-target cells; split by
+   dates or target subsets before exceeding those limits.
 5. Infer intervals with the existing monotonic breakpoint logic.
 6. Compare against the GEID/web smoke rows and flag non-monotonic or
    low-quality intervals instead of forcing dates.
-

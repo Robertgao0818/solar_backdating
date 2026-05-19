@@ -204,6 +204,34 @@ def test_idempotent_skip_falls_back_to_lower_zoom_on_disk(anchor, tmp_path: Path
     assert len(runner.calls) == 0
 
 
+def test_cached_higher_zoom_must_pass_vintage_check(anchor, tmp_path: Path) -> None:
+    """A stale cached z=20 chip must not bypass the bbox-complete gate."""
+    z20_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2015-08-30", "200", 20)
+    z20_path.parent.mkdir(parents=True, exist_ok=True)
+    z20_path.write_bytes(b"STALE_Z20")
+    z19_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2015-08-30", "200", 19)
+    z19_path.parent.mkdir(parents=True, exist_ok=True)
+    z19_path.write_bytes(b"VALID_Z19")
+
+    def vintage_check(zoom: int, capture_date: str) -> bool:
+        return zoom == 19 and capture_date == "2015-08-30"
+
+    runner = _make_runner({}, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2015-08-30",
+        version=200,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        runner=runner,
+        vintage_check=vintage_check,
+    )
+    assert result.status == "skipped_existing"
+    assert result.actual_zoom == 19
+    assert result.path == z19_path
+    assert len(runner.calls) == 0
+
+
 def test_overwrite_bypasses_idempotent_skip(anchor, tmp_path: Path) -> None:
     pre_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2024-06-15", "12345", 20)
     pre_path.parent.mkdir(parents=True, exist_ok=True)

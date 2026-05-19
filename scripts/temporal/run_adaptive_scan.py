@@ -25,7 +25,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -78,6 +78,12 @@ DRY_RUN_PROFILE_LABELS = (
 class DryRunProfile:
     label: str
     install_date: date | None  # None when never present (case C) or always present (case B)
+
+
+@dataclass
+class VintageCatalog:
+    vintages: list[VintageEntry]
+    available_dates_by_zoom: dict[int, set[str]]
 
 
 def parse_args() -> argparse.Namespace:
@@ -198,26 +204,37 @@ def execute_round_dry_run(
 def make_vintage_check(
     anchor: dict[str, str],
     *,
-    primary_zoom_dates: set[str],
-    primary_zoom: int,
+    available_dates_by_zoom: dict[int, set[str]],
     config: AdaptiveScanConfig,
-) -> "Callable[[int, str], bool]":
+) -> Callable[[int, str], bool]:
     """Build a vintage_check Callable for `download_chip_with_zoom_ladder`.
 
-    The primary zoom (typically info_zoom = 19) reuses the catalog already
-    fetched by `_fetch_real_vintages`. Other ladder zooms lazy-fetch their
-    own catalogs via `gehi_info` on first lookup, then cache. Returns False
-    when the requested capture_date is not present at the requested zoom.
+    Discovery reuses bbox-level availability catalogs already fetched by
+    `_fetch_real_vintage_catalog`. Other ladder zooms lazy-fetch their own
+    bbox availability on first lookup. Returns False when the requested
+    capture_date is not complete for the requested zoom/chip bbox.
     """
-    from typing import Callable as _Callable  # local import to avoid stub leakage
-
-    catalogs: dict[int, set[str]] = {primary_zoom: set(primary_zoom_dates)}
+    catalogs: dict[int, set[str]] = {
+        int(zoom): set(dates) for zoom, dates in available_dates_by_zoom.items()
+    }
 
     def check(zoom: int, capture_date: str) -> bool:
         if zoom not in catalogs:
-            from scripts.temporal.gehi_info import fetch_vintages_for_anchor
+            if config.require_complete_coverage_for_download:
+                from scripts.temporal.gehi_availability import fetch_availability_for_anchor
 
-            rows = fetch_vintages_for_anchor(anchor, zoom=zoom)
+                rows = fetch_availability_for_anchor(
+                    anchor,
+                    zoom=zoom,
+                    min_date=config.catalog_min_date,
+                    max_date=config.catalog_max_date,
+                    parallel=config.availability_parallel,
+                    complete=True,
+                )
+            else:
+                from scripts.temporal.gehi_info import fetch_vintages_for_anchor
+
+                rows = fetch_vintages_for_anchor(anchor, zoom=zoom)
             catalogs[zoom] = {str(r.get("capture_date", ""))[:10] for r in rows if r.get("capture_date")}
         return capture_date[:10] in catalogs[zoom]
 
@@ -267,6 +284,59 @@ def _build_batch_picks_with_remap(
     return batch_picks, batch_to_original
 
 
+def _score_batch_picks_chunked(
+    score_picks,
+    batch_to_original: dict[int, int],
+    *,
+    config: AdaptiveScanConfig,
+    gemini_config,
+    audit_writer,
+    census_mid_date_iso: str | None,
+):
+    """Score date picks in bounded Gemini calls and return original-index observations."""
+    from scripts.validation.gemini_solar_image_review import BatchPick, score_batch_with_fallback
+
+    if not score_picks:
+        return {}
+    max_dates = max(1, int(config.gemini_max_dates_per_call))
+    obs_by_original: dict[int, object] = {}
+    total_chunks = (len(score_picks) + max_dates - 1) // max_dates
+
+    for chunk_idx, start in enumerate(range(0, len(score_picks), max_dates), start=1):
+        chunk = score_picks[start : start + max_dates]
+        local_to_original: dict[int, int] = {}
+        local_picks = []
+        for local_idx, pick in enumerate(chunk, start=1):
+            local_to_original[local_idx] = batch_to_original[pick.chip_index]
+            local_picks.append(
+                BatchPick(
+                    chip_index=local_idx,
+                    chip_path=pick.chip_path,
+                    capture_date=pick.capture_date,
+                    version=pick.version,
+                    actual_zoom=pick.actual_zoom,
+                )
+            )
+
+        def _chunk_audit(payload: dict) -> None:
+            payload = dict(payload)
+            payload["batch_chunk_index"] = chunk_idx
+            payload["batch_chunk_count"] = total_chunks
+            audit_writer(payload)
+
+        observations = score_batch_with_fallback(
+            local_picks,
+            config=gemini_config,
+            audit_writer=_chunk_audit,
+            census_mid_date_iso=census_mid_date_iso,
+        )
+        for obs in observations:
+            original = local_to_original.get(obs.chip_index)
+            if original is not None:
+                obs_by_original[original] = obs
+    return obs_by_original
+
+
 def execute_round_real(
     rnd: Round,
     anchor: dict[str, str],
@@ -283,7 +353,6 @@ def execute_round_real(
 
     from scripts.temporal.gehi_common import ensure_review_png
     from scripts.temporal.gehi_download import download_chip_with_zoom_ladder
-    from scripts.validation.gemini_solar_image_review import score_batch_with_fallback
 
     download_outcomes: list[tuple[Pick, object]] = []
     for pick in rnd.picks:
@@ -302,24 +371,19 @@ def execute_round_real(
 
     audit_path = audit_dir / anchor["anchor_id"] / f"round_{rnd.round_id}.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    observations = []
+    obs_by_original: dict[int, object] = {}
     if score_picks:
         with audit_path.open("w", encoding="utf-8") as audit_fh:
             def _audit(payload: dict) -> None:
                 audit_fh.write(_json.dumps(payload, ensure_ascii=False) + "\n")
 
-            observations = score_batch_with_fallback(
+            obs_by_original = _score_batch_picks_chunked(
                 score_picks,
+                batch_to_original,
                 config=gemini_config,
                 audit_writer=_audit,
                 census_mid_date_iso=census_mid_date_iso,
             )
-
-    obs_by_original: dict[int, object] = {}
-    for obs in observations:
-        original = batch_to_original.get(obs.chip_index)
-        if original is not None:
-            obs_by_original[original] = obs
 
     rnd_results: list[RoundResult] = []
     for pick in rnd.picks:
@@ -444,14 +508,18 @@ def run_one_anchor(
         return state
 
     profile = dry_run_profile_for(anchor_id) if dry_run else None
-    vintages = dry_run_vintages(anchor_id) if dry_run else _fetch_real_vintages(anchor, config)
+    real_catalog: VintageCatalog | None = None
+    if dry_run:
+        vintages = dry_run_vintages(anchor_id)
+    else:
+        real_catalog = _fetch_real_vintage_catalog(anchor, config)
+        vintages = real_catalog.vintages
     vintage_check = None
     if not dry_run:
-        primary_dates = {v.capture_date[:10] for v in vintages}
+        assert real_catalog is not None
         vintage_check = make_vintage_check(
             anchor,
-            primary_zoom_dates=primary_dates,
-            primary_zoom=config.info_zoom,
+            available_dates_by_zoom=real_catalog.available_dates_by_zoom,
             config=config,
         )
 
@@ -484,23 +552,69 @@ def run_one_anchor(
     raise RuntimeError(f"Scan loop exceeded {max_iter} rounds for {anchor_id}")
 
 
-def _fetch_real_vintages(anchor: dict[str, str], config: AdaptiveScanConfig) -> list[VintageEntry]:
-    """Fetch the deduped GEHI vintage catalog for an anchor at config.info_zoom."""
+def _fetch_real_vintage_catalog(anchor: dict[str, str], config: AdaptiveScanConfig) -> VintageCatalog:
+    """Fetch bbox-complete GEHI vintages for an anchor.
+
+    The catalog is a union over `config.discovery_zoom_ladder` in priority
+    order. z19 normally gives the practical install-date catalog; z18 adds the
+    wider historical picture when z19 is sparse. With
+    `require_complete_coverage_for_catalog=True`, a date must be complete for
+    the full chip bbox at that zoom before it can drive the adaptive scan.
+    """
     from scripts.temporal.gehi_info import fetch_vintages_for_anchor
 
-    rows = fetch_vintages_for_anchor(anchor, zoom=config.info_zoom)
-    out: list[VintageEntry] = []
-    for r in rows:
-        capture_date = str(r.get("capture_date", "")).strip()
-        version_raw = r.get("version")
-        if not capture_date or version_raw in (None, ""):
-            continue
-        try:
-            version = int(version_raw)
-        except (TypeError, ValueError):
-            continue
-        out.append(VintageEntry(capture_date=capture_date, version=version))
-    return out
+    available_dates_by_zoom: dict[int, set[str]] = {}
+    by_date: dict[str, VintageEntry] = {}
+    for zoom in config.discovery_zoom_ladder:
+        info_rows = fetch_vintages_for_anchor(anchor, zoom=zoom)
+        info_by_date: dict[str, object] = {}
+        for row in info_rows:
+            capture_date = str(row.get("capture_date", "")).strip()[:10]
+            if capture_date and capture_date not in info_by_date:
+                info_by_date[capture_date] = row
+
+        if config.require_complete_coverage_for_catalog:
+            from scripts.temporal.gehi_availability import fetch_availability_for_anchor
+
+            availability_rows = fetch_availability_for_anchor(
+                anchor,
+                zoom=zoom,
+                min_date=config.catalog_min_date,
+                max_date=config.catalog_max_date,
+                parallel=config.availability_parallel,
+                complete=True,
+            )
+            allowed_dates = {
+                str(row.get("capture_date", ""))[:10]
+                for row in availability_rows
+                if row.get("capture_date")
+            }
+        else:
+            allowed_dates = set(info_by_date)
+        available_dates_by_zoom[int(zoom)] = set(allowed_dates)
+
+        for capture_date in sorted(set(info_by_date) & allowed_dates):
+            if capture_date in by_date:
+                continue
+            row = info_by_date[capture_date]
+            version_raw = row.get("version") if isinstance(row, dict) else None
+            if version_raw in (None, ""):
+                continue
+            try:
+                version = int(version_raw)
+            except (TypeError, ValueError):
+                continue
+            by_date[capture_date] = VintageEntry(capture_date=capture_date, version=version)
+
+    return VintageCatalog(
+        vintages=[by_date[d] for d in sorted(by_date)],
+        available_dates_by_zoom=available_dates_by_zoom,
+    )
+
+
+def _fetch_real_vintages(anchor: dict[str, str], config: AdaptiveScanConfig) -> list[VintageEntry]:
+    """Backward-compatible helper for tests/scripts that only need vintages."""
+    return _fetch_real_vintage_catalog(anchor, config).vintages
 
 
 def summarize(states: Iterable[ScanState]) -> None:
