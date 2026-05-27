@@ -16,7 +16,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -103,28 +103,77 @@ Each image shows the SAME chip group at a different capture date. The images
 are presented in date_index order 1..D. Each image is annotated with target
 labels: {target_labels}. Score every target label in every date image.
 
-Return ONLY JSONL — one JSON object per line, exactly D*T={cell_count} lines.
-No prose, no markdown fences, no array wrapper. Schema per line:
+Return ONLY one JSON object with an "observations" array of exactly
+D*T={cell_count} objects. Do not include prose or markdown. Each observation
+must contain ONLY these model-judged fields:
 
-{{"cell_index": <int>, "date_index": <int>, "capture_date": "YYYY-MM-DD",
- "target_id": "<stable target id>", "target_label": "T01",
+{{"date_index": <int>, "target_label": "T01",
  "pv_present": true|false|null, "confidence": <0.0-1.0>,
  "quality_flag": "usable"|"ambiguous"|"unusable",
  "evidence": "<specific visual description at this target/date>",
  "notes": "<short caveats if any>"}}
 
+Never output capture_date, target_id, cell_index, or any other identifier
+field. Those fields are known to the calling code and will be filled there.
+
 Rules:
 - Evaluate each target label separately. Do not transfer a PV decision from T01
   to T02 just because they are nearby.
-- Use pv_present=null when that target label is occluded, too blurry, outside
-  the visible roof, or cannot be interpreted because of viewing-angle/parallax.
+- Each target label is drawn as a colored ring plus cross. The cross is the
+  source footprint centroid; the ring is the search area. Count PV as present
+  when regular PV modules are visible within that labeled ring OR immediately
+  adjacent on the same roof plane/roof segment as that target. Do not mark a
+  target absent only because the exact cross center lands on a roof seam,
+  shadow, aisle, or gap beside the PV modules.
+- Use pv_present=null when that target label and its same-roof search area are
+  occluded, too blurry, outside the visible roof, or cannot be interpreted
+  because of viewing-angle/parallax.
 - Do not count PV elsewhere in the chip unless it is on the requested target.
-- Preserve the target_id/target_label mapping exactly as listed below.
-- Output rows in date-major order: date_index 1 all targets, then date_index 2,
-  continuing through date_index D.
+- Distinguish PV from solar water heaters: PV usually appears as a regular
+  multi-rectangle module grid/array; a single tank/tube heater alone is not PV.
+  If both exist on the same target roof, report pv_present=true and mention
+  both in evidence.
+- Output observations in date-major order: date_index 1 all targets, then
+  date_index 2, continuing through date_index D.
 
-Target mapping:
-{target_mapping}
+Date mapping:
+{date_mapping}
+
+Target labels:
+{target_labels_list}
+"""
+
+
+SEQUENCE_PROMPT_TEMPLATE = """You are reviewing one rooftop target across {date_count} historical aerial images.
+The same target is marked in every image with a ring and cross. Images are
+presented in date_index order 1..{date_count}. Decide whether photovoltaic
+solar panels are present on the marked roof segment for each date.
+
+Return ONLY one JSON object with an "observations" array of exactly {date_count}
+objects. Do not include prose or markdown. Each observation must contain ONLY
+these fields:
+
+{{"date_index": <int>, "pv_present": true|false|null,
+ "pv_score": <0.0-1.0|null>, "evidence": "<specific visual evidence>",
+ "notes": "<short caveats if any>"}}
+
+Also include target-level fields:
+
+{{"confidence": <0.0-1.0|null>, "quality_flag": "usable"|"ambiguous"|"unusable",
+ "review_notes": "<short overall caveats if any>", "observations": [...]}}
+
+Rules:
+- Score only the marked target roof segment, not neighbouring roofs or other
+  solar panels in the scene.
+- Do not count construction frames, shadows, skylights, or water heaters as PV
+  unless a regular rectangular PV module grid is visible on the target roof
+  segment.
+- Use pv_present=null when the marked target cannot be interpreted because the
+  image is too blurry, occluded, clipped, or badly aligned.
+- Output observations in date_index order.
+
+Date mapping:
+{date_mapping}
 """
 
 
@@ -243,14 +292,13 @@ def post_chat_completion(
     model: str,
     prompt: str,
     image_paths: list[Path],
-    max_tokens: int,
+    max_tokens: int | None,
     timeout: int,
 ) -> dict[str, Any]:
     endpoint = f"{normalize_openai_url(base_url)}/chat/completions"
     payload = {
         "model": model,
         "temperature": 0,
-        "max_tokens": max_tokens,
         "messages": [
             {
                 "role": "user",
@@ -258,6 +306,8 @@ def post_chat_completion(
             }
         ],
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
 
     response = requests.post(
         endpoint,
@@ -283,8 +333,10 @@ def post_native_generate_content(
     model: str,
     prompt: str,
     image_paths: list[Path],
-    max_tokens: int,
+    max_tokens: int | None,
     timeout: int,
+    response_mime_type: str | None = None,
+    response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = normalize_root_url(base_url)
     path = "/" + native_path.strip("/")
@@ -298,9 +350,14 @@ def post_native_generate_content(
         ],
         "generationConfig": {
             "temperature": 0,
-            "maxOutputTokens": max_tokens,
         },
     }
+    if max_tokens is not None:
+        payload["generationConfig"]["maxOutputTokens"] = max_tokens
+    if response_mime_type:
+        payload["generationConfig"]["responseMimeType"] = response_mime_type
+    if response_schema is not None:
+        payload["generationConfig"]["responseSchema"] = response_schema
 
     response = requests.post(
         endpoint,
@@ -366,6 +423,15 @@ class MatrixDatePick:
     actual_zoom: int | None = None
 
 
+@dataclass(frozen=True)
+class SequenceDatePick:
+    date_index: int
+    chip_path: Path
+    capture_date: str
+    version: str | int = ""
+    actual_zoom: int | None = None
+
+
 @dataclass
 class GeminiObservation:
     chip_index: int
@@ -396,6 +462,31 @@ class GeminiMatrixObservation:
     error: str | None = None
 
 
+@dataclass
+class GeminiSequenceObservation:
+    date_index: int
+    capture_date: str
+    pv_present: bool | None
+    pv_score: float | None
+    evidence: str
+    notes: str
+
+
+@dataclass
+class GeminiSequenceResult:
+    sequence_pattern: str
+    first_present_date: str | None
+    first_present_date_index: int | None
+    confidence: float | None
+    consistency_flag: str
+    quality_flag: str
+    review_notes: str
+    observations: list[GeminiSequenceObservation]
+    decision_source: str  # "gemini_sequence" | "gemini_failed"
+    raw_response: str = ""
+    error: str | None = None
+
+
 @dataclass(frozen=True)
 class GeminiClientConfig:
     base_url: str
@@ -405,6 +496,7 @@ class GeminiClientConfig:
     native_path: str = "/v1beta"
     max_tokens_per_chip: int = 600
     timeout: int = DEFAULT_TIMEOUT_SEC
+    matrix_json_mode: bool = True
 
 
 def parse_jsonl_lenient(text: str, expected_count: int) -> tuple[list[dict[str, Any]], list[int]]:
@@ -498,13 +590,9 @@ def validate_matrix_observation_schema(
     *,
     valid_date_indices: set[int],
     valid_target_labels: set[str],
-    target_ids_by_label: dict[str, str],
 ) -> bool:
     required = (
-        "cell_index",
         "date_index",
-        "capture_date",
-        "target_id",
         "target_label",
         "pv_present",
         "confidence",
@@ -521,8 +609,6 @@ def validate_matrix_observation_schema(
     target_label = str(obj["target_label"])
     if target_label not in valid_target_labels:
         return False
-    if str(obj["target_id"]) != str(target_ids_by_label[target_label]):
-        return False
     pv = obj.get("pv_present")
     if pv is not None and not isinstance(pv, bool):
         return False
@@ -534,15 +620,266 @@ def validate_matrix_observation_schema(
     return True
 
 
+def validate_sequence_observation_schema(
+    obj: dict[str, Any],
+    *,
+    valid_date_indices: set[int],
+) -> bool:
+    required = ("date_index", "pv_present", "pv_score", "evidence")
+    if not all(k in obj for k in required):
+        return False
+    try:
+        date_index = int(obj["date_index"])
+    except (TypeError, ValueError):
+        return False
+    if date_index not in valid_date_indices:
+        return False
+    pv = obj.get("pv_present")
+    if pv is not None and not isinstance(pv, bool):
+        return False
+    score = obj.get("pv_score")
+    if score is not None:
+        if not isinstance(score, (int, float)):
+            return False
+        if not 0 <= float(score) <= 1:
+            return False
+    return True
+
+
+def _matrix_expected_keys(
+    date_picks: list[MatrixDatePick],
+    targets: list[MatrixTarget],
+) -> list[tuple[int, str]]:
+    return [
+        (date_pick.date_index, target.target_label)
+        for date_pick in date_picks
+        for target in targets
+    ]
+
+
+def _normalise_matrix_observation(
+    obj: dict[str, Any],
+    *,
+    cell_index: int,
+    date_pick: MatrixDatePick,
+    target: MatrixTarget,
+) -> dict[str, Any]:
+    out = dict(obj)
+    out["cell_index"] = cell_index
+    out["date_index"] = date_pick.date_index
+    out["capture_date"] = date_pick.capture_date
+    out["target_id"] = target.target_id
+    out["target_label"] = target.target_label
+    out.setdefault("notes", "")
+    out.setdefault("evidence", "")
+    return out
+
+
+def _matrix_observations_from_json_object(parsed: Any) -> list[dict[str, Any]]:
+    if not isinstance(parsed, dict):
+        raise ValueError("matrix response is not a JSON object")
+    observations = parsed.get("observations")
+    if not isinstance(observations, list):
+        raise ValueError("matrix response missing observations array")
+    return observations
+
+
+def _sequence_observations_from_json_object(parsed: Any) -> list[dict[str, Any]]:
+    if not isinstance(parsed, dict):
+        raise ValueError("sequence response is not a JSON object")
+    observations = parsed.get("observations")
+    if not isinstance(observations, list):
+        raise ValueError("sequence response missing observations array")
+    return observations
+
+
+def _parse_json_object_strict(text: str) -> Any:
+    stripped = text.strip()
+    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.S)
+    if fenced:
+        stripped = fenced.group(1).strip()
+    return json.loads(stripped)
+
+
+def parse_matrix_json_strict(
+    text: str,
+    *,
+    date_picks: list[MatrixDatePick],
+    targets: list[MatrixTarget],
+) -> tuple[list[dict[str, Any]], list[tuple[int, str]]]:
+    """Parse strict matrix JSON response.
+
+    The model may only provide model-judged fields. Known identifiers
+    (capture_date, target_id, cell_index) are injected from caller state to
+    prevent hallucinated IDs or dates from contaminating downstream rows.
+    """
+    valid_date_indices = {p.date_index for p in date_picks}
+    valid_target_labels = {t.target_label for t in targets}
+    expected_keys = _matrix_expected_keys(date_picks, targets)
+    expected_set = set(expected_keys)
+    date_pick_by_index = {p.date_index: p for p in date_picks}
+    target_by_label = {t.target_label: t for t in targets}
+
+    observations = _matrix_observations_from_json_object(_parse_json_object_strict(text))
+    if len(observations) != len(expected_keys):
+        raise ValueError(f"expected {len(expected_keys)} observations, got {len(observations)}")
+
+    parsed_by_key: dict[tuple[int, str], dict[str, Any]] = {}
+    for raw in observations:
+        if not isinstance(raw, dict):
+            raise ValueError("matrix observation is not an object")
+        allowed = {
+            "date_index",
+            "target_label",
+            "pv_present",
+            "confidence",
+            "quality_flag",
+            "evidence",
+            "notes",
+        }
+        extra = set(raw) - allowed
+        if extra:
+            raise ValueError(f"matrix observation contains extra keys: {sorted(extra)}")
+        obj = dict(raw)
+        if not isinstance(obj, dict):
+            raise ValueError("matrix observation is not an object")
+        if not validate_matrix_observation_schema(
+            obj,
+            valid_date_indices=valid_date_indices,
+            valid_target_labels=valid_target_labels,
+        ):
+            raise ValueError(f"matrix observation schema invalid: {obj!r}")
+        date_index = int(obj["date_index"])
+        key = (date_index, str(obj["target_label"]))
+        if key not in expected_set:
+            raise ValueError(f"unexpected matrix observation key: {key}")
+        if key in parsed_by_key:
+            raise ValueError(f"duplicate matrix observation key: {key}")
+        cell_index = expected_keys.index(key) + 1
+        obj = _normalise_matrix_observation(
+            obj,
+            cell_index=cell_index,
+            date_pick=date_pick_by_index[date_index],
+            target=target_by_label[str(obj["target_label"])],
+        )
+        parsed_by_key[key] = obj
+
+    missing = [key for key in expected_keys if key not in parsed_by_key]
+    if missing:
+        raise ValueError(f"missing matrix observation keys: {missing}")
+    ordered = [parsed_by_key[key] for key in expected_keys]
+    return ordered, []
+
+
+def parse_sequence_json_strict(
+    text: str,
+    *,
+    date_picks: list[SequenceDatePick],
+) -> dict[str, Any]:
+    """Parse strict one-target sequence JSON and inject caller-known dates.
+
+    The model judges only per-date presence evidence. The sequence pattern,
+    first-present date, and monotonicity flag are derived here so downstream
+    tools do not depend on model-generated dates or ordering.
+    """
+    valid_date_indices = {p.date_index for p in date_picks}
+    date_pick_by_index = {p.date_index: p for p in date_picks}
+    expected_indices = [p.date_index for p in date_picks]
+
+    parsed = _parse_json_object_strict(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("sequence response is not a JSON object")
+    allowed_top = {"confidence", "quality_flag", "review_notes", "observations"}
+    extra_top = set(parsed) - allowed_top
+    if extra_top:
+        raise ValueError(f"sequence response contains extra top-level keys: {sorted(extra_top)}")
+    if parsed.get("quality_flag") not in ("usable", "ambiguous", "unusable"):
+        raise ValueError(f"sequence quality_flag invalid: {parsed.get('quality_flag')!r}")
+    confidence = parsed.get("confidence")
+    if confidence is not None and not isinstance(confidence, (int, float)):
+        raise ValueError(f"sequence confidence invalid: {confidence!r}")
+
+    observations = _sequence_observations_from_json_object(parsed)
+    if len(observations) != len(expected_indices):
+        raise ValueError(f"expected {len(expected_indices)} observations, got {len(observations)}")
+
+    allowed_obs = {"date_index", "pv_present", "pv_score", "evidence", "notes"}
+    parsed_by_index: dict[int, dict[str, Any]] = {}
+    for raw in observations:
+        if not isinstance(raw, dict):
+            raise ValueError("sequence observation is not an object")
+        extra = set(raw) - allowed_obs
+        if extra:
+            raise ValueError(f"sequence observation contains extra keys: {sorted(extra)}")
+        obj = dict(raw)
+        if not validate_sequence_observation_schema(obj, valid_date_indices=valid_date_indices):
+            raise ValueError(f"sequence observation schema invalid: {obj!r}")
+        idx = int(obj["date_index"])
+        if idx in parsed_by_index:
+            raise ValueError(f"duplicate sequence observation index: {idx}")
+        pick = date_pick_by_index[idx]
+        obj["date_index"] = idx
+        obj["capture_date"] = pick.capture_date
+        obj.setdefault("notes", "")
+        parsed_by_index[idx] = obj
+
+    missing = [idx for idx in expected_indices if idx not in parsed_by_index]
+    if missing:
+        raise ValueError(f"missing sequence observation indices: {missing}")
+
+    ordered = [parsed_by_index[idx] for idx in expected_indices]
+    symbols = [
+        "1" if obs.get("pv_present") is True else "0" if obs.get("pv_present") is False else "?"
+        for obs in ordered
+    ]
+    first_present = next((obs for obs in ordered if obs.get("pv_present") is True), None)
+    seen_present = False
+    non_monotonic = False
+    has_unknown = False
+    for obs in ordered:
+        value = obs.get("pv_present")
+        if value is None:
+            has_unknown = True
+        elif value is True:
+            seen_present = True
+        elif seen_present:
+            non_monotonic = True
+            break
+    if non_monotonic:
+        consistency_flag = "non_monotonic_requires_review"
+    elif has_unknown:
+        consistency_flag = "monotonic_with_unknown"
+    else:
+        consistency_flag = "monotonic"
+
+    return {
+        "sequence_pattern": "-".join(symbols),
+        "first_present_date": None if first_present is None else str(first_present["capture_date"]),
+        "first_present_date_index": None if first_present is None else int(first_present["date_index"]),
+        "confidence": None if confidence is None else float(confidence),
+        "consistency_flag": consistency_flag,
+        "quality_flag": str(parsed.get("quality_flag", "unusable")),
+        "review_notes": str(parsed.get("review_notes", "")),
+        "observations": ordered,
+    }
+
+
 def parse_matrix_jsonl_lenient(
     text: str,
     *,
     date_picks: list[MatrixDatePick],
     targets: list[MatrixTarget],
 ) -> tuple[list[dict[str, Any]], list[tuple[int, str]]]:
+    """Compatibility parser for old JSONL matrix responses.
+
+    It still ignores hallucinated capture_date/target_id/cell_index and injects
+    the caller-known values before returning parsed cells.
+    """
     valid_date_indices = {p.date_index for p in date_picks}
     valid_target_labels = {t.target_label for t in targets}
-    target_ids_by_label = {t.target_label: t.target_id for t in targets}
+    expected_keys = _matrix_expected_keys(date_picks, targets)
+    date_pick_by_index = {p.date_index: p for p in date_picks}
+    target_by_label = {t.target_label: t for t in targets}
     parsed_by_key: dict[tuple[int, str], dict[str, Any]] = {}
 
     for candidate in _json_candidate_lines(text):
@@ -556,17 +893,20 @@ def parse_matrix_jsonl_lenient(
             obj,
             valid_date_indices=valid_date_indices,
             valid_target_labels=valid_target_labels,
-            target_ids_by_label=target_ids_by_label,
         ):
             continue
-        key = (int(obj["date_index"]), str(obj["target_label"]))
-        parsed_by_key[key] = obj
+        date_index = int(obj["date_index"])
+        key = (date_index, str(obj["target_label"]))
+        if key not in set(expected_keys):
+            continue
+        cell_index = expected_keys.index(key) + 1
+        parsed_by_key[key] = _normalise_matrix_observation(
+            obj,
+            cell_index=cell_index,
+            date_pick=date_pick_by_index[date_index],
+            target=target_by_label[str(obj["target_label"])],
+        )
 
-    expected_keys = [
-        (date_pick.date_index, target.target_label)
-        for date_pick in date_picks
-        for target in targets
-    ]
     ordered = [parsed_by_key[key] for key in expected_keys if key in parsed_by_key]
     missing = [key for key in expected_keys if key not in parsed_by_key]
     return ordered, missing
@@ -602,6 +942,47 @@ def _to_matrix_observation(parsed: dict[str, Any], *, decision_source: str, raw:
     )
 
 
+def _to_sequence_result(
+    parsed: dict[str, Any],
+    *,
+    decision_source: str,
+    raw: str = "",
+    error: str | None = None,
+) -> GeminiSequenceResult:
+    observations = [
+        GeminiSequenceObservation(
+            date_index=int(obs["date_index"]),
+            capture_date=str(obs["capture_date"]),
+            pv_present=obs.get("pv_present"),
+            pv_score=float(obs["pv_score"]) if obs.get("pv_score") is not None else None,
+            evidence=str(obs.get("evidence", "")),
+            notes=str(obs.get("notes", "")),
+        )
+        for obs in parsed.get("observations", [])
+    ]
+    return GeminiSequenceResult(
+        sequence_pattern=str(parsed.get("sequence_pattern", "")),
+        first_present_date=(
+            None
+            if parsed.get("first_present_date") in (None, "")
+            else str(parsed.get("first_present_date"))
+        ),
+        first_present_date_index=(
+            None
+            if parsed.get("first_present_date_index") in (None, "")
+            else int(parsed.get("first_present_date_index"))
+        ),
+        confidence=float(parsed["confidence"]) if parsed.get("confidence") is not None else None,
+        consistency_flag=str(parsed.get("consistency_flag", "")),
+        quality_flag=str(parsed.get("quality_flag", "unusable")),
+        review_notes=str(parsed.get("review_notes", "")),
+        observations=observations,
+        decision_source=decision_source,
+        raw_response=raw,
+        error=error,
+    )
+
+
 def _failed_observation(chip_index: int, error: str) -> GeminiObservation:
     return GeminiObservation(
         chip_index=chip_index,
@@ -610,6 +991,31 @@ def _failed_observation(chip_index: int, error: str) -> GeminiObservation:
         quality_flag="unusable",
         evidence="",
         notes=f"gemini_failed: {error[:300]}",
+        decision_source="gemini_failed",
+        error=error,
+    )
+
+
+def _failed_sequence_result(date_picks: list[SequenceDatePick], error: str) -> GeminiSequenceResult:
+    return GeminiSequenceResult(
+        sequence_pattern="-".join("?" for _ in date_picks),
+        first_present_date=None,
+        first_present_date_index=None,
+        confidence=None,
+        consistency_flag="sequence_failed",
+        quality_flag="sequence_failed",
+        review_notes=f"gemini_failed: {error[:300]}",
+        observations=[
+            GeminiSequenceObservation(
+                date_index=pick.date_index,
+                capture_date=pick.capture_date,
+                pv_present=None,
+                pv_score=None,
+                evidence="",
+                notes=f"gemini_failed: {error[:300]}",
+            )
+            for pick in date_picks
+        ],
         decision_source="gemini_failed",
         error=error,
     )
@@ -643,7 +1049,9 @@ def _call_gemini(
     image_paths: list[Path],
     prompt: str,
     config: GeminiClientConfig,
-    max_tokens: int,
+    max_tokens: int | None,
+    response_mime_type: str | None = None,
+    response_schema: dict[str, Any] | None = None,
     poster: Callable[..., dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Call Gemini via native or openai format. Returns (response_text, raw_response_json)."""
@@ -658,6 +1066,8 @@ def _call_gemini(
                 image_paths=image_paths,
                 max_tokens=max_tokens,
                 timeout=config.timeout,
+                response_mime_type=response_mime_type,
+                response_schema=response_schema,
             )
         else:
             raw = poster(
@@ -670,6 +1080,8 @@ def _call_gemini(
                 image_paths=image_paths,
                 max_tokens=max_tokens,
                 timeout=config.timeout,
+                response_mime_type=response_mime_type,
+                response_schema=response_schema,
             )
         return native_response_text(raw), raw
     if poster is None:
@@ -910,13 +1322,167 @@ def score_batch_with_fallback(
 
 def _build_matrix_prompt(date_picks: list[MatrixDatePick], targets: list[MatrixTarget]) -> str:
     target_labels = ", ".join(t.target_label for t in targets)
-    target_mapping = "\n".join(f"- {t.target_label}: {t.target_id}" for t in targets)
+    date_mapping = "\n".join(f"- {p.date_index}: {p.capture_date}" for p in date_picks)
+    target_labels_list = "\n".join(f"- {t.target_label}" for t in targets)
     return MATRIX_PROMPT_TEMPLATE.format(
         date_count=len(date_picks),
         target_labels=target_labels,
         cell_count=len(date_picks) * len(targets),
-        target_mapping=target_mapping,
+        date_mapping=date_mapping,
+        target_labels_list=target_labels_list,
     )
+
+
+def _build_sequence_prompt(date_picks: list[SequenceDatePick]) -> str:
+    date_mapping = "\n".join(f"- {p.date_index}: {p.capture_date}" for p in date_picks)
+    return SEQUENCE_PROMPT_TEMPLATE.format(
+        date_count=len(date_picks),
+        date_mapping=date_mapping,
+    )
+
+
+def _sequence_response_schema(date_picks: list[SequenceDatePick]) -> dict[str, Any]:
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "confidence": {"type": "NUMBER", "nullable": True},
+            "quality_flag": {
+                "type": "STRING",
+                "enum": ["usable", "ambiguous", "unusable"],
+            },
+            "review_notes": {"type": "STRING"},
+            "observations": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "date_index": {"type": "INTEGER"},
+                        "pv_present": {"type": "BOOLEAN", "nullable": True},
+                        "pv_score": {"type": "NUMBER", "nullable": True},
+                        "evidence": {"type": "STRING"},
+                        "notes": {"type": "STRING"},
+                    },
+                    "required": [
+                        "date_index",
+                        "pv_present",
+                        "pv_score",
+                        "evidence",
+                    ],
+                },
+            },
+        },
+        "required": ["confidence", "quality_flag", "review_notes", "observations"],
+    }
+
+
+def _attempt_sequence_batch(
+    date_picks: list[SequenceDatePick],
+    *,
+    config: GeminiClientConfig,
+    poster: Callable[..., dict[str, Any]] | None,
+    max_tokens: int | None,
+) -> tuple[dict[str, Any] | None, str, str | None]:
+    prompt = _build_sequence_prompt(date_picks)
+    try:
+        raw_text, _raw_json = _call_gemini(
+            image_paths=[p.chip_path for p in date_picks],
+            prompt=prompt,
+            config=config,
+            max_tokens=max_tokens,
+            response_mime_type="application/json",
+            response_schema=_sequence_response_schema(date_picks),
+            poster=poster,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return None, "", f"{type(exc).__name__}: {exc}"
+
+    try:
+        parsed = parse_sequence_json_strict(raw_text, date_picks=date_picks)
+    except Exception as exc:  # noqa: BLE001
+        return None, raw_text, f"{type(exc).__name__}: {exc}"
+    return parsed, raw_text, None
+
+
+def score_single_target_sequence(
+    date_picks: list[SequenceDatePick],
+    *,
+    config: GeminiClientConfig,
+    audit_writer: Callable[[dict[str, Any]], None] | None = None,
+    poster: Callable[..., dict[str, Any]] | None = None,
+    max_tokens: int | None = None,
+) -> GeminiSequenceResult:
+    """Score one target across an ordered date window.
+
+    The call uses Gemini JSON mode with a response schema and retries once on
+    invalid/truncated JSON or request failure. Remaining failures are returned
+    as a target-level `sequence_failed` result; no target/date is dropped.
+    """
+    if not date_picks:
+        return _failed_sequence_result([], "no_date_picks")
+
+    last_error: str | None = None
+    for attempt in (1, 2):
+        parsed, raw, err = _attempt_sequence_batch(
+            date_picks,
+            config=config,
+            poster=poster,
+            max_tokens=max_tokens,
+        )
+        if audit_writer is not None:
+            audit_writer(
+                {
+                    "stage": f"sequence_attempt_{attempt}",
+                    "n_dates": len(date_picks),
+                    "date_window": ",".join(p.capture_date for p in date_picks),
+                    "ok": parsed is not None and err is None,
+                    "error": err,
+                    "raw_response": raw,
+                    "parsed": parsed,
+                }
+            )
+        if parsed is not None and err is None:
+            return _to_sequence_result(parsed, decision_source="gemini_sequence", raw=raw)
+        last_error = err
+
+    return _failed_sequence_result(date_picks, last_error or "sequence_failed_after_two_attempts")
+
+
+def _matrix_response_schema(targets: list[MatrixTarget]) -> dict[str, Any]:
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "observations": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "date_index": {"type": "INTEGER"},
+                        "target_label": {
+                            "type": "STRING",
+                            "enum": [t.target_label for t in targets],
+                        },
+                        "pv_present": {"type": "BOOLEAN", "nullable": True},
+                        "confidence": {"type": "NUMBER", "nullable": True},
+                        "quality_flag": {
+                            "type": "STRING",
+                            "enum": ["usable", "ambiguous", "unusable"],
+                        },
+                        "evidence": {"type": "STRING"},
+                        "notes": {"type": "STRING"},
+                    },
+                    "required": [
+                        "date_index",
+                        "target_label",
+                        "pv_present",
+                        "confidence",
+                        "quality_flag",
+                        "evidence",
+                    ],
+                },
+            }
+        },
+        "required": ["observations"],
+    }
 
 
 def _attempt_matrix_batch(
@@ -929,22 +1495,35 @@ def _attempt_matrix_batch(
     prompt = _build_matrix_prompt(date_picks, targets)
     cell_count = len(date_picks) * len(targets)
     max_tokens = max(config.max_tokens_per_chip * len(date_picks), cell_count * 180 + 256)
+    expected_missing = [(p.date_index, t.target_label) for p in date_picks for t in targets]
     try:
         raw_text, _raw_json = _call_gemini(
             image_paths=[p.chip_path for p in date_picks],
             prompt=prompt,
             config=config,
             max_tokens=max_tokens,
+            response_mime_type="application/json" if config.matrix_json_mode else None,
+            response_schema=_matrix_response_schema(targets) if config.matrix_json_mode else None,
             poster=poster,
         )
     except Exception as exc:  # noqa: BLE001
-        return [], [(p.date_index, t.target_label) for p in date_picks for t in targets], "", f"{type(exc).__name__}: {exc}"
+        return [], expected_missing, "", f"{type(exc).__name__}: {exc}"
 
-    parsed, missing = parse_matrix_jsonl_lenient(
-        raw_text,
-        date_picks=date_picks,
-        targets=targets,
-    )
+    try:
+        if config.matrix_json_mode:
+            parsed, missing = parse_matrix_json_strict(
+                raw_text,
+                date_picks=date_picks,
+                targets=targets,
+            )
+        else:
+            parsed, missing = parse_matrix_jsonl_lenient(
+                raw_text,
+                date_picks=date_picks,
+                targets=targets,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return [], expected_missing, raw_text, f"{type(exc).__name__}: {exc}"
     return parsed, missing, raw_text, None
 
 

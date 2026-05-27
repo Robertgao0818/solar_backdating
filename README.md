@@ -34,6 +34,29 @@ Gemini review calls are bounded: default date batches are at most 5 images, and
 multi-target matrix review is capped at 4 targets / 24 date-target cells before
 splitting.
 
+Chip-group matrix review entrypoint:
+
+```bash
+python scripts/temporal/score_chip_group_matrix.py \
+  --chip-targets-csv ~/zasolar_data/geid_temporal/jhb_full382_unified_A_merge01_c0925_chipgroups/chip_targets.csv \
+  --image-artifacts-csv ~/zasolar_data/geid_temporal/gehi_image_artifacts.csv \
+  --output ~/zasolar_data/geid_temporal/chip_group_presence_timeseries.csv
+```
+
+Single-target sequence review entrypoint:
+
+```bash
+python scripts/temporal/score_target_sequence.py \
+  --chip-targets-csv ~/zasolar_data/geid_temporal/jhb_full382_unified_A_merge01_c0925_chipgroups/chip_targets.csv \
+  --image-artifacts-csv ~/zasolar_data/geid_temporal/gehi_image_artifacts.csv \
+  --dates 2018-03-30,2019-07-30,2021-08-30,2022-03-30,2024-02-29 \
+  --output ~/zasolar_data/geid_temporal/target_sequence_presence.csv \
+  --long-output ~/zasolar_data/geid_temporal/target_sequence_presence_long.csv \
+  --workers 2 \
+  --qps 0.3 \
+  --resume
+```
+
 ## Plugin model
 
 This repo is a local plugin of the main ZAsolar repo. It does not have its

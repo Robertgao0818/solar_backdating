@@ -21,15 +21,19 @@ from scripts.validation.gemini_solar_image_review import (
     BATCH_PROMPT_TEMPLATE,
     BatchPick,
     GeminiClientConfig,
-    GeminiObservation,
     MatrixDatePick,
     MatrixTarget,
+    SequenceDatePick,
     _build_batch_prompt,
     _build_matrix_prompt,
+    _build_sequence_prompt,
     _identify_census_reference_chip,
     parse_jsonl_lenient,
+    parse_matrix_json_strict,
     parse_matrix_jsonl_lenient,
+    parse_sequence_json_strict,
     score_batch_with_fallback,
+    score_single_target_sequence,
     score_target_date_matrix,
     validate_observation_schema,
     validate_matrix_limits,
@@ -391,15 +395,11 @@ def _matrix_targets(labels: list[str]) -> list[MatrixTarget]:
 
 def _matrix_response(date_picks: list[MatrixDatePick], targets: list[MatrixTarget]) -> str:
     rows: list[dict[str, Any]] = []
-    cell_index = 1
     for date_pick in date_picks:
         for target in targets:
             rows.append(
                 {
-                    "cell_index": cell_index,
                     "date_index": date_pick.date_index,
-                    "capture_date": date_pick.capture_date,
-                    "target_id": target.target_id,
                     "target_label": target.target_label,
                     "pv_present": date_pick.date_index >= 2,
                     "confidence": 0.88,
@@ -408,8 +408,7 @@ def _matrix_response(date_picks: list[MatrixDatePick], targets: list[MatrixTarge
                     "notes": "",
                 }
             )
-            cell_index += 1
-    return _make_jsonl(rows)
+    return json.dumps({"observations": rows})
 
 
 def test_matrix_limits_reject_too_many_targets() -> None:
@@ -428,11 +427,180 @@ def test_build_matrix_prompt_lists_targets(tmp_path: Path) -> None:
     prompt = _build_matrix_prompt(date_picks, targets)
     assert "D=2" in prompt
     assert "D*T=4" in prompt
-    assert "T01: target_t01" in prompt
+    assert "Target labels:" in prompt
+    assert "- T01" in prompt
+    assert "Date mapping:" in prompt
+    assert "- 1: 2020-01-01" in prompt
     assert "date-major order" in prompt
+    assert "same roof plane/roof segment" in prompt
+    assert "exact cross center" in prompt
 
 
-def test_parse_matrix_jsonl_reports_missing_and_rejects_bad_target(tmp_path: Path) -> None:
+def _sequence_dates(tmp_path: Path, dates: list[str]) -> list[SequenceDatePick]:
+    out: list[SequenceDatePick] = []
+    for idx, d in enumerate(dates, start=1):
+        chip = tmp_path / f"sequence_{idx}.png"
+        chip.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 64)
+        out.append(SequenceDatePick(date_index=idx, chip_path=chip, capture_date=d))
+    return out
+
+
+def _sequence_response(pattern: list[bool | None]) -> str:
+    return json.dumps(
+        {
+            "confidence": 0.86,
+            "quality_flag": "usable",
+            "review_notes": "stub sequence",
+            "observations": [
+                {
+                    "date_index": idx,
+                    "pv_present": value,
+                    "pv_score": None if value is None else (0.9 if value else 0.1),
+                    "evidence": f"date {idx}",
+                    "notes": "",
+                }
+                for idx, value in enumerate(pattern, start=1)
+            ],
+        }
+    )
+
+
+def test_build_sequence_prompt_lists_ordered_dates(tmp_path: Path) -> None:
+    date_picks = _sequence_dates(tmp_path, ["2018-03-30", "2024-02-29"])
+    prompt = _build_sequence_prompt(date_picks)
+    assert "one rooftop target" in prompt
+    assert "- 1: 2018-03-30" in prompt
+    assert "- 2: 2024-02-29" in prompt
+    assert "construction frames" in prompt
+
+
+def test_parse_sequence_json_strict_derives_pattern_and_first_present(tmp_path: Path) -> None:
+    date_picks = _sequence_dates(tmp_path, ["2018-03-30", "2019-07-30", "2024-02-29"])
+    parsed = parse_sequence_json_strict(
+        _sequence_response([False, True, True]),
+        date_picks=date_picks,
+    )
+    assert parsed["sequence_pattern"] == "0-1-1"
+    assert parsed["first_present_date"] == "2019-07-30"
+    assert parsed["first_present_date_index"] == 2
+    assert parsed["consistency_flag"] == "monotonic"
+    assert parsed["observations"][0]["capture_date"] == "2018-03-30"
+
+
+def test_parse_sequence_json_strict_flags_non_monotonic(tmp_path: Path) -> None:
+    date_picks = _sequence_dates(tmp_path, ["2018-03-30", "2019-07-30", "2024-02-29"])
+    parsed = parse_sequence_json_strict(
+        _sequence_response([False, True, False]),
+        date_picks=date_picks,
+    )
+    assert parsed["sequence_pattern"] == "0-1-0"
+    assert parsed["consistency_flag"] == "non_monotonic_requires_review"
+
+
+def test_parse_sequence_json_strict_rejects_model_dates(tmp_path: Path) -> None:
+    date_picks = _sequence_dates(tmp_path, ["2018-03-30"])
+    text = json.dumps(
+        {
+            "confidence": 0.8,
+            "quality_flag": "usable",
+            "review_notes": "",
+            "observations": [
+                {
+                    "date_index": 1,
+                    "capture_date": "WRONG",
+                    "pv_present": True,
+                    "pv_score": 0.9,
+                    "evidence": "ok",
+                }
+            ],
+        }
+    )
+    with pytest.raises(ValueError, match="extra keys"):
+        parse_sequence_json_strict(text, date_picks=date_picks)
+
+
+def test_score_single_target_sequence_retries_invalid_json_and_omits_max_tokens(
+    tmp_path: Path, gemini_config
+) -> None:
+    date_picks = _sequence_dates(tmp_path, ["2018-03-30", "2019-07-30"])
+    calls: list[dict[str, Any]] = []
+
+    def poster(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _native_response("{not json")
+        return _native_response(_sequence_response([False, True]))
+
+    audit: list[dict[str, Any]] = []
+    result = score_single_target_sequence(
+        date_picks,
+        config=gemini_config,
+        poster=poster,
+        audit_writer=audit.append,
+        max_tokens=None,
+    )
+    assert result.sequence_pattern == "0-1"
+    assert result.first_present_date == "2019-07-30"
+    assert [item["stage"] for item in audit] == ["sequence_attempt_1", "sequence_attempt_2"]
+    assert calls[0]["max_tokens"] is None
+    assert calls[0]["response_mime_type"] == "application/json"
+    assert calls[0]["response_schema"]["required"] == ["confidence", "quality_flag", "review_notes", "observations"]
+    assert calls[0]["response_schema"]["properties"]["observations"]["items"]["properties"]["date_index"] == {
+        "type": "INTEGER"
+    }
+
+
+def test_parse_matrix_json_strict_rejects_extra_known_fields(tmp_path: Path) -> None:
+    date_picks = _matrix_dates(tmp_path, ["2020-01-01"])
+    targets = _matrix_targets(["T01"])
+    text = json.dumps(
+        {
+            "observations": [
+                {
+                    "date_index": 1,
+                    "capture_date": "WRONG-DATE",
+                    "target_id": "hallucinated",
+                    "target_label": "T01",
+                    "pv_present": True,
+                    "confidence": 0.9,
+                    "quality_flag": "usable",
+                    "evidence": "ok",
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="extra keys"):
+        parse_matrix_json_strict(text, date_picks=date_picks, targets=targets)
+
+
+def test_parse_matrix_json_strict_injects_known_identifiers(tmp_path: Path) -> None:
+    date_picks = _matrix_dates(tmp_path, ["2020-01-01"])
+    targets = _matrix_targets(["T01"])
+    text = json.dumps(
+        {
+            "observations": [
+                {
+                    "date_index": 1,
+                    "target_label": "T01",
+                    "pv_present": True,
+                    "confidence": 0.9,
+                    "quality_flag": "usable",
+                    "evidence": "ok",
+                }
+            ]
+        }
+    )
+
+    parsed, missing = parse_matrix_json_strict(text, date_picks=date_picks, targets=targets)
+
+    assert missing == []
+    assert parsed[0]["cell_index"] == 1
+    assert parsed[0]["capture_date"] == "2020-01-01"
+    assert parsed[0]["target_id"] == "target_t01"
+
+
+def test_parse_matrix_jsonl_ignores_hallucinated_target_id(tmp_path: Path) -> None:
     date_picks = _matrix_dates(tmp_path, ["2020-01-01"])
     targets = _matrix_targets(["T01", "T02"])
     text = _make_jsonl(
@@ -460,8 +628,33 @@ def test_parse_matrix_jsonl_reports_missing_and_rejects_bad_target(tmp_path: Pat
         ]
     )
     parsed, missing = parse_matrix_jsonl_lenient(text, date_picks=date_picks, targets=targets)
-    assert len(parsed) == 1
-    assert missing == [(1, "T02")]
+    assert len(parsed) == 2
+    assert missing == []
+    assert parsed[1]["target_id"] == "target_t02"
+
+
+def test_parse_matrix_jsonl_uses_expected_capture_date(tmp_path: Path) -> None:
+    date_picks = _matrix_dates(tmp_path, ["2020-01-01"])
+    targets = _matrix_targets(["T01"])
+    text = _make_jsonl(
+        [
+            {
+                "cell_index": 1,
+                "date_index": 1,
+                "capture_date": "WRONG-DATE",
+                "target_id": "target_t01",
+                "target_label": "T01",
+                "pv_present": True,
+                "confidence": 0.9,
+                "quality_flag": "usable",
+            }
+        ]
+    )
+
+    parsed, missing = parse_matrix_jsonl_lenient(text, date_picks=date_picks, targets=targets)
+
+    assert missing == []
+    assert parsed[0]["capture_date"] == "2020-01-01"
 
 
 def test_score_target_date_matrix_success(tmp_path: Path, gemini_config) -> None:
@@ -470,7 +663,14 @@ def test_score_target_date_matrix_success(tmp_path: Path, gemini_config) -> None
     calls: list[dict[str, Any]] = []
 
     def poster(**kwargs: Any) -> dict[str, Any]:
-        calls.append({"n_images": len(kwargs["image_paths"]), "prompt": kwargs["prompt"]})
+        calls.append(
+            {
+                "n_images": len(kwargs["image_paths"]),
+                "prompt": kwargs["prompt"],
+                "response_mime_type": kwargs.get("response_mime_type"),
+                "response_schema": kwargs.get("response_schema"),
+            }
+        )
         return _native_response(_matrix_response(date_picks, targets))
 
     audit: list[dict[str, Any]] = []
@@ -484,34 +684,36 @@ def test_score_target_date_matrix_success(tmp_path: Path, gemini_config) -> None
     assert len(obs) == 4
     assert all(o.decision_source == "gemini_matrix" for o in obs)
     assert calls[0]["n_images"] == 2
-    assert "target_t01" in calls[0]["prompt"]
+    assert calls[0]["response_mime_type"] == "application/json"
+    assert calls[0]["response_schema"]["required"] == ["observations"]
+    assert "Target labels:" in calls[0]["prompt"]
     assert audit[0]["stage"] == "matrix_attempt_1"
 
 
-def test_score_target_date_matrix_missing_cells_become_failed(tmp_path: Path, gemini_config) -> None:
+def test_score_target_date_matrix_strict_missing_cells_become_failed(
+    tmp_path: Path, gemini_config
+) -> None:
     date_picks = _matrix_dates(tmp_path, ["2020-01-01"])
     targets = _matrix_targets(["T01", "T02"])
 
     def poster(**_kwargs: Any) -> dict[str, Any]:
-        partial = _make_jsonl(
-            [
-                {
-                    "cell_index": 1,
+        partial = json.dumps(
+            {
+                "observations": [
+                    {
                     "date_index": 1,
-                    "capture_date": "2020-01-01",
-                    "target_id": "target_t01",
                     "target_label": "T01",
                     "pv_present": True,
                     "confidence": 0.9,
                     "quality_flag": "usable",
                     "evidence": "ok",
                     "notes": "",
-                }
-            ]
+                    }
+                ]
+            }
         )
         return _native_response(partial)
 
     obs = score_target_date_matrix(date_picks, targets, config=gemini_config, poster=poster)
-    by_label = {o.target_label: o for o in obs}
-    assert by_label["T01"].decision_source == "gemini_matrix"
-    assert by_label["T02"].decision_source == "gemini_failed"
+    assert {o.decision_source for o in obs} == {"gemini_failed"}
+    assert {o.error for o in obs} == {"missing_matrix_cell_after_two_attempts"}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shlex
 import subprocess
@@ -37,6 +38,17 @@ class GehiRunResult:
     @property
     def stderr_sha256(self) -> str:
         return hashlib.sha256(self.stderr.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ReviewTargetMarker:
+    """One labeled target marker for a multi-target chip review PNG."""
+
+    target_id: str
+    target_label: str
+    offset_x_m: float
+    offset_y_m: float
+    search_radius_m: float | None = None
 
 
 def decode_gehi_output(raw: bytes) -> str:
@@ -218,6 +230,198 @@ def _draw_anchor_marker(
     )
 
 
+def _target_marker_cache_token(
+    target_markers: Sequence[ReviewTargetMarker],
+    *,
+    chip_size_m: float,
+) -> str:
+    payload = {
+        "chip_size_m": round(float(chip_size_m), 6),
+        "targets": [
+            {
+                "target_id": marker.target_id,
+                "target_label": marker.target_label,
+                "offset_x_m": round(float(marker.offset_x_m), 6),
+                "offset_y_m": round(float(marker.offset_y_m), 6),
+                "search_radius_m": (
+                    None
+                    if marker.search_radius_m is None
+                    else round(float(marker.search_radius_m), 6)
+                ),
+            }
+            for marker in target_markers
+        ],
+    }
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+
+
+def target_review_png_path(
+    image_path: Path,
+    target_markers: Sequence[ReviewTargetMarker],
+    *,
+    chip_size_m: float,
+) -> Path:
+    """Return the deterministic multi-target review PNG cache path."""
+    token = _target_marker_cache_token(target_markers, chip_size_m=chip_size_m)
+    return image_path.with_name(f"{image_path.stem}.targets-{token}.png")
+
+
+def target_crop_review_png_path(
+    image_path: Path,
+    target_marker: ReviewTargetMarker,
+    *,
+    chip_size_m: float,
+    crop_context_multiplier: float,
+    min_crop_size_m: float,
+    min_output_px: int,
+) -> Path:
+    """Return the deterministic single-target crop review PNG cache path."""
+    payload = {
+        "chip_size_m": round(float(chip_size_m), 6),
+        "crop_context_multiplier": round(float(crop_context_multiplier), 6),
+        "min_crop_size_m": round(float(min_crop_size_m), 6),
+        "min_output_px": int(min_output_px),
+        "target": {
+            "target_id": target_marker.target_id,
+            "target_label": target_marker.target_label,
+            "offset_x_m": round(float(target_marker.offset_x_m), 6),
+            "offset_y_m": round(float(target_marker.offset_y_m), 6),
+            "search_radius_m": (
+                None
+                if target_marker.search_radius_m is None
+                else round(float(target_marker.search_radius_m), 6)
+            ),
+        },
+    }
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    token = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+    safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", target_marker.target_label).strip("_") or "target"
+    return image_path.with_name(f"{image_path.stem}.target-{safe_label}-{token}.png")
+
+
+def _clamp_int(value: int, lower: int, upper: int) -> int:
+    return max(lower, min(upper, value))
+
+
+def _draw_single_target_marker_at(
+    img,
+    *,
+    x: float,
+    y: float,
+    target_label: str,
+    search_radius_px: float | None,
+) -> None:
+    from PIL import ImageDraw, ImageFont
+
+    w, h = img.size
+    short = min(w, h)
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default()
+    color = (0, 220, 255)
+    px = _clamp_int(int(round(x)), 0, max(0, w - 1))
+    py = _clamp_int(int(round(y)), 0, max(0, h - 1))
+    ring_r = max(6, int(round(search_radius_px))) if search_radius_px else max(6, int(round(short * 0.12)))
+    ring_r = min(ring_r, max(6, short // 2 - 2))
+    cross_r = max(5, int(round(short * 0.045)))
+
+    for offset in range(3, 0, -1):
+        r = ring_r + offset
+        draw.ellipse([px - r, py - r, px + r, py + r], outline=(0, 0, 0))
+    for offset in range(2):
+        r = ring_r - offset
+        draw.ellipse([px - r, py - r, px + r, py + r], outline=color)
+    draw.line([px - cross_r, py, px + cross_r, py], fill=(0, 0, 0), width=5)
+    draw.line([px, py - cross_r, px, py + cross_r], fill=(0, 0, 0), width=5)
+    draw.line([px - cross_r, py, px + cross_r, py], fill=color, width=3)
+    draw.line([px, py - cross_r, px, py + cross_r], fill=color, width=3)
+
+    label = target_label
+    bbox = draw.textbbox((0, 0), label, font=font)
+    label_w = bbox[2] - bbox[0] + 8
+    label_h = bbox[3] - bbox[1] + 6
+    label_x = px + ring_r + 4
+    if label_x + label_w >= w:
+        label_x = px - ring_r - label_w - 4
+    label_y = py - ring_r - label_h - 3
+    if label_y < 0:
+        label_y = py + ring_r + 3
+    label_x = _clamp_int(label_x, 0, max(0, w - label_w - 1))
+    label_y = _clamp_int(label_y, 0, max(0, h - label_h - 1))
+    draw.rectangle(
+        [label_x, label_y, label_x + label_w, label_y + label_h],
+        fill=(0, 0, 0),
+        outline=color,
+    )
+    draw.text((label_x + 4, label_y + 3), label, fill=(255, 255, 255), font=font)
+
+
+def _draw_labeled_target_markers(
+    img,
+    target_markers: Sequence[ReviewTargetMarker],
+    *,
+    chip_size_m: float,
+) -> None:
+    """Draw visible Txx labels at metric offsets from the chip center."""
+    from PIL import ImageDraw, ImageFont
+
+    w, h = img.size
+    short = min(w, h)
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default()
+    palette = (
+        (255, 215, 0),
+        (0, 180, 255),
+        (255, 92, 92),
+        (76, 217, 100),
+        (255, 128, 0),
+        (210, 120, 255),
+    )
+
+    for idx, marker in enumerate(target_markers):
+        color = palette[idx % len(palette)]
+        px = int(round(w * (0.5 + float(marker.offset_x_m) / float(chip_size_m))))
+        py = int(round(h * (0.5 - float(marker.offset_y_m) / float(chip_size_m))))
+        px = _clamp_int(px, 0, max(0, w - 1))
+        py = _clamp_int(py, 0, max(0, h - 1))
+        if marker.search_radius_m is not None and marker.search_radius_m > 0:
+            ring_r = max(5, int(round(short * float(marker.search_radius_m) / float(chip_size_m))))
+        else:
+            ring_r = max(5, int(round(short * 0.05)))
+        cross_r = max(4, int(round(short * 0.035)))
+
+        # Black under-stroke keeps the marker readable on bright roofs.
+        for offset in range(3, 0, -1):
+            r = ring_r + offset
+            draw.ellipse([px - r, py - r, px + r, py + r], outline=(0, 0, 0))
+        for offset in range(2):
+            r = ring_r - offset
+            draw.ellipse([px - r, py - r, px + r, py + r], outline=color)
+        draw.line([px - cross_r, py, px + cross_r, py], fill=(0, 0, 0), width=5)
+        draw.line([px, py - cross_r, px, py + cross_r], fill=(0, 0, 0), width=5)
+        draw.line([px - cross_r, py, px + cross_r, py], fill=color, width=3)
+        draw.line([px, py - cross_r, px, py + cross_r], fill=color, width=3)
+
+        label = marker.target_label
+        bbox = draw.textbbox((0, 0), label, font=font)
+        label_w = bbox[2] - bbox[0] + 8
+        label_h = bbox[3] - bbox[1] + 6
+        label_x = px + ring_r + 4
+        if label_x + label_w >= w:
+            label_x = px - ring_r - label_w - 4
+        label_y = py - ring_r - label_h - 3
+        if label_y < 0:
+            label_y = py + ring_r + 3
+        label_x = _clamp_int(label_x, 0, max(0, w - label_w - 1))
+        label_y = _clamp_int(label_y, 0, max(0, h - label_h - 1))
+        draw.rectangle(
+            [label_x, label_y, label_x + label_w, label_y + label_h],
+            fill=(0, 0, 0),
+            outline=color,
+        )
+        draw.text((label_x + 4, label_y + 3), label, fill=color, font=font)
+
+
 def ensure_review_png(tif_path: Path, *, anchor_marker: bool = True) -> Path:
     """Convert a GEHI GeoTIFF chip to a sibling PNG suitable for Gemini vision review.
 
@@ -258,6 +462,139 @@ def ensure_review_png(tif_path: Path, *, anchor_marker: bool = True) -> Path:
     return png_path
 
 
+def ensure_target_review_png(
+    image_path: Path,
+    target_markers: Sequence[ReviewTargetMarker],
+    *,
+    chip_size_m: float,
+) -> Path:
+    """Create a PNG annotated with T01/T02/... markers for matrix review.
+
+    The target offsets are metres east/north from the chip center. Pixel mapping
+    assumes north-up chips: positive x moves right and positive y moves up.
+    The cache filename includes a hash of the marker contract so different
+    target subsets do not reuse the wrong annotated PNG.
+    """
+    if not target_markers:
+        return ensure_review_png(image_path, anchor_marker=False)
+    if chip_size_m <= 0:
+        raise ValueError("chip_size_m must be positive")
+    png_path = target_review_png_path(image_path, target_markers, chip_size_m=chip_size_m)
+    try:
+        if (
+            png_path.exists()
+            and png_path.stat().st_size > 0
+            and png_path.stat().st_mtime >= image_path.stat().st_mtime
+        ):
+            return png_path
+    except OSError:
+        pass
+
+    from PIL import Image
+
+    with Image.open(image_path) as img:
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        else:
+            img = img.copy()
+        _draw_labeled_target_markers(img, target_markers, chip_size_m=chip_size_m)
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(png_path, format="PNG")
+    return png_path
+
+
+def ensure_single_target_review_png(
+    image_path: Path,
+    target_marker: ReviewTargetMarker,
+    *,
+    chip_size_m: float,
+    crop_context_multiplier: float = 3.0,
+    min_crop_size_m: float = 24.0,
+    min_output_px: int = 128,
+) -> Path:
+    """Create a target-centered review PNG for single-target sequence scoring.
+
+    The source chip remains the provenance artifact. This PNG crops around the
+    target offset, draws only that target's ring/cross/label, and upscales very
+    small crops to keep the marker and roof texture legible for vision review.
+    """
+    if chip_size_m <= 0:
+        raise ValueError("chip_size_m must be positive")
+    if crop_context_multiplier <= 0:
+        raise ValueError("crop_context_multiplier must be positive")
+    if min_crop_size_m <= 0:
+        raise ValueError("min_crop_size_m must be positive")
+    if min_output_px <= 0:
+        raise ValueError("min_output_px must be positive")
+
+    png_path = target_crop_review_png_path(
+        image_path,
+        target_marker,
+        chip_size_m=chip_size_m,
+        crop_context_multiplier=crop_context_multiplier,
+        min_crop_size_m=min_crop_size_m,
+        min_output_px=min_output_px,
+    )
+    try:
+        if (
+            png_path.exists()
+            and png_path.stat().st_size > 0
+            and png_path.stat().st_mtime >= image_path.stat().st_mtime
+        ):
+            return png_path
+    except OSError:
+        pass
+
+    from PIL import Image
+
+    with Image.open(image_path) as img:
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        else:
+            img = img.copy()
+        w, h = img.size
+        short = min(w, h)
+        target_x = w * (0.5 + float(target_marker.offset_x_m) / float(chip_size_m))
+        target_y = h * (0.5 - float(target_marker.offset_y_m) / float(chip_size_m))
+        radius_m = (
+            float(target_marker.search_radius_m)
+            if target_marker.search_radius_m is not None and target_marker.search_radius_m > 0
+            else max(float(chip_size_m) * 0.05, 1.0)
+        )
+        crop_size_m = min(
+            float(chip_size_m),
+            max(float(min_crop_size_m), 2.0 * radius_m * float(crop_context_multiplier)),
+        )
+        crop_px = max(1, int(round(short * crop_size_m / float(chip_size_m))))
+        crop_px = min(crop_px, w, h)
+        left = _clamp_int(int(round(target_x - crop_px / 2)), 0, max(0, w - crop_px))
+        top = _clamp_int(int(round(target_y - crop_px / 2)), 0, max(0, h - crop_px))
+        right = left + crop_px
+        bottom = top + crop_px
+        crop = img.crop((left, top, right, bottom))
+
+        scale = 1.0
+        if min(crop.size) < min_output_px:
+            scale = float(min_output_px) / float(min(crop.size))
+            new_size = (max(1, int(round(crop.size[0] * scale))), max(1, int(round(crop.size[1] * scale))))
+            resampling = getattr(Image, "Resampling", Image).BICUBIC
+            crop = crop.resize(new_size, resampling)
+
+        local_x = (target_x - left) * scale
+        local_y = (target_y - top) * scale
+        search_radius_px = short * radius_m / float(chip_size_m) * scale
+        _draw_single_target_marker_at(
+            crop,
+            x=local_x,
+            y=local_y,
+            target_label=target_marker.target_label,
+            search_radius_px=search_radius_px,
+        )
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        crop.save(png_path, format="PNG")
+    return png_path
+
+
 def assert_gehi_success(result: GehiRunResult, *, allow_availability_chooser_exit: bool = False) -> None:
     if result.returncode == 0:
         return
@@ -268,4 +605,3 @@ def assert_gehi_success(result: GehiRunResult, *, allow_availability_chooser_exi
         f"GEHistoricalImagery failed with return code {result.returncode}: "
         f"{result.stderr[:1000] or result.stdout[:1000]}"
     )
-

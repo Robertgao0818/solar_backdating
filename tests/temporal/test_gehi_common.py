@@ -1,11 +1,15 @@
 import unittest
+from pathlib import Path
 
 from scripts.temporal.gehi_common import (
+    ReviewTargetMarker,
     anchor_bbox_args,
     anchor_location_arg,
     decode_gehi_output,
     dedupe_info_rows_by_date,
     dedupe_info_rows_by_version,  # backward-compat alias
+    ensure_single_target_review_png,
+    ensure_target_review_png,
     parse_availability_output,
     parse_info_output,
 )
@@ -96,6 +100,59 @@ class GehiCommonTests(unittest.TestCase):
         expanded = expand_candidate_dates(row)
         self.assertEqual([item["capture_date"] for item in expanded], ["2015-08-30", "2015-11-30"])
         self.assertEqual({item["version"] for item in expanded}, {"277"})
+
+    def test_ensure_target_review_png_draws_t_markers(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            tif = Path(td) / "chip.tif"
+            Image.new("RGB", (100, 100), (30, 30, 30)).save(tif, format="TIFF")
+            markers = [
+                ReviewTargetMarker("target_1", "T01", 0.0, 0.0, 8.0),
+                ReviewTargetMarker("target_2", "T02", 20.0, 10.0, 8.0),
+            ]
+
+            png = ensure_target_review_png(tif, markers, chip_size_m=100.0)
+
+            self.assertEqual(png.suffix, ".png")
+            self.assertIn(".targets-", png.name)
+            self.assertTrue(png.exists())
+            with Image.open(png) as img:
+                self.assertNotEqual(img.getpixel((50, 50)), (30, 30, 30))
+                self.assertNotEqual(img.getpixel((70, 40)), (30, 30, 30))
+
+    def test_ensure_single_target_review_png_crops_and_marks_target(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            tif = Path(td) / "chip.tif"
+            Image.new("RGB", (200, 200), (30, 30, 30)).save(tif, format="TIFF")
+            marker = ReviewTargetMarker("target_1", "T01", 20.0, 10.0, 8.0)
+
+            png = ensure_single_target_review_png(
+                tif,
+                marker,
+                chip_size_m=100.0,
+                min_output_px=128,
+            )
+
+            self.assertEqual(png.suffix, ".png")
+            self.assertIn(".target-T01-", png.name)
+            self.assertTrue(png.exists())
+            with Image.open(png) as img:
+                self.assertGreaterEqual(min(img.size), 128)
+                center = (img.size[0] // 2, img.size[1] // 2)
+                self.assertNotEqual(img.getpixel(center), (30, 30, 30))
 
 
 if __name__ == "__main__":
