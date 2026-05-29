@@ -226,8 +226,8 @@ def main() -> None:
             anchors=("anchor_id", "nunique"),
             mean_unique_dates=("n_unique_dates", "mean"),
             mean_unique_years=("n_unique_years", "mean"),
-            year_min=("year_min", lambda s: min(int(x) for x in s if x != "")),
-            year_max=("year_max", lambda s: max(int(x) for x in s if x != "")),
+            year_min=("year_min", lambda s: min((int(x) for x in s if x != ""), default=None)),
+            year_max=("year_max", lambda s: max((int(x) for x in s if x != ""), default=None)),
         )
         .reset_index()
     )

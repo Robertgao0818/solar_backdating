@@ -460,3 +460,61 @@ def test_runner_exception_falls_through_to_next_zoom(anchor, tmp_path: Path) -> 
     )
     assert result.status == "ok"
     assert result.actual_zoom == 19
+
+
+def test_manifest_zoom_is_requested_not_actual(anchor, tmp_path: Path, monkeypatch) -> None:
+    """The manifest `zoom` column records the REQUESTED zoom (ladder head),
+    which is distinct from `actual_zoom` whenever the ladder falls back.
+
+    Locks the fix that stopped `zoom` from being a dead alias of `actual_zoom`.
+    """
+    import csv as _csv
+    import sys as _sys
+
+    from scripts.temporal import gehi_download
+
+    # z=20 fails -> falls back to z=19, so requested(20) != actual(19).
+    plan = {
+        20: {"returncode": 2, "writes_file": False, "stderr": "no z=20"},
+        19: {"returncode": 0, "writes_file": True},
+    }
+    runner = _make_runner(plan, tmp_path)
+    # main() drives the default `run_gehi`; redirect it to the simulated runner.
+    monkeypatch.setattr(gehi_download, "run_gehi", runner)
+
+    anchors_csv = tmp_path / "anchors.csv"
+    with anchors_csv.open("w", newline="", encoding="utf-8") as fh:
+        writer = _csv.DictWriter(fh, fieldnames=list(anchor.keys()))
+        writer.writeheader()
+        writer.writerow(anchor)
+
+    candidates_csv = tmp_path / "candidates.csv"
+    with candidates_csv.open("w", newline="", encoding="utf-8") as fh:
+        writer = _csv.DictWriter(fh, fieldnames=["anchor_id", "capture_date", "version"])
+        writer.writeheader()
+        writer.writerow({"anchor_id": anchor["anchor_id"], "capture_date": "2015-08-30", "version": "277"})
+
+    manifest_csv = tmp_path / "manifest.csv"
+    raw_log = tmp_path / "raw.jsonl"
+    output_dir = tmp_path / "chips"
+
+    argv = [
+        "gehi_download.py",
+        "--anchors-csv", str(anchors_csv),
+        "--candidates-csv", str(candidates_csv),
+        "--output-dir", str(output_dir),
+        "--manifest", str(manifest_csv),
+        "--raw-log", str(raw_log),
+        "--zoom", "20,19",
+    ]
+    monkeypatch.setattr(_sys, "argv", argv)
+    gehi_download.main()
+
+    with manifest_csv.open("r", newline="", encoding="utf-8") as fh:
+        rows = list(_csv.DictReader(fh))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["zoom"] == "20", "manifest `zoom` must be the requested ladder head"
+    assert row["actual_zoom"] == "19", "manifest `actual_zoom` must be the served zoom"
+    assert row["zoom"] != row["actual_zoom"], "zoom (requested) must differ from actual_zoom on fallback"
+    assert row["requested_zoom_ladder"] == "20,19"

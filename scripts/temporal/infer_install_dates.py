@@ -209,13 +209,8 @@ def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path)
             return base
         latest_absent = max(absent_obs, key=lambda r: r.capture_date)
         start_d = parse_iso(latest_absent.capture_date)
-        gap_days = (census_mid_date - start_d).days
         base.latest_absent_date = latest_absent.capture_date
         base.earliest_present_date = ""
-        base.install_interval_start = latest_absent.capture_date
-        base.install_interval_end = census_mid_date.isoformat()
-        base.install_mid_estimate = census_mid_date.isoformat()
-        base.confidence = _confidence_for_census(gap_days)
         if start_d >= census_mid_date:
             # Post-hoc census-GT prior check: each anchor is from channel2_micro T1
             # GT — the census-period imagery is known to have PV. If the latest scan
@@ -232,6 +227,12 @@ def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path)
                 f">= census_mid_date {census_mid_date.isoformat()} contradicts census-GT prior "
                 f"(anchor is PV-positive at census per channel2_micro T1 GT). Needs human review."
             ).strip(" |")
+        else:
+            gap_days = (census_mid_date - start_d).days
+            base.install_interval_start = latest_absent.capture_date
+            base.install_interval_end = census_mid_date.isoformat()
+            base.install_mid_estimate = census_mid_date.isoformat()
+            base.confidence = _confidence_for_census(gap_days)
         return base
 
     if state.status == "done_already_present_before_geid_history":

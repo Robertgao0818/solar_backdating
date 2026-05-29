@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from scripts.validation import gemini_solar_image_review as gsir
 from scripts.validation.gemini_solar_image_review import (
     BATCH_PROMPT_TEMPLATE,
     BatchPick,
@@ -28,10 +29,15 @@ from scripts.validation.gemini_solar_image_review import (
     _build_matrix_prompt,
     _build_sequence_prompt,
     _identify_census_reference_chip,
+    build_agy_prompt,
+    main,
+    parse_args,
     parse_jsonl_lenient,
     parse_matrix_json_strict,
     parse_matrix_jsonl_lenient,
     parse_sequence_json_strict,
+    post_agy_print,
+    review_one,
     score_batch_with_fallback,
     score_single_target_sequence,
     score_target_date_matrix,
@@ -717,3 +723,167 @@ def test_score_target_date_matrix_strict_missing_cells_become_failed(
     obs = score_target_date_matrix(date_picks, targets, config=gemini_config, poster=poster)
     assert {o.decision_source for o in obs} == {"gemini_failed"}
     assert {o.error for o in obs} == {"missing_matrix_cell_after_two_attempts"}
+
+
+# --- agy (Antigravity CLI) backend ---------------------------------------------
+
+
+def _agy_images(tmp_path: Path, n: int = 2) -> list[Path]:
+    out: list[Path] = []
+    for i in range(1, n + 1):
+        chip = tmp_path / f"agy_chip_{i}.jpg"
+        chip.write_bytes(b"FAKE_JPEG" * 8)
+        out.append(chip)
+    return out
+
+
+def test_build_agy_prompt_lists_image_paths_in_order(tmp_path: Path) -> None:
+    images = _agy_images(tmp_path, 3)
+    prompt = build_agy_prompt("THE TASK INSTRUCTIONS", images)
+    # Each absolute image path appears as "Image N: <abs path>" in input order.
+    expected = [f"Image {i}: {p.resolve()}" for i, p in enumerate(images, start=1)]
+    lines = [ln for ln in prompt.splitlines() if ln in expected]
+    assert lines == expected
+    # The original task text is still present (appended after the listing).
+    assert "THE TASK INSTRUCTIONS" in prompt
+
+
+def test_post_agy_print_builds_cmd_with_extra_args_before_prompt(tmp_path: Path, monkeypatch) -> None:
+    images = _agy_images(tmp_path, 2)
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"pv_present": true, "confidence": 0.9, "quality_flag": "usable", "evidence": "x", "notes": ""}'
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):  # noqa: ANN001 - mimics subprocess.run signature
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return _Proc()
+
+    monkeypatch.setattr(gsir.subprocess, "run", fake_run)
+
+    raw = post_agy_print(
+        prompt="TASK",
+        image_paths=images,
+        timeout=30,
+        agy_bin="agy",
+        extra_args=("--model", "gemini-3-pro"),
+    )
+
+    cmd = captured["cmd"]
+    # Permission auto-approve flag present.
+    assert "--dangerously-skip-permissions" in cmd
+    # Parent dirs exposed via --add-dir.
+    assert "--add-dir" in cmd
+    # -p present, and the prompt is the FINAL argv element.
+    assert "-p" in cmd
+    assert cmd[-2] == "-p"
+    p_idx = cmd.index("-p")
+    # extra_args appear BEFORE -p.
+    assert "--model" in cmd[:p_idx]
+    assert "gemini-3-pro" in cmd[:p_idx]
+    assert cmd.index("--model") < p_idx
+    # The final argv element is the full agy prompt (with the image listing embedded).
+    full_prompt = cmd[-1]
+    assert "Image 1:" in full_prompt
+    assert "TASK" in full_prompt
+    # post_agy_print returns captured stdout for downstream parsing.
+    assert raw["agy_stdout"] == _Proc.stdout
+
+
+def test_review_one_agy_branch_returns_parsed_content(tmp_path: Path, monkeypatch) -> None:
+    images = _agy_images(tmp_path, 1)
+    stdout = '{"pv_present": false, "confidence": 0.7, "quality_flag": "usable", "evidence": "no panels", "notes": ""}'
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):  # noqa: ANN001
+        proc = _Proc()
+        proc.stdout = stdout
+        return proc
+
+    monkeypatch.setattr(gsir.subprocess, "run", fake_run)
+
+    record = review_one(
+        image_path=images[0],
+        reference_images=[],
+        base_url="",
+        api_key="",
+        model="ignored-for-agy",
+        api_format="agy",
+        native_path="/v1beta",
+        prompt="TASK",
+        max_tokens=512,
+        timeout=30,
+        agy_extra_args=("--flag",),
+    )
+
+    assert record["ok"] is True
+    assert record["api_format"] == "agy"
+    assert record["parsed"]["pv_present"] is False
+    assert record["response_text"] == stdout
+
+
+def test_agy_extra_args_cli_flows_into_command(tmp_path: Path, monkeypatch) -> None:
+    """--agy-extra-args from the CLI must reach the agy command, before -p."""
+    image = _agy_images(tmp_path, 1)[0]
+    out_path = tmp_path / "out.jsonl"
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"pv_present": true, "confidence": 0.9, "quality_flag": "usable", "evidence": "x", "notes": ""}'
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):  # noqa: ANN001
+        captured["cmd"] = cmd
+        return _Proc()
+
+    monkeypatch.setattr(gsir.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        gsir.sys,
+        "argv",
+        [
+            "prog",
+            "--api-format",
+            "agy",
+            "--agy-extra-args=--special-flag",
+            "--output",
+            str(out_path),
+            str(image),
+        ],
+    )
+
+    rc = main()
+    assert rc == 0
+
+    cmd = captured["cmd"]
+    assert "--special-flag" in cmd
+    p_idx = cmd.index("-p")
+    assert cmd.index("--special-flag") < p_idx
+
+
+def test_parse_args_collects_repeatable_agy_extra_args(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gsir.sys,
+        "argv",
+        ["prog", "--agy-extra-args=--foo", "--agy-extra-args=--bar", "img.jpg"],
+    )
+    ns = parse_args()
+    assert ns.agy_extra_args == ["--foo", "--bar"]
+
+
+def test_list_models_with_agy_raises_systemexit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gsir.sys,
+        "argv",
+        ["prog", "--api-format", "agy", "--list-models"],
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+    assert "not supported with api_format agy" in str(excinfo.value)

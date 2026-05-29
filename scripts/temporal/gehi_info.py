@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Mapping
@@ -44,6 +45,8 @@ FIELDS = [
     "all_capture_dates",
     "n_date_labels",
     "version_dedupe_key",
+    "all_versions",
+    "n_versions_at_date",
     "info_stdout_sha256",
     "gehi_command",
 ]
@@ -78,7 +81,22 @@ def fetch_vintages_for_anchor(
     ]
     if no_cache:
         cmd_args.append("--no-cache")
-    result = runner(cmd_args, executable=gehi_exe, timeout=timeout)
+    try:
+        result = runner(cmd_args, executable=gehi_exe, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        print(
+            f"[gehi_info] info timed out for anchor {anchor_id} after {timeout}s; "
+            f"skipping ({type(exc).__name__})",
+            file=sys.stderr,
+        )
+        return []
+    except Exception as exc:  # noqa: BLE001 - mirror download resilience, keep loop alive
+        print(
+            f"[gehi_info] info failed for anchor {anchor_id}: "
+            f"{type(exc).__name__}: {exc}; skipping",
+            file=sys.stderr,
+        )
+        return []
     assert_gehi_success(result)
     if raw_log_callback is not None:
         raw_log_callback(anchor_id, result)

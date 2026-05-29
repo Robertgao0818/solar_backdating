@@ -344,11 +344,19 @@ def build_chip_groups(
     chip_size_m: float,
     max_targets_per_chip: int,
     inventory_tag: str,
+    hard_max_targets_per_chip: int | None = None,
 ) -> list[ChipGroup]:
     if chip_size_m <= 0:
         raise ValueError("chip_size_m must be positive")
     if max_targets_per_chip <= 0:
         raise ValueError("max_targets_per_chip must be positive")
+    if hard_max_targets_per_chip is not None:
+        if hard_max_targets_per_chip <= 0:
+            raise ValueError("hard_max_targets_per_chip must be positive")
+        if max_targets_per_chip > hard_max_targets_per_chip:
+            raise ValueError(
+                "max_targets_per_chip must be <= hard_max_targets_per_chip"
+            )
 
     points = [target.centroid for target in targets]
     tree = STRtree(points)
@@ -422,6 +430,15 @@ def build_chip_groups(
                 pack_bounds=group_bounds,
             )
         )
+
+    if hard_max_targets_per_chip is not None:
+        oversized = [g for g in groups if len(g.member_indices) > hard_max_targets_per_chip]
+        if oversized:
+            chip_ids = ", ".join(g.chip_id for g in oversized[:20])
+            raise ValueError(
+                f"{len(oversized)} chip group(s) exceed hard_max_targets_per_chip="
+                f"{hard_max_targets_per_chip} (e.g. {chip_ids})"
+            )
 
     return groups
 
@@ -654,12 +671,16 @@ def main() -> None:
         inventory_tag=args.inventory_tag,
         pack_margin_m=args.pack_margin_m,
     )
-    groups = build_chip_groups(
-        targets,
-        chip_size_m=args.chip_size_m,
-        max_targets_per_chip=args.max_targets_per_chip,
-        inventory_tag=args.inventory_tag,
-    )
+    try:
+        groups = build_chip_groups(
+            targets,
+            chip_size_m=args.chip_size_m,
+            max_targets_per_chip=args.max_targets_per_chip,
+            inventory_tag=args.inventory_tag,
+            hard_max_targets_per_chip=args.hard_max_targets_per_chip,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     group_rows, target_rows = build_manifest_rows(
         targets,
         groups,

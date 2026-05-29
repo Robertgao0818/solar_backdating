@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Mapping
@@ -105,7 +106,24 @@ def fetch_availability_for_anchor(
         cmd_args.append("--complete")
     if no_cache:
         cmd_args.append("--no-cache")
-    result = runner(cmd_args, executable=gehi_exe, timeout=timeout)
+    try:
+        result = runner(cmd_args, executable=gehi_exe, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        # A hung anchor must not kill the whole run: degrade to no
+        # availability rows and let the caller continue with the next anchor.
+        print(
+            f"[gehi_availability] anchor {anchor_id} availability timed out "
+            f"after {timeout}s: {exc}",
+            file=sys.stderr,
+        )
+        return []
+    except Exception as exc:  # noqa: BLE001 - resilience: never abort the batch
+        print(
+            f"[gehi_availability] anchor {anchor_id} availability failed: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return []
     # GEHI v0.5.1 availability prints useful rows, then tries to enter an
     # interactive chooser and exits non-zero under subprocess pipes.
     assert_gehi_success(result, allow_availability_chooser_exit=True)

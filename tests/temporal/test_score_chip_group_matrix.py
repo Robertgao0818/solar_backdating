@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+import scripts.temporal.score_chip_group_matrix as scgm
 from scripts.temporal.score_chip_group_matrix import (
     ChipArtifact,
     ChipTarget,
@@ -196,3 +197,121 @@ def test_score_chip_group_matrices_flags_non_monotonic_target_series(tmp_path: P
 
     assert len(rows) == 3
     assert all("non_monotonic_requires_review" in str(row["notes"]) for row in rows)
+
+
+def _ok_scorer(date_picks, targets, **_kwargs):
+    out: list[GeminiMatrixObservation] = []
+    cell_index = 1
+    for pick in date_picks:
+        for target in targets:
+            out.append(
+                GeminiMatrixObservation(
+                    cell_index=cell_index,
+                    date_index=pick.date_index,
+                    capture_date=pick.capture_date,
+                    target_id=target.target_id,
+                    target_label=target.target_label,
+                    pv_present=True,
+                    confidence=0.9,
+                    quality_flag="usable",
+                    evidence="panels",
+                    notes="",
+                    decision_source="gemini_matrix",
+                )
+            )
+            cell_index += 1
+    return out
+
+
+def test_score_chip_group_matrices_degrades_on_corrupt_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupt/unreadable artifact image must not crash the batch."""
+
+    def raising_render(*_args, **_kwargs):
+        raise OSError("cannot identify image file: truncated TIFF")
+
+    monkeypatch.setattr(scgm, "ensure_target_review_png", raising_render)
+
+    rows = score_chip_group_matrices(
+        artifacts_by_chip={"chip_001": _artifacts(tmp_path, 2)},
+        targets_by_chip={"chip_001": _targets(2)},
+        config=_config(),
+        scorer=_ok_scorer,
+    )
+
+    assert len(rows) == 4
+    assert all(row["pv_present"] == "" for row in rows)
+    assert all(row["quality_flag"] == "unusable" for row in rows)
+    assert all(row["decision_source"] == "gemini_failed" for row in rows)
+    assert all("cannot identify image file" in str(row["gemini_error"]) for row in rows)
+    assert {row["anchor_id"] for row in rows} == {"target_01", "target_02"}
+
+
+def _chip(chip_id: str, target_id: str, target_label: str) -> ChipTarget:
+    return ChipTarget(
+        chip_id=chip_id,
+        target_id=target_id,
+        target_label=target_label,
+        target_index=1,
+        region_key="johannesburg",
+        grid_id="G0001",
+        offset_x_m=0.0,
+        offset_y_m=0.0,
+        search_radius_m=8.0,
+        chip_size_m=96.0,
+    )
+
+
+def _artifact(chip_id: str, path: Path) -> ChipArtifact:
+    _write_tif(path)
+    return ChipArtifact(
+        chip_id=chip_id,
+        capture_date="2020-01-01",
+        version="101",
+        path=path,
+        actual_zoom=20,
+        status="ok",
+    )
+
+
+def test_score_chip_group_matrices_degrades_on_scorer_exception_and_continues(
+    tmp_path: Path,
+) -> None:
+    """A scorer that raises for one chip group must degrade that group and keep
+    scoring the remaining chip groups in the batch."""
+    seen_chips: list[str] = []
+
+    def flaky_scorer(date_picks, targets, **_kwargs):
+        chip_label = targets[0].target_label
+        seen_chips.append(chip_label)
+        if chip_label == "T01":
+            raise RuntimeError("matrix scorer blew up")
+        return _ok_scorer(date_picks, targets)
+
+    # chip_ids are scored in sorted order: chip_a (raises) then chip_b (ok).
+    rows = score_chip_group_matrices(
+        artifacts_by_chip={
+            "chip_a": [_artifact("chip_a", tmp_path / "a.tif")],
+            "chip_b": [_artifact("chip_b", tmp_path / "b.tif")],
+        },
+        targets_by_chip={
+            "chip_a": [_chip("chip_a", "target_a01", "T01")],
+            "chip_b": [_chip("chip_b", "target_b01", "T02")],
+        },
+        config=_config(),
+        scorer=flaky_scorer,
+    )
+
+    assert seen_chips == ["T01", "T02"]
+    by_anchor = {row["anchor_id"]: row for row in rows}
+    assert set(by_anchor) == {"target_a01", "target_b01"}
+    # Failed group degraded to unusable.
+    assert by_anchor["target_a01"]["quality_flag"] == "unusable"
+    assert by_anchor["target_a01"]["pv_present"] == ""
+    assert by_anchor["target_a01"]["decision_source"] == "gemini_failed"
+    assert "matrix scorer blew up" in str(by_anchor["target_a01"]["gemini_error"])
+    # Healthy group still scored.
+    assert by_anchor["target_b01"]["quality_flag"] == "usable"
+    assert by_anchor["target_b01"]["pv_present"] == "1"
+    assert by_anchor["target_b01"]["decision_source"] == "gemini_matrix"

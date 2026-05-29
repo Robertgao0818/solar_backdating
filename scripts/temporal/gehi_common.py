@@ -598,9 +598,10 @@ def ensure_single_target_review_png(
 def assert_gehi_success(result: GehiRunResult, *, allow_availability_chooser_exit: bool = False) -> None:
     if result.returncode == 0:
         return
-    if allow_availability_chooser_exit and parse_availability_output(result.stdout):
-        if "Cannot read keys" in result.stdout or "Cannot read keys" in result.stderr:
-            return
+    if allow_availability_chooser_exit and (
+        "Cannot read keys" in result.stdout or "Cannot read keys" in result.stderr
+    ):
+        return
     raise RuntimeError(
         f"GEHistoricalImagery failed with return code {result.returncode}: "
         f"{result.stderr[:1000] or result.stdout[:1000]}"

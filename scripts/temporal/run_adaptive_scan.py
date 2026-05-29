@@ -380,7 +380,8 @@ def execute_round_real(
             obs_by_original = _score_batch_picks_chunked(
                 score_picks,
                 batch_to_original,
-                config=gemini_config,
+                config=config,
+                gemini_config=gemini_config,
                 audit_writer=_audit,
                 census_mid_date_iso=census_mid_date_iso,
             )
@@ -547,6 +548,8 @@ def run_one_anchor(
                 census_mid_date_iso=census_mid_date_iso,
             )
         state.rounds.append(rnd)
+        # Informational checkpoint metadata only: resume never reads next_action,
+        # it re-derives the decision deterministically via decide_next_action().
         state.next_action = "decide_next_action"
         save_scan_state(state, state_path)
     raise RuntimeError(f"Scan loop exceeded {max_iter} rounds for {anchor_id}")
@@ -660,6 +663,22 @@ def _resolve_census_mid_date(anchor: dict[str, str], override: str | None) -> st
     return layer.census_imagery_mid_date
 
 
+def _exit_code_for_states(states: Iterable[ScanState]) -> int:
+    """Return a process exit code: nonzero if any anchor failed.
+
+    Continue-on-error keeps the batch running, but an anchor whose status starts
+    with ``done_ambiguous_orchestrator_error`` is a genuine failure that must
+    surface as a nonzero exit so callers / CI do not treat a partial run as
+    success.
+    """
+    failed = [
+        s.anchor_id
+        for s in states
+        if s.status.startswith("done_ambiguous_orchestrator_error")
+    ]
+    return 1 if failed else 0
+
+
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
@@ -703,6 +722,21 @@ def main() -> None:
             print(f"{marker} {anchor_id}: status={state.status} rounds={len(state.rounds)}")
         states.append(state)
     summarize(states)
+
+    # Continue-on-error means failed anchors were recorded and skipped, but a
+    # partial batch must not exit 0. Surface failures and exit nonzero.
+    exit_code = _exit_code_for_states(states)
+    if exit_code != 0:
+        failed_ids = sorted(
+            s.anchor_id
+            for s in states
+            if s.status.startswith("done_ambiguous_orchestrator_error")
+        )
+        print(
+            f"ERROR: {len(failed_ids)} anchor(s) failed: {', '.join(failed_ids)}",
+            file=sys.stderr,
+        )
+        raise SystemExit(exit_code)
 
 
 def _record_orchestrator_failure(

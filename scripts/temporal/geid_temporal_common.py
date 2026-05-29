@@ -10,6 +10,10 @@ from typing import Mapping, Sequence
 TRUE_VALUES = {"1", "true", "t", "yes", "y", "pv", "present"}
 FALSE_VALUES = {"0", "false", "f", "no", "n", "non_pv", "non-pv", "absent"}
 DATE_COLUMNS = ("capture_date", "actual_capture_date", "dominant_actual_date", "requested_date", "date")
+# Quality flags for which a chip is deliberately unscored: the chip is
+# unusable, ambiguous, or missing, so pv_present must stay blank (None)
+# rather than manufacture a false absence/presence from an untrusted score.
+BLANK_KEEPING_FLAGS = frozenset({"unusable", "unsure", "missing_chip"})
 
 
 @dataclass(frozen=True)
@@ -147,13 +151,24 @@ def observation_from_row(row: Mapping[str, object], *, row_idx: int | None = Non
         return None
     requested = parse_iso_date(row.get("requested_date"))
     present, score = presence_from_row(row, threshold=threshold)
+    quality_flag = str(row.get("quality_flag", "ok") or "ok")
+    # No-false-absences contract: blank-keeping flags mark unscored chips, so
+    # pv_present must stay None. A non-None verdict here would fabricate a
+    # presence/absence from an untrusted score.
+    if quality_flag in BLANK_KEEPING_FLAGS and present is not None:
+        raise ValueError(
+            "no-false-absences contract violated: quality_flag "
+            f"{quality_flag!r} is blank-keeping but pv_present={present!r} "
+            f"(pv_score={score!r}, anchor_id={anchor_id!r}); pv_present must "
+            f"stay None for {sorted(BLANK_KEEPING_FLAGS)}"
+        )
     return PresenceObservation(
         anchor_id=anchor_id,
         capture_date=capture,
         requested_date=requested,
         pv_present=present,
         pv_score=score,
-        quality_flag=str(row.get("quality_flag", "ok") or "ok"),
+        quality_flag=quality_flag,
         source_row=row_idx,
     )
 
@@ -355,7 +370,19 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
-def write_csv_rows(path: Path, rows: Sequence[Mapping[str, object]], fieldnames: Sequence[str]) -> None:
+def write_csv_rows(path: Path, rows: Sequence[Mapping[str, object]], fieldnames: Sequence[str], *, strict: bool = False) -> None:
+    if strict:
+        declared = set(fieldnames)
+        for idx, row in enumerate(rows):
+            keys = set(row.keys())
+            extra = keys - declared
+            missing = declared - keys
+            if extra or missing:
+                raise ValueError(
+                    f"write_csv_rows strict mode: row {idx} key mismatch vs "
+                    f"fieldnames; extra keys={sorted(extra)}, "
+                    f"missing keys={sorted(missing)}"
+                )
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)

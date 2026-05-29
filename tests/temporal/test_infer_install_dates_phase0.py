@@ -190,6 +190,42 @@ def test_done_installed_during_census_medium_when_old_absent() -> None:
     assert interval.confidence == "medium"
 
 
+def test_done_installed_during_census_no_absent_observations() -> None:
+    """Defensive: status says installed-during-census but no usable absent obs."""
+    state = _state_with(
+        "done_installed_during_census",
+        [_result("2024-03-01", present=True)],
+    )
+    interval = infer_one(state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"))
+    assert interval.status == "done_installed_during_census"
+    assert interval.confidence == "low"
+    assert "inconsistent" in interval.notes
+    assert interval.install_interval_start == ""
+    assert interval.install_interval_end == ""
+    assert interval.install_mid_estimate == ""
+    assert interval.latest_absent_date == ""
+
+
+def test_done_installed_during_census_marker_missed_pv_low_with_blank_interval() -> None:
+    """Regression for #14a: with the refactor that only computes
+    _confidence_for_census in the start_d < census branch, the
+    marker_missed_pv (start_d >= census) path must still yield confidence=low
+    and a blank interval."""
+    state = _state_with(
+        "done_installed_during_census",
+        [_result("2024-06-30", present=False)],
+    )
+    interval = infer_one(state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"))
+    assert interval.status == "done_ambiguous_marker_missed_pv"
+    assert interval.confidence == "low"
+    assert interval.install_interval_start == ""
+    assert interval.install_interval_end == ""
+    assert interval.install_mid_estimate == ""
+    assert interval.latest_absent_date == "2024-06-30"
+    assert interval.earliest_present_date == ""
+    assert "marker_missed_pv" in interval.notes
+
+
 def test_done_already_present_open_lower_bound() -> None:
     state = _state_with(
         "done_already_present_before_geid_history",
@@ -207,6 +243,21 @@ def test_done_already_present_open_lower_bound() -> None:
     assert interval.install_interval_end == "2009-04-15"
     assert interval.install_mid_estimate == ""
     assert interval.confidence == "low"
+
+
+def test_done_already_present_no_usable_observations() -> None:
+    """Defensive: already-present status but every observation is unusable."""
+    state = _state_with(
+        "done_already_present_before_geid_history",
+        [_result("2009-04-15", present=None, quality="unusable", source="gemini_failed")],
+    )
+    interval = infer_one(state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"))
+    assert interval.status == "done_already_present_before_geid_history"
+    assert interval.confidence == "low"
+    assert interval.earliest_present_date == ""
+    assert interval.install_interval_start == ""
+    assert interval.install_interval_end == ""
+    assert interval.install_mid_estimate == ""
 
 
 def test_done_ambiguous_nonmonotonic_no_interval() -> None:

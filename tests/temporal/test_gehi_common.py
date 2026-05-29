@@ -2,9 +2,11 @@ import unittest
 from pathlib import Path
 
 from scripts.temporal.gehi_common import (
+    GehiRunResult,
     ReviewTargetMarker,
     anchor_bbox_args,
     anchor_location_arg,
+    assert_gehi_success,
     decode_gehi_output,
     dedupe_info_rows_by_date,
     dedupe_info_rows_by_version,  # backward-compat alias
@@ -153,6 +155,45 @@ class GehiCommonTests(unittest.TestCase):
                 self.assertGreaterEqual(min(img.size), 128)
                 center = (img.size[0] // 2, img.size[1] // 2)
                 self.assertNotEqual(img.getpixel(center), (30, 30, 30))
+
+    @staticmethod
+    def _run_result(*, returncode: int = 0, stdout: str = "", stderr: str = "") -> GehiRunResult:
+        return GehiRunResult(args=("availability",), returncode=returncode, stdout=stdout, stderr=stderr)
+
+    def test_assert_gehi_success_chooser_exit_with_dates(self):
+        """Non-zero chooser exit with parsed dates is suppressed when allowed."""
+        result = self._run_result(
+            returncode=1,
+            stdout="[0]  2020/01/01  [Esc]  Exit\nCannot read keys",
+        )
+        # Must not raise.
+        assert_gehi_success(result, allow_availability_chooser_exit=True)
+
+    def test_assert_gehi_success_chooser_exit_without_dates(self):
+        """Non-zero chooser exit with NO parsed dates (bbox with no coverage) must
+        still be suppressed when allowed — the AND-logic bug crashed here."""
+        # Message on stdout.
+        result_stdout = self._run_result(returncode=1, stdout="Cannot read keys")
+        assert_gehi_success(result_stdout, allow_availability_chooser_exit=True)
+        # Message on stderr.
+        result_stderr = self._run_result(returncode=1, stderr="Cannot read keys")
+        assert_gehi_success(result_stderr, allow_availability_chooser_exit=True)
+
+    def test_assert_gehi_success_genuine_failure_raises(self):
+        """Non-zero exit without the chooser message must raise even when allowed."""
+        with self.assertRaisesRegex(RuntimeError, "GEHistoricalImagery failed"):
+            assert_gehi_success(
+                self._run_result(returncode=1, stderr="boom"),
+                allow_availability_chooser_exit=True,
+            )
+
+    def test_assert_gehi_success_chooser_message_but_flag_false_raises(self):
+        """'Cannot read keys' present but suppression disabled must raise."""
+        with self.assertRaisesRegex(RuntimeError, "GEHistoricalImagery failed"):
+            assert_gehi_success(
+                self._run_result(returncode=1, stdout="Cannot read keys"),
+                allow_availability_chooser_exit=False,
+            )
 
 
 if __name__ == "__main__":

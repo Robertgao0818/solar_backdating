@@ -105,6 +105,89 @@ class TemporalCommonTests(unittest.TestCase):
             rows = read_csv_rows(path)
             self.assertEqual(rows, [{"a": "1", "b": "x"}])
 
+    def test_write_csv_rows_default_drops_extra_and_blanks_missing(self):
+        # Default (non-strict) mode: extra keys dropped, missing keys -> "".
+        # Locks the historical behavior so the strict-mode addition stays opt-in.
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rows.csv"
+            write_csv_rows(
+                path,
+                [
+                    {"a": "1", "b": "2"},          # exact
+                    {"a": "x", "extra": "DROP"},   # extra key 'extra', missing 'b'
+                ],
+                ["a", "b"],
+            )
+            with path.open("r", newline="", encoding="utf-8") as fh:
+                rows = list(csv.DictReader(fh))
+            self.assertEqual(rows, [{"a": "1", "b": "2"}, {"a": "x", "b": ""}])
+
+    def test_write_csv_rows_strict_raises_on_extra_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rows.csv"
+            with self.assertRaises(ValueError) as ctx:
+                write_csv_rows(path, [{"a": "1", "b": "2", "extra": "boom"}], ["a", "b"], strict=True)
+            self.assertIn("extra", str(ctx.exception))
+
+    def test_write_csv_rows_strict_raises_on_missing_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rows.csv"
+            with self.assertRaises(ValueError) as ctx:
+                write_csv_rows(path, [{"a": "1", "b": "2"}], ["a", "b", "c"], strict=True)
+            self.assertIn("c", str(ctx.exception))
+
+    def test_write_csv_rows_strict_ok_when_keys_match(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rows.csv"
+            write_csv_rows(path, [{"a": "1", "b": "2"}, {"b": "4", "a": "3"}], ["a", "b"], strict=True)
+            rows = read_csv_rows(path)
+            self.assertEqual(rows, [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}])
+
+    def test_observation_from_row_blank_flag_with_thresholding_score_raises(self):
+        # A blank-keeping quality_flag carrying a score that thresholds to a
+        # non-None pv_present must raise (no-false-absences contract, #8).
+        for flag in ("unusable", "unsure", "missing_chip"):
+            for score in ("0.99", "0.01"):  # would threshold to True / False
+                with self.subTest(flag=flag, score=score):
+                    with self.assertRaises(ValueError) as ctx:
+                        observation_from_row(
+                            {
+                                "anchor_id": "a1",
+                                "capture_date": "2020-06-15",
+                                "pv_score": score,
+                                "quality_flag": flag,
+                            }
+                        )
+                    self.assertIn(flag, str(ctx.exception))
+
+    def test_observation_from_row_usable_row_does_not_raise(self):
+        obs = observation_from_row(
+            {
+                "anchor_id": "a1",
+                "capture_date": "2020-06-15",
+                "pv_score": "0.92",
+                "quality_flag": "ok",
+            }
+        )
+        self.assertIsNotNone(obs)
+        assert obs is not None
+        self.assertTrue(obs.pv_present)
+        self.assertEqual(obs.quality_flag, "ok")
+
+    def test_observation_from_row_blank_flag_without_score_is_ok(self):
+        # Blank-keeping flag with no score keeps pv_present=None and does not raise.
+        obs = observation_from_row(
+            {
+                "anchor_id": "a1",
+                "capture_date": "2020-06-15",
+                "pv_score": "",
+                "quality_flag": "missing_chip",
+            }
+        )
+        self.assertIsNotNone(obs)
+        assert obs is not None
+        self.assertIsNone(obs.pv_present)
+
 
 if __name__ == "__main__":
     unittest.main()

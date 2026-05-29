@@ -8,6 +8,7 @@ import pytest
 from scripts.temporal.score_chip_group_matrix import ChipArtifact, ChipTarget
 from scripts.temporal.score_target_sequence import (
     ReviewPng,
+    _pending_result,
     render_review_png_manifest,
     score_target_sequences,
 )
@@ -166,3 +167,47 @@ def test_render_review_png_manifest_creates_target_centered_png(tmp_path: Path) 
     review_png = Path(str(rows[0]["review_png_path"]))
     assert review_png.exists()
     assert ".target-T01-" in review_png.name
+
+
+# Documented consistency_flag enum (see gemini_solar_image_review.py: the
+# sequence scorer only ever emits one of these four temporal-monotonicity
+# tokens). Operational statuses (e.g. sequence_pending_missing_review_png)
+# belong in quality_flag, never here.
+CONSISTENCY_ENUM = {
+    "monotonic",
+    "monotonic_with_unknown",
+    "non_monotonic_requires_review",
+    "sequence_failed",
+}
+
+
+def test_pending_result_consistency_and_quality_flags():
+    """A pending result maps to monotonic_with_unknown consistency while the
+    operational reason stays in quality_flag, and every observation is
+    pv_present=None (unknown)."""
+    operational_flag = "sequence_pending_missing_review_png"
+    res = _pending_result(
+        ["2019-03-01", "2022-09-01"],
+        quality_flag=operational_flag,
+        notes="missing review PNG for dates: 2019-03-01,2022-09-01",
+    )
+    # consistency_flag is the temporal-monotonicity outcome (all-unknown is
+    # trivially monotonic), not the operational status.
+    assert res.consistency_flag == "monotonic_with_unknown"
+    assert res.consistency_flag != operational_flag
+    # quality_flag retains the operational status passed in.
+    assert res.quality_flag == operational_flag
+    # All observations have an unknown PV state.
+    assert res.observations
+    assert all(obs.pv_present is None for obs in res.observations)
+
+
+def test_pending_result_consistency_flag_in_documented_enum():
+    """The emitted consistency_flag must be a member of the documented
+    consistency enum (operational states do not belong here)."""
+    res = _pending_result(
+        ["2020-01-01"],
+        quality_flag="sequence_pending_missing_review_png",
+        notes="missing review PNG for dates: 2020-01-01",
+    )
+    assert res.consistency_flag in CONSISTENCY_ENUM

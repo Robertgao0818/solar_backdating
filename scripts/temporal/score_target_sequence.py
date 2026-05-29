@@ -450,7 +450,7 @@ def _pending_result(dates: Sequence[str], *, quality_flag: str, notes: str) -> G
         first_present_date=None,
         first_present_date_index=None,
         confidence=None,
-        consistency_flag=quality_flag,
+        consistency_flag="monotonic_with_unknown",
         quality_flag=quality_flag,
         review_notes=notes,
         observations=[

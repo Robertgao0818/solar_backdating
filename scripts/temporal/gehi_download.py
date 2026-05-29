@@ -133,9 +133,10 @@ def read_candidate_rows(path: Path) -> list[dict[str, str]]:
 def expand_candidate_dates(row: Mapping[str, str]) -> list[dict[str, str]]:
     """Return concrete download rows from a candidate row.
 
-    `gehi_info.py` dedupes catalog rows by `(anchor_id, version)` but preserves
-    all GEHI date labels. Downloading is still date-specific, especially for
-    smoke regression rows such as 2015-08-30.
+    `gehi_info.py` dedupes catalog rows by `(anchor_id, capture_date)`,
+    preserving distinct capture dates within a shared version. Downloading is
+    still date-specific, especially for smoke regression rows such as
+    2015-08-30.
     """
     all_dates = [d for d in str(row.get("all_capture_dates", "")).split(";") if d]
     if not all_dates:
@@ -442,7 +443,7 @@ def main() -> None:
                     "region_key": anchor.get("region_key", row.get("region_key", "")),
                     "grid_id": anchor.get("grid_id", row.get("grid_id", "")),
                     "provider": args.provider,
-                    "zoom": outcome.actual_zoom if outcome.actual_zoom is not None else "",
+                    "zoom": outcome.requested_zoom_ladder[0] if outcome.requested_zoom_ladder else "",
                     "actual_zoom": outcome.actual_zoom if outcome.actual_zoom is not None else "",
                     "requested_zoom_ladder": ",".join(str(z) for z in outcome.requested_zoom_ladder),
                     "capture_date": row["capture_date"],

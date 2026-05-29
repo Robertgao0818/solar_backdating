@@ -43,6 +43,7 @@ from scripts.validation.gemini_solar_image_review import (
     GeminiMatrixObservation,
     MatrixDatePick,
     MatrixTarget,
+    _failed_matrix_observation,
     env_value,
     load_env_file,
     score_target_date_matrix,
@@ -322,6 +323,54 @@ def _audit_writer_for(
     return _write
 
 
+def _failed_chunk_rows(
+    *,
+    chip_id: str,
+    target_chunk: Sequence[ChipTarget],
+    artifact_chunk: Sequence[ChipArtifact],
+    review_png_by_date_index: Mapping[int, Path],
+    error: str,
+) -> list[dict[str, object]]:
+    """Emit unusable presence rows for every (date, target) cell in a chunk.
+
+    Mirrors the graceful-degradation pattern in score_target_sequence.py
+    (render_status=failed) and run_adaptive_scan.py (gemini_failed/unusable
+    RoundResult): when ensure_target_review_png or the scorer raises, the whole
+    chip-group batch must keep going. Each cell becomes a failed observation
+    (pv_present=None, quality_flag=unusable, gemini_error carrying str(exc)),
+    kept in the exact MATRIX_PRESENCE_FIELDS shape via _presence_row.
+    """
+    rows: list[dict[str, object]] = []
+    cell_index = 1
+    for local_idx, artifact in enumerate(artifact_chunk, start=1):
+        review_png = review_png_by_date_index.get(local_idx, artifact.path)
+        date_pick = MatrixDatePick(
+            date_index=local_idx,
+            chip_path=review_png,
+            capture_date=artifact.capture_date,
+            version=artifact.version,
+            actual_zoom=artifact.actual_zoom,
+        )
+        for target in target_chunk:
+            obs = _failed_matrix_observation(
+                cell_index=cell_index,
+                date_pick=date_pick,
+                target=target.matrix_target,
+                error=error,
+            )
+            rows.append(
+                _presence_row(
+                    chip_id=chip_id,
+                    target=target,
+                    artifact=artifact,
+                    review_png=review_png,
+                    obs=obs,
+                )
+            )
+            cell_index += 1
+    return rows
+
+
 def score_chip_group_matrices(
     *,
     artifacts_by_chip: Mapping[str, Sequence[ChipArtifact]],
@@ -370,38 +419,51 @@ def score_chip_group_matrices(
                 artifact_by_date_index: dict[int, ChipArtifact] = {}
                 markers = [target.review_marker for target in target_chunk]
                 chip_size_m = target_chunk[0].chip_size_m
-                for local_idx, artifact in enumerate(artifact_chunk, start=1):
-                    review_png = ensure_target_review_png(
-                        artifact.path,
-                        markers,
-                        chip_size_m=chip_size_m,
+                try:
+                    for local_idx, artifact in enumerate(artifact_chunk, start=1):
+                        review_png = ensure_target_review_png(
+                            artifact.path,
+                            markers,
+                            chip_size_m=chip_size_m,
+                        )
+                        review_png_by_date_index[local_idx] = review_png
+                        artifact_by_date_index[local_idx] = artifact
+                        date_picks.append(
+                            MatrixDatePick(
+                                date_index=local_idx,
+                                chip_path=review_png,
+                                capture_date=artifact.capture_date,
+                                version=artifact.version,
+                                actual_zoom=artifact.actual_zoom,
+                            )
+                        )
+                    observations = scorer(
+                        date_picks,
+                        matrix_targets,
+                        config=config,
+                        audit_writer=_audit_writer_for(
+                            audit_dir,
+                            chip_id=chip_id,
+                            date_chunk_index=date_chunk_index,
+                            target_chunk_index=target_chunk_index,
+                        ),
+                        max_dates=max_dates,
+                        max_targets=max_targets,
+                        hard_max_targets=hard_max_targets,
+                        hard_max_cells=hard_max_cells,
                     )
-                    review_png_by_date_index[local_idx] = review_png
-                    artifact_by_date_index[local_idx] = artifact
-                    date_picks.append(
-                        MatrixDatePick(
-                            date_index=local_idx,
-                            chip_path=review_png,
-                            capture_date=artifact.capture_date,
-                            version=artifact.version,
-                            actual_zoom=artifact.actual_zoom,
+                except Exception as exc:  # noqa: BLE001 - degrade one chunk, keep the batch going.
+                    error = f"{type(exc).__name__}: {exc}"
+                    rows.extend(
+                        _failed_chunk_rows(
+                            chip_id=chip_id,
+                            target_chunk=target_chunk,
+                            artifact_chunk=artifact_chunk,
+                            review_png_by_date_index=review_png_by_date_index,
+                            error=error,
                         )
                     )
-                observations = scorer(
-                    date_picks,
-                    matrix_targets,
-                    config=config,
-                    audit_writer=_audit_writer_for(
-                        audit_dir,
-                        chip_id=chip_id,
-                        date_chunk_index=date_chunk_index,
-                        target_chunk_index=target_chunk_index,
-                    ),
-                    max_dates=max_dates,
-                    max_targets=max_targets,
-                    hard_max_targets=hard_max_targets,
-                    hard_max_cells=hard_max_cells,
-                )
+                    continue
                 for obs in observations:
                     target = target_lookup[obs.target_label]
                     artifact = artifact_by_date_index[obs.date_index]

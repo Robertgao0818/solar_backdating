@@ -14,6 +14,9 @@ import json
 import mimetypes
 import os
 import re
+import shlex
+import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -40,7 +43,11 @@ def _resolve_default_env_file() -> Path:
 
 DEFAULT_ENV_FILE = _resolve_default_env_file()
 DEFAULT_TIMEOUT_SEC = 120
-API_FORMATS = {"openai", "native"}
+DEFAULT_AGY_BIN = "agy"
+# "agy" = Antigravity CLI print-mode backend: a first-party, subscription-quota
+# transport that reads chips via the agent's view_file tool instead of inline
+# image bytes. See post_agy_print for the (finicky) invocation contract.
+API_FORMATS = {"openai", "native", "agy"}
 
 DEFAULT_PROMPT = """You are reviewing high-resolution aerial or satellite image chips for rooftop solar PV.
 
@@ -397,6 +404,100 @@ def native_response_text(response_json: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
+def build_agy_prompt(prompt: str, image_paths: list[Path]) -> str:
+    """Embed image file paths into the prompt for the agy (Antigravity CLI) backend.
+
+    Unlike the HTTP backends, agy does not accept inline image bytes — its agent
+    reads local files with the built-in ``view_file`` tool. We therefore list the
+    absolute image paths in input order and instruct the agent to view each one
+    before answering, so ``Image N`` lines up with input index ``N`` exactly as the
+    batch / matrix prompts already expect.
+    """
+    if not image_paths:
+        return prompt
+    header = [
+        "You have a `view_file` tool that reads local image files (PNG/JPG/TIFF).",
+        "Before answering, use it to view EACH image listed below, in the given order.",
+        "Image N corresponds to input index N referenced in the task instructions below.",
+        "",
+    ]
+    listing = [f"Image {i}: {path.resolve()}" for i, path in enumerate(image_paths, start=1)]
+    return "\n".join(header + listing + ["", prompt])
+
+
+def post_agy_print(
+    *,
+    prompt: str,
+    image_paths: list[Path],
+    timeout: int,
+    agy_bin: str = DEFAULT_AGY_BIN,
+    extra_args: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Run one Antigravity CLI (``agy``) print-mode call and capture its stdout.
+
+    Invocation contract (verified 2026-05-29): every flag MUST precede ``-p``, and
+    the prompt MUST be the single argv element immediately after ``-p``. ``-p`` is a
+    value flag, so anything placed between it and the prompt is swallowed (the agent
+    then answers about that token instead of the task). Images are auto-approved with
+    ``--dangerously-skip-permissions`` and their parent directories are exposed to the
+    agent's ``view_file`` tool via ``--add-dir`` so paths outside cwd are reachable.
+
+    ``model`` / ``max_tokens`` / ``temperature`` are NOT controllable here — the
+    Antigravity agent routes to its own backing model. Output is the agent's final
+    text (already the bare JSON when the prompt asks for it); callers parse it with
+    ``extract_json_object`` / ``parse_jsonl_lenient`` just like the HTTP backends.
+    """
+    for path in image_paths:
+        if not path.exists():
+            raise FileNotFoundError(path)
+
+    full_prompt = build_agy_prompt(prompt, image_paths)
+    binary = shutil.which(agy_bin) or agy_bin
+
+    add_dirs: list[str] = []
+    seen: set[str] = set()
+    for path in image_paths:
+        parent = str(path.resolve().parent)
+        if parent not in seen:
+            seen.add(parent)
+            add_dirs.append(parent)
+
+    cmd: list[str] = [binary, "--dangerously-skip-permissions"]
+    for directory in add_dirs:
+        cmd += ["--add-dir", directory]
+    cmd += list(extra_args)
+    cmd += ["-p", full_prompt]  # prompt MUST stay the final argv element
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=(add_dirs[0] if add_dirs else None),
+        )
+    except FileNotFoundError as exc:  # agy not on PATH
+        raise RuntimeError(f"agy binary not found: {agy_bin!r}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"agy print mode timed out after {timeout}s") from exc
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[:2000]
+        raise RuntimeError(f"agy exited {proc.returncode}: {detail}")
+
+    return {
+        "agy_stdout": proc.stdout,
+        "agy_stderr": proc.stderr,
+        "agy_returncode": proc.returncode,
+        # Redact the (large) prompt from the audit echo; stdout is captured above.
+        "agy_cmd": cmd[:-1] + [f"<prompt {len(full_prompt)} chars>"],
+    }
+
+
+def agy_response_text(response_json: dict[str, Any]) -> str:
+    return (response_json.get("agy_stdout") or "").strip()
+
+
 @dataclass
 class BatchPick:
     """A single chip to score in a batch call. Audit fields are not sent to Gemini."""
@@ -497,6 +598,10 @@ class GeminiClientConfig:
     max_tokens_per_chip: int = 600
     timeout: int = DEFAULT_TIMEOUT_SEC
     matrix_json_mode: bool = True
+    # api_format="agy" only: Antigravity CLI binary + extra flags (inserted before -p).
+    # base_url / api_key / model are ignored for the agy backend.
+    agy_bin: str = DEFAULT_AGY_BIN
+    agy_extra_args: tuple[str, ...] = ()
 
 
 def parse_jsonl_lenient(text: str, expected_count: int) -> tuple[list[dict[str, Any]], list[int]]:
@@ -1054,7 +1159,26 @@ def _call_gemini(
     response_schema: dict[str, Any] | None = None,
     poster: Callable[..., dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Call Gemini via native or openai format. Returns (response_text, raw_response_json)."""
+    """Call Gemini via agy / native / openai format. Returns (response_text, raw_response_json)."""
+    if config.api_format == "agy":
+        if poster is None:
+            raw = post_agy_print(
+                prompt=prompt,
+                image_paths=image_paths,
+                timeout=config.timeout,
+                agy_bin=config.agy_bin,
+                extra_args=config.agy_extra_args,
+            )
+        else:
+            raw = poster(
+                api_format="agy",
+                prompt=prompt,
+                image_paths=image_paths,
+                timeout=config.timeout,
+                agy_bin=config.agy_bin,
+                extra_args=config.agy_extra_args,
+            )
+        return agy_response_text(raw), raw
     if config.api_format == "native":
         if poster is None:
             raw = post_native_generate_content(
@@ -1632,6 +1756,8 @@ def review_one(
     prompt: str,
     max_tokens: int,
     timeout: int,
+    agy_bin: str = DEFAULT_AGY_BIN,
+    agy_extra_args: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     started = time.time()
     image_paths = [*reference_images, image_path]
@@ -1643,7 +1769,16 @@ def review_one(
         "ok": False,
     }
     try:
-        if api_format == "native":
+        if api_format == "agy":
+            raw = post_agy_print(
+                prompt=prompt,
+                image_paths=image_paths,
+                timeout=timeout,
+                agy_bin=agy_bin,
+                extra_args=agy_extra_args,
+            )
+            content = agy_response_text(raw)
+        elif api_format == "native":
             raw = post_native_generate_content(
                 base_url=base_url,
                 native_path=native_path,
@@ -1739,6 +1874,16 @@ def parse_args() -> argparse.Namespace:
         "--native-path",
         help="Native Gemini path under the base URL. Defaults to GEMINI_NATIVE_PATH or /v1beta.",
     )
+    parser.add_argument(
+        "--agy-bin",
+        help="Antigravity CLI binary for --api-format agy. Defaults to GEMINI_AGY_BIN or 'agy'.",
+    )
+    parser.add_argument(
+        "--agy-extra-args",
+        action="append",
+        default=[],
+        help="Extra flags passed to the agy CLI before -p (repeatable).",
+    )
     parser.add_argument("--prompt", help="Inline prompt override.")
     parser.add_argument("--prompt-file", type=Path, help="Prompt file override.")
     parser.add_argument("--max-tokens", type=int, default=1024)
@@ -1757,14 +1902,20 @@ def main() -> int:
     model = args.model or env_value(env_file_values, "GEMINI_MODEL", "gemini-3-flash-preview")
     api_format = args.api_format or env_value(env_file_values, "GEMINI_API_FORMAT", "native")
     native_path = args.native_path or env_value(env_file_values, "GEMINI_NATIVE_PATH", "/v1beta")
-    if not base_url:
-        raise SystemExit("Missing GOOGLE_GEMINI_BASE_URL or --base-url")
-    if not api_key:
-        raise SystemExit("Missing GEMINI_API_KEY or --api-key")
+    agy_bin = args.agy_bin or env_value(env_file_values, "GEMINI_AGY_BIN", DEFAULT_AGY_BIN)
+    agy_extra_args = tuple(args.agy_extra_args or shlex.split(env_value(env_file_values, "GEMINI_AGY_EXTRA_ARGS")))
     if api_format not in API_FORMATS:
         raise SystemExit(f"Unsupported API format {api_format!r}; choose one of {sorted(API_FORMATS)}")
+    # The agy backend talks to a local CLI, not the HTTP proxy — no URL/key needed.
+    if api_format != "agy":
+        if not base_url:
+            raise SystemExit("Missing GOOGLE_GEMINI_BASE_URL or --base-url")
+        if not api_key:
+            raise SystemExit("Missing GEMINI_API_KEY or --api-key")
 
     if args.list_models:
+        if api_format == "agy":
+            raise SystemExit("--list-models is not supported with api_format agy (HTTP-only).")
         list_models(base_url, api_key, args.timeout)
         return 0
 
@@ -1791,6 +1942,8 @@ def main() -> int:
                 prompt=prompt,
                 max_tokens=args.max_tokens,
                 timeout=args.timeout,
+                agy_bin=agy_bin,
+                agy_extra_args=agy_extra_args,
             )
             out_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             out_fh.flush()
