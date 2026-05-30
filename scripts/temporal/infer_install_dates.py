@@ -37,6 +37,7 @@ helpers stay only for tests that exercise the old GEID smoke fixtures.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import sys
 from collections import defaultdict
@@ -48,6 +49,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.temporal.geid_temporal_common import (
+    PresenceObservation,
+    parse_iso_date,
+    repair_isolated_dips,
+)
+from scripts.temporal.scan_decision import find_transitions, is_nonmonotonic
 from scripts.temporal.scan_state import (
     RoundResult,
     ScanState,
@@ -137,6 +144,67 @@ def _all_results(state: ScanState) -> list[RoundResult]:
 
 def _usable(results: list[RoundResult]) -> list[RoundResult]:
     return [r for r in results if r.quality_flag == "usable" and r.pv_present is not None]
+
+
+def apply_dip_repair(
+    state: ScanState, *, flank_min_confidence: float = 0.5
+) -> tuple[ScanState, list[str]]:
+    """Monotonic dip repair as a separate, non-destructive pre-pass.
+
+    The adaptive scan records raw Gemini verdicts; a washed-out / date-drifted
+    interior vintage can read as a single absent frame bracketed by present
+    frames, which the state machine flags as ``done_ambiguous_nonmonotonic``.
+    Here we flip such interior absents to present (the flank-confidence gate is on
+    the surrounding presents, not the absent frame) on a DEEP COPY of the state,
+    then re-derive the terminal status from the repaired observations. The scan
+    itself is untouched; only the interval inference sees the repaired view.
+
+    Returns ``(state_or_repaired_copy, repaired_date_strings)``.
+    """
+    usable = _usable(_all_results(state))
+    if len(usable) < 3:
+        return state, []
+    obs = [
+        PresenceObservation(
+            anchor_id=state.anchor_id,
+            capture_date=parse_iso_date(r.capture_date),
+            pv_present=r.pv_present,
+            pv_score=r.confidence,
+            source_row=i,
+        )
+        for i, r in enumerate(usable)
+        if parse_iso_date(r.capture_date) is not None
+    ]
+    _, repaired_dates = repair_isolated_dips(obs, flank_min_confidence=flank_min_confidence)
+    if not repaired_dates:
+        return state, []
+
+    repaired_date_strs = {d.isoformat() for d in repaired_dates}
+    new_state = copy.deepcopy(state)
+    for rnd in new_state.rounds:
+        for r in rnd.results:
+            if r.capture_date[:10] in repaired_date_strs and r.pv_present is False:
+                r.pv_present = True
+                r.notes = f"{r.notes} | repaired_isolated_dip".strip(" |")
+
+    # Re-derive status from the repaired observations, but only override the
+    # non-monotonic ambiguous verdict the repair was meant to resolve.
+    if new_state.status == "done_ambiguous_nonmonotonic":
+        repaired_usable = _usable(_all_results(new_state))
+        if not is_nonmonotonic(repaired_usable):
+            n_present = sum(1 for r in repaired_usable if r.pv_present)
+            n_absent = sum(1 for r in repaired_usable if not r.pv_present)
+            if find_transitions(repaired_usable) and n_absent and n_present:
+                new_state.status = "done_appears"
+            elif n_absent == 0 and n_present:
+                new_state.status = "done_already_present_before_geid_history"
+
+    repaired_list = sorted(repaired_date_strs)
+    new_state.notes = (
+        f"{new_state.notes} | repaired_isolated_dip x{len(repaired_list)}: "
+        f"{','.join(repaired_list)}"
+    ).strip(" |")
+    return new_state, repaired_list
 
 
 def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path) -> Phase0InstallInterval:
@@ -283,6 +351,20 @@ def parse_args() -> argparse.Namespace:
         help="Skip scan_states whose status is not in TERMINAL_STATUSES instead of writing them with a 'scanning' row.",
     )
     parser.add_argument(
+        "--no-dip-repair",
+        action="store_true",
+        help="Disable monotonic interior-dip repair (diagnostic / baseline). Repair flips a "
+        "washed-frame interior absent to present when flanked by confident presents, resolving "
+        "spurious done_ambiguous_nonmonotonic verdicts without touching the scan.",
+    )
+    parser.add_argument(
+        "--dip-flank-min-confidence",
+        type=float,
+        default=0.5,
+        help="Min Gemini confidence of the flanking present observations for an interior dip "
+        "to be repaired. Default 0.5.",
+    )
+    parser.add_argument(
         "--allow-load-failures",
         action="store_true",
         help="Continue and write a (possibly partial) CSV even if some scan_state files fail to load. "
@@ -323,6 +405,8 @@ def main() -> None:
 
     intervals: list[Phase0InstallInterval] = []
     load_failures: list[tuple[Path, str]] = []
+    n_repaired_total = 0
+    n_anchors_repaired = 0
     for state_path in state_files:
         try:
             state = load_scan_state(state_path)
@@ -335,6 +419,11 @@ def main() -> None:
         if args.require_terminal and state.status not in TERMINAL_STATUSES:
             print(f"[SKIP] non-terminal {state.anchor_id}: status={state.status}", file=sys.stderr)
             continue
+        if not args.no_dip_repair:
+            state, repaired = apply_dip_repair(state, flank_min_confidence=args.dip_flank_min_confidence)
+            if repaired:
+                n_repaired_total += len(repaired)
+                n_anchors_repaired += 1
         interval = infer_one(state, census_mid_date=census_mid, scan_state_path=state_path)
         intervals.append(interval)
 
@@ -358,6 +447,8 @@ def main() -> None:
         by_status[interval.status] += 1
         by_confidence[interval.confidence] += 1
     print(f"Wrote {len(intervals)} install intervals -> {output_path}")
+    if not args.no_dip_repair:
+        print(f"  dip repair: {n_repaired_total} interior dips flipped across {n_anchors_repaired} anchors")
     for status, count in sorted(by_status.items()):
         print(f"  {status}: {count}")
     print("confidence breakdown:")

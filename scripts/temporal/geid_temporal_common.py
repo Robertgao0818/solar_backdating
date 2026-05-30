@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -184,6 +184,73 @@ def _first_stable_present_index(obs: Sequence[PresenceObservation], min_consecut
         if all(item.pv_present is True for item in window):
             return i
     return None
+
+
+def repair_isolated_dips(
+    observations: Sequence[PresenceObservation],
+    *,
+    flank_min_confidence: float = 0.5,
+) -> tuple[list[PresenceObservation], list[date]]:
+    """Repair isolated interior absent observations that are almost certainly
+    imagery artifacts rather than real panel removals.
+
+    A real PV installation is monotonic: once present it stays present. An absent
+    observation bracketed by PV-present observations on BOTH sides — where the
+    flanking present observations are confidently present (``pv_score`` >=
+    ``flank_min_confidence``, or score-less present verdicts) — is flipped to
+    present. The confidence gate is on the *flanking presents*, not on the absent
+    frame itself: when PV is confidently present immediately before and after, an
+    interior absent is almost certainly imagery date drift, clouds/shadows,
+    georegistration error, or a washed-out capture, regardless of how confidently
+    that one frame reads as bare roof.
+
+    Leading absents (before any qualifying present) are preserved because they
+    carry the genuine install transition; trailing absents (after the last
+    qualifying present) are preserved because they may indicate real removal and
+    warrant human review. Unscored chips (``pv_present is None``) pass through
+    untouched and are skipped when locating flanking presents.
+
+    Returns ``(repaired_observations, repaired_dates)`` in the original input
+    order; repaired observations get ``pv_present=True``.
+    """
+    ordered = sorted(
+        range(len(observations)),
+        key=lambda i: (observations[i].capture_date, observations[i].source_row or 0),
+    )
+    scored_positions = [i for i in ordered if observations[i].pv_present is not None]
+
+    def _qualifying_present(idx: int) -> bool:
+        o = observations[idx]
+        if o.pv_present is not True:
+            return False
+        return o.pv_score is None or o.pv_score >= flank_min_confidence
+
+    repaired_idx: set[int] = set()
+    for rank, i in enumerate(scored_positions):
+        if observations[i].pv_present is not False:
+            continue
+        has_before = any(
+            _qualifying_present(scored_positions[r]) for r in range(rank - 1, -1, -1)
+        )
+        has_after = any(
+            _qualifying_present(scored_positions[r]) for r in range(rank + 1, len(scored_positions))
+        )
+        if has_before and has_after:
+            repaired_idx.add(i)
+
+    if not repaired_idx:
+        return list(observations), []
+
+    out: list[PresenceObservation] = []
+    repaired_dates: list[date] = []
+    for i, o in enumerate(observations):
+        if i in repaired_idx:
+            out.append(replace(o, pv_present=True))
+            repaired_dates.append(o.capture_date)
+        else:
+            out.append(o)
+    repaired_dates.sort()
+    return out, repaired_dates
 
 
 def infer_install_interval(
