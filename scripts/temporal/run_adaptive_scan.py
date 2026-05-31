@@ -21,7 +21,9 @@ import argparse
 import csv
 import hashlib
 import sys
+import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -105,6 +107,18 @@ def parse_args() -> argparse.Namespace:
         help="Skip GEHI/Gemini calls; mock vintage list and Gemini results from anchor_id hash.",
     )
     parser.add_argument("--limit-anchors", type=int, help="Process only the first N anchors")
+    parser.add_argument(
+        "--anchor-workers",
+        type=int,
+        default=1,
+        help="Number of anchors to scan concurrently. Anchors are independent "
+        "(separate scan_state/chips/audit paths keyed by anchor_id), so this "
+        "overlaps one anchor's GEHI downloads with another's Gemini scoring — the "
+        "adaptive per-anchor loop stays sequential. Each anchor still consumes both "
+        "the Gemini backend (<=N concurrent batch calls) and GEHI (downloads + "
+        "catalog fetches); keep <= min(Gemini slots, GEHI tolerance). GEHI is "
+        "usually the binding constraint, so ramp from 3-4. Default 1 = serial.",
+    )
     parser.add_argument(
         "--force-restart",
         action="store_true",
@@ -696,11 +710,17 @@ def main() -> None:
         args.chips_dir.mkdir(parents=True, exist_ok=True)
         args.audit_dir.mkdir(parents=True, exist_ok=True)
 
-    states: list[ScanState] = []
-    for anchor in anchors:
+    marker = "[DRY]" if args.dry_run else "[RUN]"
+    # Resolve census mid-date per anchor up front (main thread): cheap, and warms
+    # the region_registry cache so concurrent anchor workers don't race its first load.
+    census_by_anchor = {
+        anchor["anchor_id"]: _resolve_census_mid_date(anchor, args.census_mid_date_override)
+        for anchor in anchors
+    }
+    print_lock = threading.Lock()
+
+    def handle(anchor: dict[str, str]) -> ScanState:
         anchor_id = anchor["anchor_id"]
-        marker = "[DRY]" if args.dry_run else "[RUN]"
-        census_mid = _resolve_census_mid_date(anchor, args.census_mid_date_override)
         try:
             state = run_one_anchor(
                 anchor,
@@ -711,16 +731,27 @@ def main() -> None:
                 chips_dir=args.chips_dir,
                 audit_dir=args.audit_dir,
                 gemini_config=gemini_config,
-                census_mid_date_iso=census_mid,
+                census_mid_date_iso=census_by_anchor[anchor_id],
             )
-        except Exception as exc:
-            state = _record_orchestrator_failure(
-                anchor, args.scan_states_dir, exc
-            )
-            print(f"{marker} {anchor_id}: ERROR status={state.status} reason={exc!r}")
+        except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
+            state = _record_orchestrator_failure(anchor, args.scan_states_dir, exc)
+            with print_lock:
+                print(f"{marker} {anchor_id}: ERROR status={state.status} reason={exc!r}")
         else:
-            print(f"{marker} {anchor_id}: status={state.status} rounds={len(state.rounds)}")
-        states.append(state)
+            with print_lock:
+                print(f"{marker} {anchor_id}: status={state.status} rounds={len(state.rounds)}")
+        return state
+
+    anchor_workers = max(1, args.anchor_workers)
+    states: list[ScanState] = []
+    if anchor_workers == 1:
+        for anchor in anchors:
+            states.append(handle(anchor))
+    else:
+        with ThreadPoolExecutor(max_workers=anchor_workers) as pool:
+            futures = [pool.submit(handle, anchor) for anchor in anchors]
+            for future in as_completed(futures):
+                states.append(future.result())
     summarize(states)
 
     # Continue-on-error means failed anchors were recorded and skipped, but a
