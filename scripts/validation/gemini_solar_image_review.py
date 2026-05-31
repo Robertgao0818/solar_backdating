@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -188,6 +189,31 @@ DEFAULT_MAX_MATRIX_DATES = 5
 DEFAULT_MAX_MATRIX_TARGETS = 4
 HARD_MAX_MATRIX_TARGETS = 6
 HARD_MAX_MATRIX_CELLS = 24
+
+
+class RateLimiter:
+    """Thread-safe global request pacer shared across worker threads.
+
+    ``qps`` is requests-per-second across ALL workers (not per worker). When
+    ``qps`` is falsy or <= 0 the limiter is a no-op, so worker-count alone caps
+    concurrency. Mirrors the limiter in ``scripts/temporal/score_target_sequence.py``
+    so the HTTP-backend scorers throttle identically.
+    """
+
+    def __init__(self, qps: float | None) -> None:
+        self.interval = 0.0 if not qps or qps <= 0 else 1.0 / float(qps)
+        self._next_at = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        if self.interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            if now < self._next_at:
+                time.sleep(self._next_at - now)
+                now = time.monotonic()
+            self._next_at = now + self.interval
 
 
 def load_env_file(path: Path) -> dict[str, str]:
