@@ -32,13 +32,19 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.temporal.geid_temporal_common import write_csv_rows
 
 ZASOLAR_ROOT = Path("/home/gaosh/projects/ZAsolar")
+# FP-cut inventory (Gemini two-stage false-positive review, 2026-06-01):
+# 47,465 -> 41,393 polygons across 356 grids. Drop-in for the raw merge01_c0925
+# inventory (same layer `solar_predictions` / schema / EPSG:32735). Provenance:
+# ZAsolar docs/handoffs/2026-06-01-jhb-fp-cut-inventory-delivery.md.
+DEFAULT_INVENTORY_TAG = "jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01"
 DEFAULT_INVENTORY = (
     ZASOLAR_ROOT
     / "results/analysis/full382_merge01_2026-05-15/"
-    / "jhb_full382_unified_A_merge01_c0925.gpkg"
+    / "jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01.gpkg"
 )
+DEFAULT_INVENTORY_LAYER = "solar_predictions"
 DEFAULT_OUTPUT_DIR = (
-    Path.home() / "zasolar_data/geid_temporal/jhb_full382_unified_A_merge01_c0925_chipgroups"
+    Path.home() / "zasolar_data/geid_temporal" / f"{DEFAULT_INVENTORY_TAG}_chipgroups"
 )
 DEFAULT_METRIC_CRS = "EPSG:32735"
 DEFAULT_WGS84 = "EPSG:4326"
@@ -138,12 +144,12 @@ class ChipGroup:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
-    parser.add_argument("--layer", help="Optional input GPKG layer name.")
+    parser.add_argument("--layer", default=DEFAULT_INVENTORY_LAYER, help="Input GPKG layer name.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--region-key", default="johannesburg")
     parser.add_argument(
         "--inventory-tag",
-        default="jhb_full382_unified_A_merge01_c0925",
+        default=DEFAULT_INVENTORY_TAG,
         help="Stable prefix for generated target/chip IDs.",
     )
     parser.add_argument("--metric-crs", default=DEFAULT_METRIC_CRS)
