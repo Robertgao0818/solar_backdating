@@ -309,8 +309,22 @@ def build_message_content(prompt: str, image_paths: list[Path]) -> list[dict[str
     return content
 
 
-def build_native_parts(prompt: str, image_paths: list[Path]) -> list[dict[str, Any]]:
+def build_native_parts(
+    prompt: str,
+    image_paths: list[Path],
+    *,
+    routing_salt: str | None = None,
+) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = [{"text": prompt}]
+    if routing_salt:
+        parts.append(
+            {
+                "text": (
+                    "\n\nRouting nonce for gateway load balancing only; "
+                    f"ignore for the visual decision: {routing_salt}"
+                )
+            }
+        )
     for path in image_paths:
         if not path.exists():
             raise FileNotFoundError(path)
@@ -370,7 +384,12 @@ def post_native_generate_content(
     timeout: int,
     response_mime_type: str | None = None,
     response_schema: dict[str, Any] | None = None,
+    routing_salt: str | None = None,
+    thinking_level: str | None = None,
+    thinking_budget: int | None = None,
 ) -> dict[str, Any]:
+    if thinking_level and thinking_budget is not None:
+        raise ValueError("thinking_level and thinking_budget cannot both be set")
     root = normalize_root_url(base_url)
     path = "/" + native_path.strip("/")
     endpoint = f"{root}{path}/models/{model}:generateContent"
@@ -378,7 +397,7 @@ def post_native_generate_content(
         "contents": [
             {
                 "role": "user",
-                "parts": build_native_parts(prompt, image_paths),
+                "parts": build_native_parts(prompt, image_paths, routing_salt=routing_salt),
             }
         ],
         "generationConfig": {
@@ -391,6 +410,13 @@ def post_native_generate_content(
         payload["generationConfig"]["responseMimeType"] = response_mime_type
     if response_schema is not None:
         payload["generationConfig"]["responseSchema"] = response_schema
+    thinking_config: dict[str, Any] = {}
+    if thinking_level:
+        thinking_config["thinkingLevel"] = thinking_level
+    if thinking_budget is not None:
+        thinking_config["thinkingBudget"] = thinking_budget
+    if thinking_config:
+        payload["generationConfig"]["thinkingConfig"] = thinking_config
 
     response = requests.post(
         endpoint,
@@ -624,6 +650,8 @@ class GeminiClientConfig:
     max_tokens_per_chip: int = 600
     timeout: int = DEFAULT_TIMEOUT_SEC
     matrix_json_mode: bool = True
+    thinking_level: str = ""
+    thinking_budget: int | None = None
     # api_format="agy" only: Antigravity CLI binary + extra flags (inserted before -p).
     # base_url / api_key / model are ignored for the agy backend.
     agy_bin: str = DEFAULT_AGY_BIN
@@ -1183,6 +1211,7 @@ def _call_gemini(
     max_tokens: int | None,
     response_mime_type: str | None = None,
     response_schema: dict[str, Any] | None = None,
+    routing_salt: str | None = None,
     poster: Callable[..., dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Call Gemini via agy / native / openai format. Returns (response_text, raw_response_json)."""
@@ -1218,6 +1247,9 @@ def _call_gemini(
                 timeout=config.timeout,
                 response_mime_type=response_mime_type,
                 response_schema=response_schema,
+                routing_salt=routing_salt,
+                thinking_level=config.thinking_level or None,
+                thinking_budget=config.thinking_budget,
             )
         else:
             raw = poster(
@@ -1232,6 +1264,9 @@ def _call_gemini(
                 timeout=config.timeout,
                 response_mime_type=response_mime_type,
                 response_schema=response_schema,
+                routing_salt=routing_salt,
+                thinking_level=config.thinking_level or None,
+                thinking_budget=config.thinking_budget,
             )
         return native_response_text(raw), raw
     if poster is None:
@@ -1322,6 +1357,7 @@ def _attempt_batch(
     config: GeminiClientConfig,
     poster: Callable[..., dict[str, Any]] | None,
     census_mid_date_iso: str | None = None,
+    routing_salt: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[int], str, str | None]:
     """Single batch attempt. Returns (valid_parsed, missing_indices, raw_text, error)."""
     prompt = _build_batch_prompt(picks, census_mid_date_iso=census_mid_date_iso)
@@ -1333,6 +1369,7 @@ def _attempt_batch(
             config=config,
             max_tokens=max_tokens,
             poster=poster,
+            routing_salt=routing_salt,
         )
     except Exception as exc:  # noqa: BLE001 - retry layer treats all errors uniformly.
         return [], [p.chip_index for p in picks], "", f"{type(exc).__name__}: {exc}"
@@ -1349,6 +1386,7 @@ def _attempt_per_image(
     *,
     config: GeminiClientConfig,
     poster: Callable[..., dict[str, Any]] | None,
+    routing_salt: str | None = None,
 ) -> GeminiObservation:
     prompt = DEFAULT_PROMPT
     try:
@@ -1358,6 +1396,7 @@ def _attempt_per_image(
             config=config,
             max_tokens=config.max_tokens_per_chip,
             poster=poster,
+            routing_salt=routing_salt,
         )
     except Exception as exc:  # noqa: BLE001
         return _failed_observation(pick.chip_index, f"per_image_call_error: {type(exc).__name__}: {exc}")
@@ -1382,6 +1421,7 @@ def score_batch_with_fallback(
     audit_writer: Callable[[dict[str, Any]], None] | None = None,
     poster: Callable[..., dict[str, Any]] | None = None,
     census_mid_date_iso: str | None = None,
+    routing_salt: str | None = None,
 ) -> list[GeminiObservation]:
     """Score N chips in one batch call following Q5.6 (a') retry policy:
 
@@ -1399,7 +1439,8 @@ def score_batch_with_fallback(
         return []
 
     valid1, missing1, raw1, err1 = _attempt_batch(
-        picks, config=config, poster=poster, census_mid_date_iso=census_mid_date_iso
+        picks, config=config, poster=poster, census_mid_date_iso=census_mid_date_iso,
+        routing_salt=routing_salt,
     )
     if audit_writer is not None:
         audit_writer(
@@ -1417,7 +1458,8 @@ def score_batch_with_fallback(
         return [_to_observation(p, decision_source="gemini_batch", raw=raw1) for p in valid1]
 
     valid2, missing2, raw2, err2 = _attempt_batch(
-        picks, config=config, poster=poster, census_mid_date_iso=census_mid_date_iso
+        picks, config=config, poster=poster, census_mid_date_iso=census_mid_date_iso,
+        routing_salt=routing_salt,
     )
     if audit_writer is not None:
         audit_writer(
@@ -1443,7 +1485,7 @@ def score_batch_with_fallback(
     for pick in picks:
         if pick.chip_index in salvaged_indices:
             continue
-        per_image = _attempt_per_image(pick, config=config, poster=poster)
+        per_image = _attempt_per_image(pick, config=config, poster=poster, routing_salt=routing_salt)
         if audit_writer is not None:
             audit_writer(
                 {

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import hashlib
 import sys
 import threading
@@ -65,6 +66,24 @@ def _default_gemini_env() -> Path:
     from scripts.validation.gemini_solar_image_review import _resolve_default_env_file
 
     return _resolve_default_env_file()
+
+
+def _routing_salt(mode: str, model: str, anchor_id: str, round_id: object) -> str | None:
+    """Per-anchor routing nonce so concurrent native calls fan out across the
+    gateway account pool instead of all hashing onto one account.
+
+    Mirrors the FP-cut reviewer's ``--routing-salt-mode``:
+    ``none`` disables it, ``auto`` salts pro models only (flash defaults
+    unchanged), ``target`` salts every call. The nonce is deterministic per
+    (model, anchor, round) so a retried call sticks to the same account while
+    distinct anchors spread across the pool. The text is labelled as
+    load-balancing-only so the model ignores it for the visual decision.
+    """
+    if mode == "none":
+        return None
+    if mode == "auto" and "pro" not in (model or "").lower():
+        return None
+    return f"{model}:{anchor_id}:r{round_id}"
 
 DRY_RUN_PROFILE_LABELS = (
     "appears_2015",
@@ -123,6 +142,36 @@ def parse_args() -> argparse.Namespace:
         "--force-restart",
         action="store_true",
         help="Delete and recreate every scan_state. Default behavior is resume from existing state.",
+    )
+    parser.add_argument(
+        "--qps",
+        type=float,
+        default=0.0,
+        help="Global Gemini requests/sec across ALL anchor workers (shared "
+        "RateLimiter). 0 = no throttle, worker count alone caps concurrency. "
+        "Match to the gateway account pool; the FP-cut full run used qps 8 at 30 workers.",
+    )
+    parser.add_argument(
+        "--round1-model",
+        type=str,
+        default="gemini-3-flash",
+        help="Model for the initial coarse round (round_id==1). Cheaper tier to save "
+        "subscription capacity. Default gemini-3-flash. Empty string = reuse round2 model.",
+    )
+    parser.add_argument(
+        "--round2-model",
+        type=str,
+        default=None,
+        help="Model for refinement / non-monotonic recovery rounds (round_id>=2). "
+        "Default: GEMINI_MODEL from the gemini env file (gemini-3-flash-agent).",
+    )
+    parser.add_argument(
+        "--routing-salt-mode",
+        choices=("auto", "none", "target"),
+        default="auto",
+        help="Append a per-anchor routing nonce to native calls so concurrency fans "
+        "out across the gateway account pool. 'target' salts every call; 'auto' salts "
+        "pro models only; 'none' disables. Use 'target' for high-concurrency flash runs.",
     )
     parser.add_argument(
         "--census-mid-date-override",
@@ -306,6 +355,8 @@ def _score_batch_picks_chunked(
     gemini_config,
     audit_writer,
     census_mid_date_iso: str | None,
+    limiter=None,
+    routing_salt: str | None = None,
 ):
     """Score date picks in bounded Gemini calls and return original-index observations."""
     from scripts.validation.gemini_solar_image_review import BatchPick, score_batch_with_fallback
@@ -338,11 +389,15 @@ def _score_batch_picks_chunked(
             payload["batch_chunk_count"] = total_chunks
             audit_writer(payload)
 
+        if limiter is not None:
+            limiter.wait()
+        salt_kwargs = {} if routing_salt is None else {"routing_salt": routing_salt}
         observations = score_batch_with_fallback(
             local_picks,
             config=gemini_config,
             audit_writer=_chunk_audit,
             census_mid_date_iso=census_mid_date_iso,
+            **salt_kwargs,
         )
         for obs in observations:
             original = local_to_original.get(obs.chip_index)
@@ -361,6 +416,8 @@ def execute_round_real(
     gemini_config,  # GeminiClientConfig - imported lazily
     vintage_check=None,
     census_mid_date_iso: str | None = None,
+    limiter=None,
+    routing_salt_mode: str = "none",
 ) -> Round:
     """Download chips for each pick (zoom ladder), batch-score with Gemini, return Round with results."""
     import json as _json
@@ -383,6 +440,15 @@ def execute_round_real(
     download_by_index: dict[int, object] = {pick.chip_index: outcome for pick, outcome in download_outcomes}
     score_picks, batch_to_original = _build_batch_picks_with_remap(download_outcomes, ensure_review_png)
 
+    routing_salt = None
+    if routing_salt_mode != "none":
+        routing_salt = _routing_salt(
+            routing_salt_mode,
+            getattr(gemini_config, "model", ""),
+            anchor["anchor_id"],
+            rnd.round_id,
+        )
+
     audit_path = audit_dir / anchor["anchor_id"] / f"round_{rnd.round_id}.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
     obs_by_original: dict[int, object] = {}
@@ -398,6 +464,8 @@ def execute_round_real(
                 gemini_config=gemini_config,
                 audit_writer=_audit,
                 census_mid_date_iso=census_mid_date_iso,
+                limiter=limiter,
+                routing_salt=routing_salt,
             )
 
     rnd_results: list[RoundResult] = []
@@ -504,6 +572,9 @@ def run_one_anchor(
     chips_dir: Path | None = None,
     audit_dir: Path | None = None,
     gemini_config=None,
+    gemini_config_round1=None,
+    limiter=None,
+    routing_salt_mode: str = "none",
     census_mid_date_iso: str | None = None,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
@@ -555,11 +626,19 @@ def run_one_anchor(
             rnd = execute_round_dry_run(rnd, profile)
         else:
             assert chips_dir is not None and audit_dir is not None and gemini_config is not None
+            # Model tiering: round 1 (initial coarse scan) uses the cheap tier to
+            # save subscription capacity; refinement / non-monotonic recovery rounds
+            # (round_id>=2) escalate to the capable tier.
+            round_config = gemini_config
+            if gemini_config_round1 is not None and rnd.round_id == 1:
+                round_config = gemini_config_round1
             rnd = execute_round_real(
                 rnd, anchor, config,
-                chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=gemini_config,
+                chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=round_config,
                 vintage_check=vintage_check,
                 census_mid_date_iso=census_mid_date_iso,
+                limiter=limiter,
+                routing_salt_mode=routing_salt_mode,
             )
         state.rounds.append(rnd)
         # Informational checkpoint metadata only: resume never reads next_action,
@@ -704,11 +783,26 @@ def main() -> None:
         raise SystemExit("Anchors CSV produced 0 rows.")
 
     gemini_config = None
+    gemini_config_round1 = None
+    limiter = None
     if not args.dry_run:
         env_file = args.gemini_env_file or _default_gemini_env()
         gemini_config = _load_gemini_config(env_file)
+        if args.round2_model:
+            gemini_config = dataclasses.replace(gemini_config, model=args.round2_model)
+        if args.round1_model:
+            gemini_config_round1 = dataclasses.replace(gemini_config, model=args.round1_model)
+        from scripts.validation.gemini_solar_image_review import RateLimiter
+
+        limiter = RateLimiter(args.qps)
         args.chips_dir.mkdir(parents=True, exist_ok=True)
         args.audit_dir.mkdir(parents=True, exist_ok=True)
+        round1_model = gemini_config_round1.model if gemini_config_round1 is not None else gemini_config.model
+        print(
+            f"[CFG] round1_model={round1_model} round2+_model={gemini_config.model} "
+            f"qps={args.qps} anchor_workers={args.anchor_workers} "
+            f"routing_salt_mode={args.routing_salt_mode}"
+        )
 
     marker = "[DRY]" if args.dry_run else "[RUN]"
     # Resolve census mid-date per anchor up front (main thread): cheap, and warms
@@ -731,6 +825,9 @@ def main() -> None:
                 chips_dir=args.chips_dir,
                 audit_dir=args.audit_dir,
                 gemini_config=gemini_config,
+                gemini_config_round1=gemini_config_round1,
+                limiter=limiter,
+                routing_salt_mode=args.routing_salt_mode,
                 census_mid_date_iso=census_by_anchor[anchor_id],
             )
         except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
