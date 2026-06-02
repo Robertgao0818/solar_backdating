@@ -71,7 +71,15 @@ def decode_gehi_output(raw: bytes) -> str:
 
 def run_gehi(args: Sequence[object], *, executable: Path = DEFAULT_GEHI_EXE, timeout: float = 300.0) -> GehiRunResult:
     cmd = [str(executable), *[str(arg) for arg in args]]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False)
+    # stdin=DEVNULL is load-bearing: `availability` shows an interactive vintage
+    # chooser that blocks on a tty read. Capturing stdout/stderr alone leaves stdin
+    # INHERITED, so under a pty launcher (e.g. tmux) the chooser hangs until the
+    # timeout. Forcing /dev/null makes GEHI see no tty and exit immediately,
+    # regardless of how the orchestrator was launched.
+    proc = subprocess.run(
+        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=timeout, check=False,
+    )
     return GehiRunResult(
         args=tuple(cmd),
         returncode=proc.returncode,
