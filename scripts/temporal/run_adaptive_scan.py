@@ -155,15 +155,26 @@ def parse_args() -> argparse.Namespace:
         "--round1-model",
         type=str,
         default="gemini-3-flash",
-        help="Model for the initial coarse round (round_id==1). Cheaper tier to save "
-        "subscription capacity. Default gemini-3-flash. Empty string = reuse round2 model.",
+        help="Cheap-tier model for routine present/absent rounds (see --cheap-round-types). "
+        "Default gemini-3-flash. Empty string = reuse round2 model (single tier).",
     )
     parser.add_argument(
         "--round2-model",
         type=str,
         default=None,
-        help="Model for refinement / non-monotonic recovery rounds (round_id>=2). "
+        help="Capable-tier model for the round_types NOT in --cheap-round-types "
+        "(by default just anchor_recovery). "
         "Default: GEMINI_MODEL from the gemini env file (gemini-3-flash-agent).",
+    )
+    parser.add_argument(
+        "--cheap-round-types",
+        type=str,
+        default="initial,bisection,walk_back,tail",
+        help="Comma-separated round_types routed to --round1-model (cheap tier). "
+        "Everything NOT listed uses --round2-model (capable tier). bisection/walk_back/tail "
+        "ask the SAME present/absent question as the initial round, so the cheap tier handles "
+        "them (~86%% of round>=2 calls); only anchor_recovery (marginal cases) escalates. "
+        "Pass 'initial' to restore the old round_id==1-only escalation.",
     )
     parser.add_argument(
         "--routing-salt-mode",
@@ -573,6 +584,7 @@ def run_one_anchor(
     audit_dir: Path | None = None,
     gemini_config=None,
     gemini_config_round1=None,
+    cheap_round_types: frozenset[str] | None = None,
     limiter=None,
     routing_salt_mode: str = "none",
     census_mid_date_iso: str | None = None,
@@ -626,12 +638,22 @@ def run_one_anchor(
             rnd = execute_round_dry_run(rnd, profile)
         else:
             assert chips_dir is not None and audit_dir is not None and gemini_config is not None
-            # Model tiering: round 1 (initial coarse scan) uses the cheap tier to
-            # save subscription capacity; refinement / non-monotonic recovery rounds
-            # (round_id>=2) escalate to the capable tier.
+            # Model tiering by round_type: routine present/absent rounds (initial
+            # coarse scan, bisection, walk_back/tail) use the cheap tier; only the
+            # round_types NOT in cheap_round_types (by default anchor_recovery)
+            # escalate to the capable tier. bisection asks the SAME present/absent
+            # question as the initial round, so the cheap tier handles it — that is
+            # ~86% of round>=2 volume, which is why round_id-based routing wasted the
+            # scarce capable-tier quota. Falls back to the old round_id==1 rule when
+            # cheap_round_types is unset (preserves legacy callers/tests).
             round_config = gemini_config
-            if gemini_config_round1 is not None and rnd.round_id == 1:
-                round_config = gemini_config_round1
+            if gemini_config_round1 is not None:
+                if cheap_round_types is None:
+                    use_cheap = rnd.round_id == 1
+                else:
+                    use_cheap = rnd.round_type in cheap_round_types
+                if use_cheap:
+                    round_config = gemini_config_round1
             rnd = execute_round_real(
                 rnd, anchor, config,
                 chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=round_config,
@@ -784,6 +806,7 @@ def main() -> None:
 
     gemini_config = None
     gemini_config_round1 = None
+    cheap_round_types: frozenset[str] | None = None
     limiter = None
     if not args.dry_run:
         env_file = args.gemini_env_file or _default_gemini_env()
@@ -792,6 +815,9 @@ def main() -> None:
             gemini_config = dataclasses.replace(gemini_config, model=args.round2_model)
         if args.round1_model:
             gemini_config_round1 = dataclasses.replace(gemini_config, model=args.round1_model)
+        cheap_round_types = frozenset(
+            t.strip() for t in args.cheap_round_types.split(",") if t.strip()
+        )
         from scripts.validation.gemini_solar_image_review import RateLimiter
 
         limiter = RateLimiter(args.qps)
@@ -799,7 +825,8 @@ def main() -> None:
         args.audit_dir.mkdir(parents=True, exist_ok=True)
         round1_model = gemini_config_round1.model if gemini_config_round1 is not None else gemini_config.model
         print(
-            f"[CFG] round1_model={round1_model} round2+_model={gemini_config.model} "
+            f"[CFG] cheap_model={round1_model} capable_model={gemini_config.model} "
+            f"cheap_round_types={','.join(sorted(cheap_round_types))} "
             f"qps={args.qps} anchor_workers={args.anchor_workers} "
             f"routing_salt_mode={args.routing_salt_mode}"
         )
@@ -826,6 +853,7 @@ def main() -> None:
                 audit_dir=args.audit_dir,
                 gemini_config=gemini_config,
                 gemini_config_round1=gemini_config_round1,
+                cheap_round_types=cheap_round_types,
                 limiter=limiter,
                 routing_salt_mode=args.routing_salt_mode,
                 census_mid_date_iso=census_by_anchor[anchor_id],

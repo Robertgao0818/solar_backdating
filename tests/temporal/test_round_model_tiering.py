@@ -1,13 +1,20 @@
 """Regression guard for per-round Gemini model tiering in run_one_anchor.
 
-The initial coarse round (round_id==1) must use the cheap tier
-(``gemini_config_round1``) to save subscription capacity; refinement /
-non-monotonic recovery rounds (round_id>=2) must escalate to the capable tier
-(``gemini_config``). The selection happens in ``run_one_anchor`` before
-``execute_round_real`` is called, so we drive run_one_anchor offline with stubbed
-GEHI discovery + decision loop and capture the ``gemini_config.model`` that
-reaches each round, plus that the shared limiter and routing-salt mode are
-forwarded.
+Two routing modes, both selected in ``run_one_anchor`` before
+``execute_round_real`` is called:
+
+* **round_type routing (current default):** round_types in ``cheap_round_types``
+  (initial/bisection/walk_back/tail — the routine present/absent questions) use
+  the cheap tier (``gemini_config_round1``); everything else (anchor_recovery)
+  escalates to the capable tier (``gemini_config``). bisection is ~86% of
+  round>=2 volume and asks the same question as the initial round, so keeping it
+  cheap is what conserves the scarce capable-tier quota.
+* **legacy round_id routing (back-compat):** when ``cheap_round_types`` is unset,
+  only round_id==1 uses the cheap tier.
+
+We drive run_one_anchor offline with stubbed GEHI discovery + decision loop and
+capture the ``gemini_config.model`` that reaches each round, plus that the shared
+limiter and routing-salt mode are forwarded.
 """
 
 from __future__ import annotations
@@ -29,6 +36,16 @@ def _round(round_id: int) -> Round:
     return Round(
         round_id=round_id,
         round_type="initial" if round_id == 1 else "bisection",
+        window_start_date=None,
+        window_end_date=None,
+        picks=[],
+    )
+
+
+def _round_t(round_id: int, round_type: str) -> Round:
+    return Round(
+        round_id=round_id,
+        round_type=round_type,
         window_start_date=None,
         window_end_date=None,
         picks=[],
@@ -157,3 +174,67 @@ def test_no_round1_config_keeps_single_tier(tmp_path: Path, monkeypatch) -> None
     )
 
     assert captured == ["gemini-3-flash-agent", "gemini-3-flash-agent"]
+
+
+def test_round_type_routing_keeps_bisection_cheap(tmp_path: Path, monkeypatch) -> None:
+    """With cheap_round_types, bisection stays on the cheap tier and only
+    anchor_recovery escalates — independent of round_id."""
+    captured: list[tuple[int, str, str]] = []
+
+    def fake_catalog(anchor, config):
+        return VintageCatalog(
+            vintages=[VintageEntry(capture_date="2020-06-15", version=100)],
+            available_dates_by_zoom={19: {"2020-06-15"}},
+        )
+
+    def fake_decide(state, vintages, config):
+        n = len(state.rounds)
+        if n == 0:
+            return ExecuteRoundAction(kind="execute_round", round=_round_t(1, "initial"))
+        if n == 1:
+            return ExecuteRoundAction(kind="execute_round", round=_round_t(2, "bisection"))
+        if n == 2:
+            return ExecuteRoundAction(kind="execute_round", round=_round_t(3, "anchor_recovery"))
+        return TerminateAction(kind="terminate", status="done_appears", notes="")
+
+    def fake_execute(rnd, anchor, config, *, chips_dir, audit_dir, gemini_config,
+                     vintage_check=None, census_mid_date_iso=None,
+                     limiter=None, routing_salt_mode="none"):
+        captured.append((rnd.round_id, rnd.round_type, gemini_config.model))
+        rnd.results = []
+        rnd.completed = True
+        rnd.failed = False
+        return rnd
+
+    monkeypatch.setattr(ras, "_fetch_real_vintage_catalog", fake_catalog)
+    monkeypatch.setattr(
+        ras, "make_vintage_check",
+        lambda anchor, *, available_dates_by_zoom, config: (lambda z, d: True),
+    )
+    monkeypatch.setattr(ras, "decide_next_action", fake_decide)
+    monkeypatch.setattr(ras, "execute_round_real", fake_execute)
+
+    base = GeminiClientConfig(base_url="http://x", api_key="k", model="gemini-3-flash-agent")
+    round1 = GeminiClientConfig(base_url="http://x", api_key="k", model="gemini-3-flash")
+
+    run_one_anchor(
+        {"anchor_id": "A3", "region_key": "johannesburg", "grid_id": "G1"},
+        config=object(),
+        scan_states_dir=tmp_path / "scan_states",
+        dry_run=False,
+        force_restart=True,
+        chips_dir=tmp_path / "chips",
+        audit_dir=tmp_path / "audit",
+        gemini_config=base,
+        gemini_config_round1=round1,
+        cheap_round_types=frozenset({"initial", "bisection", "walk_back", "tail"}),
+        limiter=None,
+        routing_salt_mode="none",
+        census_mid_date_iso=None,
+    )
+
+    assert captured == [
+        (1, "initial", "gemini-3-flash"),
+        (2, "bisection", "gemini-3-flash"),       # cheap, despite round_id>=2
+        (3, "anchor_recovery", "gemini-3-flash-agent"),  # only this escalates
+    ]
