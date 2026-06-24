@@ -23,6 +23,7 @@ data/geid_vintage_probe
 data/geid_vintage_probe/
 data/anchors_*/
 data/install_dates_*/
+data/timenode_heatmaps/
 data/raw/
 data/cache/
 
