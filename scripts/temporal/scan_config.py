@@ -41,6 +41,11 @@ class AdaptiveScanConfig:
     gemini_hard_max_targets_per_call: int = 6
     gemini_hard_max_cells_per_call: int = 24
     max_anchor_recovery_rounds: int = 2
+    # GEHI imagery provider: "TM" (Google Earth Time Machine) or "Wayback"
+    # (ESRI World Imagery). Usually set from run_adaptive_scan --provider, not
+    # YAML. Wayback's availability lists layer-release dates (not captured
+    # dates), so the completeness gate is disabled for it by the orchestrator.
+    provider: str = "TM"
 
 
 def _zoom_ladder(section: dict[str, Any], key: str, default: tuple[int, ...]) -> tuple[int, ...]:
@@ -87,4 +92,5 @@ def load_config(path: Path | None = None) -> AdaptiveScanConfig:
         gemini_hard_max_targets_per_call=int(section.get("gemini_hard_max_targets_per_call", 6)),
         gemini_hard_max_cells_per_call=int(section.get("gemini_hard_max_cells_per_call", 24)),
         max_anchor_recovery_rounds=int(section.get("max_anchor_recovery_rounds", 2)),
+        provider=str(section.get("provider", "TM")),
     )

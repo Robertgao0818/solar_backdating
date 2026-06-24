@@ -192,6 +192,16 @@ def parse_args() -> argparse.Namespace:
         "Used as the GT-prior anchor for Gemini calibration prompts. Default: lookup from "
         "core.region_registry per anchor's region_key.",
     )
+    parser.add_argument(
+        "--provider",
+        choices=("TM", "Wayback"),
+        default="TM",
+        help="GEHI imagery provider. TM=Google Earth Time Machine (default). "
+        "Wayback=ESRI World Imagery; its catalog/download key on the real "
+        "captured date. Selecting Wayback forces require_complete_coverage_* "
+        "off because Wayback's availability lists layer-release dates, not "
+        "captured dates, so the completeness intersection would be empty.",
+    )
     return parser.parse_args()
 
 
@@ -300,6 +310,7 @@ def make_vintage_check(
                 rows = fetch_availability_for_anchor(
                     anchor,
                     zoom=zoom,
+                    provider=config.provider,
                     min_date=config.catalog_min_date,
                     max_date=config.catalog_max_date,
                     parallel=config.availability_parallel,
@@ -308,7 +319,7 @@ def make_vintage_check(
             else:
                 from scripts.temporal.gehi_info import fetch_vintages_for_anchor
 
-                rows = fetch_vintages_for_anchor(anchor, zoom=zoom)
+                rows = fetch_vintages_for_anchor(anchor, zoom=zoom, provider=config.provider)
             catalogs[zoom] = {str(r.get("capture_date", ""))[:10] for r in rows if r.get("capture_date")}
         return capture_date[:10] in catalogs[zoom]
 
@@ -444,6 +455,7 @@ def execute_round_real(
             version=pick.version,
             zoom_ladder=config.download_zoom_ladder,
             output_root=chips_dir,
+            provider=config.provider,
             vintage_check=vintage_check,
         )
         download_outcomes.append((pick, outcome))
@@ -684,7 +696,7 @@ def _fetch_real_vintage_catalog(anchor: dict[str, str], config: AdaptiveScanConf
     available_dates_by_zoom: dict[int, set[str]] = {}
     by_date: dict[str, VintageEntry] = {}
     for zoom in config.discovery_zoom_ladder:
-        info_rows = fetch_vintages_for_anchor(anchor, zoom=zoom)
+        info_rows = fetch_vintages_for_anchor(anchor, zoom=zoom, provider=config.provider)
         info_by_date: dict[str, object] = {}
         for row in info_rows:
             capture_date = str(row.get("capture_date", "")).strip()[:10]
@@ -697,6 +709,7 @@ def _fetch_real_vintage_catalog(anchor: dict[str, str], config: AdaptiveScanConf
             availability_rows = fetch_availability_for_anchor(
                 anchor,
                 zoom=zoom,
+                provider=config.provider,
                 min_date=config.catalog_min_date,
                 max_date=config.catalog_max_date,
                 parallel=config.availability_parallel,
@@ -797,6 +810,15 @@ def _exit_code_for_states(states: Iterable[ScanState]) -> int:
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
+    config_overrides: dict[str, object] = {"provider": args.provider}
+    if args.provider == "Wayback":
+        # Wayback `availability` returns layer-release dates, not captured dates,
+        # so intersecting it with the captured-date info catalog yields the empty
+        # set. Rely on download's own --exact-date matching (which rejects
+        # partial-coverage dates) instead of the pre-gate.
+        config_overrides["require_complete_coverage_for_catalog"] = False
+        config_overrides["require_complete_coverage_for_download"] = False
+    config = dataclasses.replace(config, **config_overrides)
     if not args.anchors_csv.exists():
         raise SystemExit(f"Anchors CSV not found: {args.anchors_csv}")
     args.scan_states_dir.mkdir(parents=True, exist_ok=True)

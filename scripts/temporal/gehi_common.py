@@ -14,8 +14,20 @@ DEFAULT_GEHI_EXE = Path("/home/gaosh/zasolar_data/tools/GEHistoricalImagery/GEHi
 DEFAULT_PROVIDER = "TM"
 DEFAULT_PROBE_ZOOM = 19
 
-INFO_LEVEL_RE = re.compile(r"Level\s*=\s*(?P<level>\d+),\s*Path\s*=\s*(?P<path>[0-3]+)")
+# TM info lines carry a quadtree Path; Wayback info prints a bare `Level = N`
+# header with no Path, so Path is optional.
+INFO_LEVEL_RE = re.compile(r"Level\s*=\s*(?P<level>\d+)(?:,\s*Path\s*=\s*(?P<path>[0-3]+))?")
 INFO_DATE_RE = re.compile(r"date\s*=\s*(?P<date>\d{4}/\d{2}/\d{2}),\s*version\s*=\s*(?P<version>\d+)")
+# Wayback (ESRI World Imagery) info rows: `layer_date = <release>, captured = <acquisition>`.
+# The adaptive scan reasons in CAPTURED dates (real acquisition) and GEHI's
+# Wayback `download --date` also keys on the captured date (verified 2026-06-04:
+# passing the captured date downloads, passing the layer_date returns
+# "Could not find an exact date match"). So capture_date = captured; the int
+# version is synthesized from the layer_date (YYYYMMDD) purely for chip-filename
+# uniqueness and stable dedupe ordering (Wayback has no integer version).
+INFO_WAYBACK_RE = re.compile(
+    r"layer_date\s*=\s*(?P<layer>\d{4}/\d{2}/\d{2}),\s*captured\s*=\s*(?P<captured>\d{4}/\d{2}/\d{2})"
+)
 AVAIL_DATE_RE = re.compile(r"\[\d+\]\s*(?P<date>\d{4}/\d{2}/\d{2})")
 TILE_AVAIL_DATE_RE = re.compile(r"Tile availability on\s+(?P<date>\d{4}/\d{2}/\d{2})")
 
@@ -116,6 +128,14 @@ def anchor_bbox_args(anchor: Mapping[str, object]) -> tuple[str, str]:
 
 
 def parse_info_output(text: str) -> list[dict[str, object]]:
+    """Parse `GEHistoricalImagery info` stdout into vintage rows.
+
+    Handles both providers. TM lines are `date = <d>, version = <n>`; Wayback
+    lines are `layer_date = <release>, captured = <acquisition>` and are mapped
+    to capture_date=captured with a layer-date-derived int version. The two
+    patterns are mutually exclusive (TM has no `layer_date`/`captured`; Wayback
+    has no trailing `version = <n>`), so a line matches at most one branch.
+    """
     rows: list[dict[str, object]] = []
     current_level: int | None = None
     current_path = ""
@@ -123,7 +143,7 @@ def parse_info_output(text: str) -> list[dict[str, object]]:
         level_match = INFO_LEVEL_RE.search(line)
         if level_match:
             current_level = int(level_match.group("level"))
-            current_path = level_match.group("path")
+            current_path = level_match.group("path") or ""
             continue
         date_match = INFO_DATE_RE.search(line)
         if date_match and current_level is not None:
@@ -133,6 +153,19 @@ def parse_info_output(text: str) -> list[dict[str, object]]:
                     "path": current_path,
                     "capture_date": parse_gehi_date(date_match.group("date")).isoformat(),
                     "version": int(date_match.group("version")),
+                }
+            )
+            continue
+        wayback_match = INFO_WAYBACK_RE.search(line)
+        if wayback_match and current_level is not None:
+            captured = parse_gehi_date(wayback_match.group("captured"))
+            layer = parse_gehi_date(wayback_match.group("layer"))
+            rows.append(
+                {
+                    "zoom": current_level,
+                    "path": current_path,
+                    "capture_date": captured.isoformat(),
+                    "version": int(layer.strftime("%Y%m%d")),
                 }
             )
     return rows

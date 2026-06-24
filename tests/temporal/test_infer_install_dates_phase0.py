@@ -332,6 +332,163 @@ def test_inconsistent_done_appears_without_transition_falls_to_low() -> None:
     assert "inconsistent" in interval.notes
 
 
+# ---------------------------------------------------------------------------
+# Per-grid Vexcel present-clamp (Fix 1)
+# ---------------------------------------------------------------------------
+
+VEXCEL_CEIL = {"g": date(2024, 2, 21)}  # the synthetic state's grid_id is "g"
+
+
+def test_present_clamp_phantom_future_present_clamped_to_flight_date() -> None:
+    """A GEHI phantom present (2025) on a 2024-flown grid is clamped to the
+    real flight date; the raw earliest_present is preserved for provenance."""
+    state = _state_with(
+        "done_appears",
+        [_result("2023-08-15", present=False), _result("2025-02-28", present=True)],
+    )
+    interval = infer_one(
+        state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"),
+        vexcel_capture_by_grid=VEXCEL_CEIL,
+    )
+    assert interval.latest_absent_date == "2023-08-15"
+    assert interval.earliest_present_date == "2024-02-21"  # clamped (Vexcel is earlier confirmed-present)
+    assert interval.install_interval_start == "2023-08-15"
+    assert interval.install_interval_end == "2024-02-21"  # clamped to flight date
+    assert interval.install_mid_estimate == "2023-11-18"  # recomputed from clamped end
+    assert interval.confidence == "medium"  # 190-day gap
+    assert "present_clamped" in interval.notes
+    assert "raw earliest_present 2025-02-28" in interval.notes  # raw preserved in notes
+
+
+def test_present_clamp_inverted_when_absent_also_post_detection() -> None:
+    """If latest_absent is ALSO after the flight date, the whole scan post-dates
+    the detection imagery -> interval blanked and flagged clamp_inverted."""
+    state = _state_with(
+        "done_appears",
+        [_result("2024-08-01", present=False), _result("2025-02-28", present=True)],
+    )
+    interval = infer_one(
+        state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"),
+        vexcel_capture_by_grid=VEXCEL_CEIL,
+    )
+    assert interval.status == "done_ambiguous_clamp_inverted"  # reclassified out of done_appears
+    assert interval.install_interval_start == ""
+    assert interval.install_interval_end == ""
+    assert interval.install_mid_estimate == ""
+    assert interval.confidence == "low"
+    assert "clamp_inverted" in interval.notes
+    assert interval.latest_absent_date == "2024-08-01"
+    assert interval.earliest_present_date == "2025-02-28"
+
+
+def test_present_clamp_noop_when_present_before_flight_date() -> None:
+    """A legitimate present before the flight date is untouched (no clamp note)."""
+    state = _state_with(
+        "done_appears",
+        [_result("2020-04-15", present=False), _result("2020-08-15", present=True)],
+    )
+    interval = infer_one(
+        state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"),
+        vexcel_capture_by_grid=VEXCEL_CEIL,
+    )
+    assert interval.install_interval_end == "2020-08-15"
+    assert interval.install_mid_estimate == "2020-06-15"
+    assert "present_clamped" not in interval.notes
+
+
+def test_present_clamp_skipped_when_grid_absent_from_table() -> None:
+    """Grid not in the Vexcel table -> no clamp applied (None ceiling)."""
+    state = _state_with(
+        "done_appears",
+        [_result("2023-08-15", present=False), _result("2025-02-28", present=True)],
+    )
+    interval = infer_one(
+        state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"),
+        vexcel_capture_by_grid={"other_grid": date(2024, 2, 21)},
+    )
+    assert interval.install_interval_end == "2025-02-28"  # unclamped
+    assert "present_clamped" not in interval.notes
+
+
+def test_present_clamp_disabled_by_default_none() -> None:
+    """Backward compat: no table -> behaves exactly as before (no clamp)."""
+    state = _state_with(
+        "done_appears",
+        [_result("2023-08-15", present=False), _result("2025-02-28", present=True)],
+    )
+    interval = infer_one(state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"))
+    assert interval.install_interval_end == "2025-02-28"
+    assert "present_clamped" not in interval.notes
+
+
+def test_census_upper_bound_uses_per_grid_flight_date() -> None:
+    """done_installed_during_census uses the grid's real flight date, not the
+    global --census-mid-date fallback."""
+    state = _state_with(
+        "done_installed_during_census",
+        [_result("2023-06-15", present=False)],
+    )
+    interval = infer_one(
+        state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"),
+        vexcel_capture_by_grid=VEXCEL_CEIL,
+    )
+    assert interval.install_interval_start == "2023-06-15"
+    assert interval.install_interval_end == "2024-02-21"  # per-grid, not 2024-06-30
+    assert interval.install_mid_estimate == "2024-02-21"
+    assert interval.confidence == "high"  # < 365-day gap
+
+
+def test_census_per_grid_flight_date_triggers_marker_missed() -> None:
+    """An absent at 2024-03-01 is < global census mid (06-30) but >= the grid's
+    real flight date (02-21), so the per-grid bound now flips it to
+    marker_missed_pv."""
+    state = _state_with(
+        "done_installed_during_census",
+        [_result("2024-03-01", present=False)],
+    )
+    interval = infer_one(
+        state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"),
+        vexcel_capture_by_grid=VEXCEL_CEIL,
+    )
+    assert interval.status == "done_ambiguous_marker_missed_pv"
+    assert interval.confidence == "low"
+    assert interval.install_interval_end == ""
+    assert "census flight date 2024-02-21" in interval.notes
+
+
+def test_already_present_bound_clamped_to_flight_date() -> None:
+    """A left-censored already-present bound whose earliest frame post-dates the
+    flight date is tightened to the flight date (Vexcel is an earlier present)."""
+    state = _state_with(
+        "done_already_present_before_geid_history",
+        [_result("2024-10-01", present=True), _result("2025-03-01", present=True)],
+    )
+    interval = infer_one(
+        state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"),
+        vexcel_capture_by_grid=VEXCEL_CEIL,
+    )
+    assert interval.status == "done_already_present_before_geid_history"
+    assert interval.earliest_present_date == "2024-02-21"
+    assert interval.install_interval_end == "2024-02-21"
+    assert interval.install_interval_start == ""  # open below
+    assert "present_clamped" in interval.notes
+
+
+def test_already_present_bound_not_clamped_when_before_flight() -> None:
+    """An already-present bound before the flight date is untouched."""
+    state = _state_with(
+        "done_already_present_before_geid_history",
+        [_result("2018-06-15", present=True)],
+    )
+    interval = infer_one(
+        state, census_mid_date=CENSUS_MID, scan_state_path=Path("/x.json"),
+        vexcel_capture_by_grid=VEXCEL_CEIL,
+    )
+    assert interval.earliest_present_date == "2018-06-15"
+    assert interval.install_interval_end == "2018-06-15"
+    assert "present_clamped" not in interval.notes
+
+
 def test_write_intervals_round_trip(tmp_path: Path) -> None:
     state = _state_with(
         "done_appears",

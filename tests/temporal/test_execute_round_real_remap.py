@@ -292,7 +292,7 @@ def test_execute_round_real_does_not_crash_on_config_remap(tmp_path: Path, monke
     """
     seen: dict[str, Any] = {}
 
-    def fake_download(anchor, *, capture_date, version, zoom_ladder, output_root, vintage_check=None):
+    def fake_download(anchor, *, capture_date, version, zoom_ladder, output_root, provider="TM", vintage_check=None):
         p = tmp_path / f"chip_{capture_date}.tif"
         p.write_bytes(b"TIF")
         return _ok_outcome(p)
@@ -353,7 +353,7 @@ def test_execute_round_real_does_not_crash_on_config_remap(tmp_path: Path, monke
 def test_execute_round_real_marks_failed_downloads(tmp_path: Path, monkeypatch) -> None:
     """A pick whose download fails is recorded as unusable/gemini_failed, others score."""
 
-    def fake_download(anchor, *, capture_date, version, zoom_ladder, output_root, vintage_check=None):
+    def fake_download(anchor, *, capture_date, version, zoom_ladder, output_root, provider="TM", vintage_check=None):
         if capture_date == "2021-01-01":
             return _failed_outcome()
         p = tmp_path / f"chip_{capture_date}.tif"

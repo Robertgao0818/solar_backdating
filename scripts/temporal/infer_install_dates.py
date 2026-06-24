@@ -119,6 +119,31 @@ def parse_iso(value: str) -> date:
     return datetime.strptime(value[:10], "%Y-%m-%d").date()
 
 
+def load_vexcel_capture_dates(path: Path) -> dict[str, date]:
+    """grid_id -> per-grid Vexcel ``last_capture_date`` (the present-side detection ceiling).
+
+    The FP-cut detection ran on the 2024 Vexcel ortho, so a panel is provably
+    present no later than its grid's real flight date. GEHI/TM phantom vintages can
+    report an ``earliest_present`` after that date (2024-H2 / 2025), which is
+    physically impossible; this table lets Case A clamp the present side (and Case C
+    its upper bound) to the real flight date. ``last_capture_date`` is used (not
+    ``first``): it is the date by which the *whole* grid -- hence the detection
+    pixel -- is certainly imaged, the conservative provable-present bound.
+    """
+    out: dict[str, date] = {}
+    with path.open("r", newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            gid = str(row.get("grid_id", "")).strip()
+            raw = str(row.get("last_capture_date", "")).strip()
+            if not gid or not raw:
+                continue
+            try:
+                out[gid] = parse_iso(raw)
+            except ValueError:
+                continue
+    return out
+
+
 def _midpoint(start: date, end: date) -> date:
     delta = (end - start).days
     return start + timedelta(days=delta // 2)
@@ -207,7 +232,13 @@ def apply_dip_repair(
     return new_state, repaired_list
 
 
-def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path) -> Phase0InstallInterval:
+def infer_one(
+    state: ScanState,
+    *,
+    census_mid_date: date,
+    scan_state_path: Path,
+    vexcel_capture_by_grid: dict[str, date] | None = None,
+) -> Phase0InstallInterval:
     all_results = _all_results(state)
     usable = _usable(all_results)
     n_obs = len(all_results)
@@ -259,15 +290,62 @@ def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path)
                 f"(state machine should classify as done_ambiguous_nonmonotonic; check scan_state)"
             ).strip(" |")
             return base
+        # Per-grid present-side clamp: the FP-cut detection ran on the 2024 Vexcel
+        # ortho, so the panel is provably present no later than this grid's real
+        # flight date. A GEHI/TM phantom vintage can report earliest_present after
+        # that (2024-H2 / 2025), which is physically impossible -> clamp to the
+        # flight date, an earlier provable present observation. The raw GEHI
+        # earliest_present_date is preserved on the row for provenance.
+        present_clamped = False
+        ceiling = vexcel_capture_by_grid.get(state.grid_id) if vexcel_capture_by_grid else None
+        if ceiling is not None and end_d > ceiling:
+            present_clamped = True
+            end_d = ceiling
+            if start_d > end_d:
+                # latest_absent is ALSO after the flight date: the whole GEHI scan
+                # post-dates the detection imagery, so even the absent reading is a
+                # phantom-date artifact. Reclassify as ambiguous (same precedent as
+                # the marker_missed_pv reclassification) so downstream merge/aggregate
+                # treat it as undated rather than a blank-date "appears", and the
+                # census/Wayback recovery can pick it up.
+                base.status = "done_ambiguous_clamp_inverted"
+                base.install_interval_start = ""
+                base.install_interval_end = ""
+                base.install_mid_estimate = ""
+                base.confidence = "low"
+                base.notes = (
+                    f"{state.notes} | clamp_inverted: latest_absent {latest_absent.capture_date} "
+                    f"> vexcel flight date {ceiling.isoformat()} (grid {state.grid_id}); both GEHI "
+                    f"observations post-date the detection imagery "
+                    f"(raw earliest_present {earliest_present.capture_date}). Needs review."
+                ).strip(" |")
+                return base
+            # Non-inverted clamp: the Vexcel detection is itself a confirmed-present
+            # observation earlier than the TM phantom frame, so it becomes the
+            # effective earliest present (raw value preserved in notes below).
+            base.earliest_present_date = ceiling.isoformat()
         gap_days = (end_d - start_d).days
         mid = _midpoint(start_d, end_d)
         base.install_interval_start = latest_absent.capture_date
-        base.install_interval_end = earliest_present.capture_date
+        base.install_interval_end = end_d.isoformat()
         base.install_mid_estimate = mid.isoformat()
         base.confidence = _confidence_for_appears(gap_days)
+        if present_clamped:
+            base.notes = (
+                f"{state.notes} | present_clamped: raw earliest_present {earliest_present.capture_date} "
+                f"> vexcel flight date {ceiling.isoformat()} (grid {state.grid_id}); "
+                f"earliest_present + interval_end clamped to flight date."
+            ).strip(" |")
         return base
 
     if state.status == "done_installed_during_census":
+        # Per-grid census upper bound: use this grid's real Vexcel flight date when
+        # available, else the global --census-mid-date fallback.
+        census_end = census_mid_date
+        if vexcel_capture_by_grid:
+            grid_ceiling = vexcel_capture_by_grid.get(state.grid_id)
+            if grid_ceiling is not None:
+                census_end = grid_ceiling
         absent_obs = [r for r in usable if not r.pv_present]
         if not absent_obs:
             base.confidence = "low"
@@ -279,11 +357,11 @@ def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path)
         start_d = parse_iso(latest_absent.capture_date)
         base.latest_absent_date = latest_absent.capture_date
         base.earliest_present_date = ""
-        if start_d >= census_mid_date:
+        if start_d >= census_end:
             # Post-hoc census-GT prior check: each anchor is from channel2_micro T1
             # GT — the census-period imagery is known to have PV. If the latest scan
-            # observation is absent at or after census_mid_date, the algorithm is
-            # contradicting that prior. Most plausible cause: marker fell on a roof
+            # observation is absent at or after the census flight date, the algorithm
+            # is contradicting that prior. Most plausible cause: marker fell on a roof
             # aisle / shadow / wrong segment and missed the PV.
             base.status = "done_ambiguous_marker_missed_pv"
             base.confidence = "low"
@@ -292,14 +370,15 @@ def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path)
             base.install_mid_estimate = ""
             base.notes = (
                 f"{state.notes} | marker_missed_pv: latest_absent {latest_absent.capture_date} "
-                f">= census_mid_date {census_mid_date.isoformat()} contradicts census-GT prior "
-                f"(anchor is PV-positive at census per channel2_micro T1 GT). Needs human review."
+                f">= census flight date {census_end.isoformat()} (grid {state.grid_id}) contradicts "
+                f"census-GT prior (anchor is PV-positive at census per channel2_micro T1 GT). "
+                f"Needs human review."
             ).strip(" |")
         else:
-            gap_days = (census_mid_date - start_d).days
+            gap_days = (census_end - start_d).days
             base.install_interval_start = latest_absent.capture_date
-            base.install_interval_end = census_mid_date.isoformat()
-            base.install_mid_estimate = census_mid_date.isoformat()
+            base.install_interval_end = census_end.isoformat()
+            base.install_mid_estimate = census_end.isoformat()
             base.confidence = _confidence_for_census(gap_days)
         return base
 
@@ -308,8 +387,21 @@ def infer_one(state: ScanState, *, census_mid_date: date, scan_state_path: Path)
             base.confidence = "low"
             return base
         earliest_obs = min(usable, key=lambda r: r.capture_date)
-        base.earliest_present_date = earliest_obs.capture_date
-        base.install_interval_end = earliest_obs.capture_date
+        bound_d = parse_iso(earliest_obs.capture_date)
+        ceiling = vexcel_capture_by_grid.get(state.grid_id) if vexcel_capture_by_grid else None
+        if ceiling is not None and bound_d > ceiling:
+            # The censoring bound (install <= earliest_present) is tightened by the
+            # Vexcel detection, an earlier confirmed-present observation.
+            base.earliest_present_date = ceiling.isoformat()
+            base.install_interval_end = ceiling.isoformat()
+            base.notes = (
+                f"{state.notes} | present_clamped: raw earliest_present {earliest_obs.capture_date} "
+                f"> vexcel flight date {ceiling.isoformat()} (grid {state.grid_id}); "
+                f"already-present bound clamped to flight date."
+            ).strip(" |")
+        else:
+            base.earliest_present_date = earliest_obs.capture_date
+            base.install_interval_end = earliest_obs.capture_date
         base.confidence = "low"
         return base
 
@@ -344,6 +436,17 @@ def parse_args() -> argparse.Namespace:
         help="ISO YYYY-MM-DD upper bound used by status=done_installed_during_census. "
         "Default 2024-06-30 (JHB Vexcel mid-year fallback). "
         "Per-region lookup from regions.yaml lands in Task G.",
+    )
+    parser.add_argument(
+        "--vexcel-capture-csv",
+        type=Path,
+        default=None,
+        help="Per-grid Vexcel capture-date CSV (columns grid_id,...,last_capture_date,...). When "
+        "given, the done_appears present side and the done_installed_during_census upper bound are "
+        "clamped to each grid's real flight date (the FP-cut detection imagery), fixing physically "
+        "impossible post-detection (2024-H2 / 2025) present dates. Rows whose latest_absent is also "
+        "after the flight date are blanked and flagged clamp_inverted. Without this flag no clamp is "
+        "applied. JHB table: data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv (ZAsolar repo).",
     )
     parser.add_argument(
         "--require-terminal",
@@ -399,6 +502,15 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(f"Invalid --census-mid-date {args.census_mid_date!r}: {exc}")
 
+    vexcel_dates: dict[str, date] | None = None
+    if args.vexcel_capture_csv is not None:
+        if not args.vexcel_capture_csv.exists():
+            raise SystemExit(f"--vexcel-capture-csv not found: {args.vexcel_capture_csv}")
+        vexcel_dates = load_vexcel_capture_dates(args.vexcel_capture_csv)
+        if not vexcel_dates:
+            raise SystemExit(f"No usable grid_id->date rows in {args.vexcel_capture_csv}")
+        print(f"Loaded per-grid Vexcel flight dates for {len(vexcel_dates)} grids from {args.vexcel_capture_csv}")
+
     state_files = sorted(args.scan_states_dir.glob("*.json"))
     if not state_files:
         raise SystemExit(f"No scan_state JSON files in {args.scan_states_dir}")
@@ -424,7 +536,12 @@ def main() -> None:
             if repaired:
                 n_repaired_total += len(repaired)
                 n_anchors_repaired += 1
-        interval = infer_one(state, census_mid_date=census_mid, scan_state_path=state_path)
+        interval = infer_one(
+            state,
+            census_mid_date=census_mid,
+            scan_state_path=state_path,
+            vexcel_capture_by_grid=vexcel_dates,
+        )
         intervals.append(interval)
 
     if load_failures and not args.allow_load_failures:
@@ -449,6 +566,13 @@ def main() -> None:
     print(f"Wrote {len(intervals)} install intervals -> {output_path}")
     if not args.no_dip_repair:
         print(f"  dip repair: {n_repaired_total} interior dips flipped across {n_anchors_repaired} anchors")
+    if vexcel_dates is not None:
+        n_present_clamped = sum(1 for iv in intervals if "present_clamped" in iv.notes)
+        n_clamp_inverted = sum(1 for iv in intervals if "clamp_inverted" in iv.notes)
+        print(
+            f"  present-clamp: {n_present_clamped} rows clamped to grid flight date, "
+            f"{n_clamp_inverted} clamp_inverted (interval blanked, flagged for review)"
+        )
     for status, count in sorted(by_status.items()):
         print(f"  {status}: {count}")
     print("confidence breakdown:")
