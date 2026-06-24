@@ -1573,6 +1573,7 @@ def _attempt_sequence_batch(
     config: GeminiClientConfig,
     poster: Callable[..., dict[str, Any]] | None,
     max_tokens: int | None,
+    routing_salt: str | None = None,
 ) -> tuple[dict[str, Any] | None, str, str | None]:
     prompt = _build_sequence_prompt(date_picks)
     try:
@@ -1584,6 +1585,7 @@ def _attempt_sequence_batch(
             response_mime_type="application/json",
             response_schema=_sequence_response_schema(date_picks),
             poster=poster,
+            routing_salt=routing_salt,
         )
     except Exception as exc:  # noqa: BLE001
         return None, "", f"{type(exc).__name__}: {exc}"
@@ -1602,6 +1604,7 @@ def score_single_target_sequence(
     audit_writer: Callable[[dict[str, Any]], None] | None = None,
     poster: Callable[..., dict[str, Any]] | None = None,
     max_tokens: int | None = None,
+    routing_salt: str | None = None,
 ) -> GeminiSequenceResult:
     """Score one target across an ordered date window.
 
@@ -1619,6 +1622,7 @@ def score_single_target_sequence(
             config=config,
             poster=poster,
             max_tokens=max_tokens,
+            routing_salt=routing_salt,
         )
         if audit_writer is not None:
             audit_writer(
