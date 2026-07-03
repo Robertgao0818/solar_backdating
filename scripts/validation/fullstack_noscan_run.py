@@ -108,6 +108,13 @@ def main() -> int:
     ap.add_argument("--limit-chips", type=int, default=None, help="smoke: only first N chips")
     ap.add_argument("--limit-windows", type=int, default=None, help="smoke: only first N windows/target")
     ap.add_argument("--rep-start", type=int, default=1)
+    ap.add_argument(
+        "--verdict-store", type=Path, default=None,
+        help="OPT-IN content-addressed verdict store JSONL (ISSUE-07). Deliberately OFF "
+        "by default here: this harness measures rep-to-rep scorer noise, and a store "
+        "would replay rep 1's verdicts for every later rep, collapsing the variance "
+        "being measured. Enable only for deterministic replays of a banked run.",
+    )
     a = ap.parse_args()
     a.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -124,7 +131,17 @@ def main() -> int:
     from scripts.temporal.scoring_provenance import jsonl_writer, with_scoring_provenance
 
     scoring_provenance_writer = jsonl_writer(a.out_dir / "scoring_provenance.jsonl")
-    score_sequence = with_scoring_provenance(get_scorer(a.scorer), scoring_provenance_writer).sequence
+    scorer_obj = get_scorer(a.scorer)
+    # ISSUE-07 (opt-in, see --verdict-store help): verdict cache under the
+    # provenance wrapper, so replayed verdicts still emit sidecar rows.
+    verdict_store = None
+    if a.verdict_store is not None:
+        from scripts.temporal.verdict_store import VerdictStore, with_verdict_store
+
+        verdict_store = VerdictStore(a.verdict_store)
+        print(f"[fullstack] verdict_store={a.verdict_store} records={len(verdict_store)}")
+        scorer_obj = with_verdict_store(scorer_obj, verdict_store)
+    score_sequence = with_scoring_provenance(scorer_obj, scoring_provenance_writer).sequence
 
     review_pngs = load_review_png_manifest(a.manifest)
     by_target: dict[TargetKey, dict[str, object]] = defaultdict(dict)
@@ -256,6 +273,10 @@ def main() -> int:
     lf.close()
     df.close()
     print(f"\nDONE: {counter['done']} jobs, {counter['err']} errors -> {long_path}", flush=True)
+    if verdict_store is not None:
+        stats = verdict_store.stats_snapshot()
+        print("[fullstack] verdict_store: " + " ".join(f"{k}={stats[k]}" for k in sorted(stats)))
+        verdict_store.close()
     return 0
 
 

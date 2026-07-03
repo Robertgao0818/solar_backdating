@@ -1,6 +1,6 @@
 # ISSUE-07: Content-addressed verdict store + replay gate + churn monitor
 
-Status: ready-for-agent
+Status: done
 Phase: 1 — Provenance
 Blocked by: ISSUE-06
 
@@ -27,11 +27,26 @@ deliberately, not silently).
 
 ## Acceptance criteria
 
-- [ ] Replay gate: a completed cohort slice re-run through the store produces byte-identical scan states
-- [ ] Cache-miss accounting: second identical run issues zero scorer calls (measured)
-- [ ] Churn monitor detects a mutated sentinel chip (unit test) and reports churn rate
-- [ ] Concurrent access safe under the production parallelism pattern, or a single-writer constraint documented and enforced
-- [ ] Store size/compaction characteristics documented (record-per-frame at cohort scale)
+- [x] Replay gate: a completed cohort slice re-run through the store produces byte-identical scan states
+- [x] Cache-miss accounting: second identical run issues zero scorer calls (measured)
+- [x] Churn monitor detects a mutated sentinel chip (unit test) and reports churn rate
+- [x] Concurrent access safe under the production parallelism pattern, or a single-writer constraint documented and enforced
+- [x] Store size/compaction characteristics documented (record-per-frame at cohort scale)
+
+## Landed (2026-07-03)
+
+`scripts/temporal/verdict_store.py` + `tests/temporal/test_verdict_store.py`;
+design/ops doc: [`../verdict_store.md`](../verdict_store.md). Key =
+(chip pixel hash × scorer identity × prompt hash × mode × call-time
+instruction extras); per-chip records for batch/`score()` (one shared shape),
+window-level for sequence/matrix; failures never cached; `raw_response` not
+memoized. Wired default-ON into `run_adaptive_scan` / `run_census2023_scan` /
+`score_target_sequence` / `score_chip_group_matrix` (`--no-verdict-store` to
+disable), OPT-IN in `fullstack_noscan_run` (a store would collapse the
+rep-to-rep variance that harness measures). Wrap order: provenance sidecar
+outermost, verdict cache inner — cache hits still emit ISSUE-06 rows.
+Thread-safe in-process; cross-process single-writer enforced via `fcntl` lock.
+CLI: `stats / compact / sentinel-init / sentinel-check / replay-diff`.
 
 ## Blocked by
 

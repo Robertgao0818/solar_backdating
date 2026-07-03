@@ -48,7 +48,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from scripts.temporal.verdict_store import VerdictStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -287,6 +290,7 @@ def run_one_anchor(
     min_cache_zoom: int | None = None,
     provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
     scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
+    verdict_store: VerdictStore | None = None,
 ) -> dict[str, object]:
     out = _base_out(job)
     if job.A is None or job.P is None or job.A > job.P:
@@ -306,6 +310,13 @@ def run_one_anchor(
         out["notes"] = "missing cached absent/present anchor frame"
         return out
 
+    # ISSUE-07 verdict store: consult the content-addressed store before the
+    # per-anchor sequence call. Wrapped BEFORE the provenance sidecar so cache
+    # hits still emit sidecar rows (provenance outermost).
+    if verdict_store is not None:
+        from scripts.temporal.verdict_store import with_verdict_store
+
+        scorer = with_verdict_store(scorer, verdict_store)
     # ISSUE-06 scoring-provenance sidecar: wrap the injected scorer so the single
     # per-anchor sequence call emits one provenance row per scored frame, stamped
     # with this anchor. Wrapper delegates failure_decision_sources verbatim, so
@@ -586,6 +597,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--overwrite-chips", action="store_true",
                    help="Re-download every 2023 Wayback chip, bypassing the skip-existing cache "
                    "(ISSUE-18 escape hatch). Default: off.")
+    p.add_argument("--verdict-store", type=Path, default=None,
+                   help="Content-addressed verdict store JSONL (ISSUE-07). Default: "
+                   "<output parent>/verdict_store.jsonl. Identical re-runs replay cached "
+                   "sequence verdicts and issue zero scorer calls for already-seen windows.")
+    p.add_argument("--no-verdict-store", action="store_true",
+                   help="Disable the ISSUE-07 verdict store (every window is re-scored).")
     p.add_argument("--min-cache-zoom", type=int, default=None,
                    help="Refuse cached chips below this zoom so the ladder re-fetches and upgrades "
                    "them (ISSUE-18 escape hatch; cache acceptance only). Default: off.")
@@ -640,6 +657,17 @@ def main() -> int:
 
     scoring_provenance_writer = _scoring_jsonl_writer(args.output.parent / "scoring_provenance.jsonl")
 
+    # ISSUE-07: one VerdictStore shared across census workers (thread-safe;
+    # single-writer across processes). Wrapped inside run_one_anchor, under the
+    # provenance sidecar, so cache hits still emit sidecar rows.
+    verdict_store = None
+    if not args.no_verdict_store:
+        from scripts.temporal.verdict_store import VerdictStore
+
+        store_path = args.verdict_store or (args.output.parent / "verdict_store.jsonl")
+        verdict_store = VerdictStore(store_path)
+        print(f"[census] verdict_store={store_path} records={len(verdict_store)}")
+
     def work(job: CensusJob) -> dict[str, object]:
         return run_one_anchor(
             job, main_dir=args.main_scan_states_dir, norecent_dir=args.norecent_scan_states_dir,
@@ -649,6 +677,7 @@ def main() -> int:
             overwrite_chips=args.overwrite_chips, min_cache_zoom=args.min_cache_zoom,
             provenance_writer=provenance_writer,
             scoring_provenance_writer=scoring_provenance_writer,
+            verdict_store=verdict_store,
         )
 
     def record(res: dict[str, object]) -> None:
@@ -687,6 +716,14 @@ def main() -> int:
     for k, v in sorted(by_dec.items(), key=lambda kv: -kv[1]):
         print(f"  {k}: {v}")
     print(f"[census] narrowed {n_narrowed} anchors")
+    if verdict_store is not None:
+        stats = verdict_store.stats_snapshot()
+        print(
+            "[census] verdict_store: "
+            + " ".join(f"{k}={stats[k]}" for k in sorted(stats))
+            + f" records={len(verdict_store)}"
+        )
+        verdict_store.close()
 
     # Aggregated achieved-zoom distribution over every downloaded 2023 Wayback
     # frame (ISSUE-18 / D17); re-summed from each row's achieved_zoom_counts so

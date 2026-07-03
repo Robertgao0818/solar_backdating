@@ -27,7 +27,10 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from scripts.temporal.verdict_store import VerdictStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -575,13 +578,14 @@ def score_target_sequences(
     resume_target_rows: Mapping[tuple[str, str, str, str], Mapping[str, object]] | None = None,
     resume_long_rows: Mapping[tuple[str, str, str, str], Sequence[Mapping[str, object]]] | None = None,
     scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
+    verdict_store: VerdictStore | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if workers <= 0:
         raise ValueError("workers must be positive")
-    # ISSUE-06: only the default-resolution branch is provenance-wrapped, so a
-    # caller-injected raw `scorer=` callable (e.g. a test's fake) is never handed
-    # the unknown `provenance_context` kwarg. When wrapped, the per-job context
-    # (anchor / chip / target) is threaded per call inside run_one.
+    # ISSUE-06/-07: only the default-resolution branch is provenance/verdict-store
+    # wrapped, so a caller-injected raw `scorer=` callable (e.g. a test's fake) is
+    # never handed the unknown `provenance_context` kwarg. When wrapped, the
+    # per-job context (anchor / chip / target) is threaded per call inside run_one.
     provenance_active = False
     if scorer is None:
         # Default routes through the PresenceScorer seam registry rather than a
@@ -591,6 +595,12 @@ def score_target_sequences(
         from scripts.temporal.presence_scorer import get_scorer
 
         scorer_obj = get_scorer("gemini")
+        if verdict_store is not None:
+            # Verdict cache under the provenance wrapper (provenance outermost),
+            # so cache hits still emit sidecar rows.
+            from scripts.temporal.verdict_store import with_verdict_store
+
+            scorer_obj = with_verdict_store(scorer_obj, verdict_store)
         if scoring_provenance_writer is not None:
             from scripts.temporal.scoring_provenance import with_scoring_provenance
 
@@ -773,6 +783,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-targets", type=int)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--no-audit", action="store_true")
+    parser.add_argument("--verdict-store", type=Path, default=None,
+                        help="Content-addressed verdict store JSONL (ISSUE-07). Default: "
+                        "<output parent>/verdict_store.jsonl. Applies to the default gemini "
+                        "scorer; identical re-runs replay cached window verdicts.")
+    parser.add_argument("--no-verdict-store", action="store_true",
+                        help="Disable the ISSUE-07 verdict store (every window is re-scored).")
     parser.add_argument("--crop-context-multiplier", type=float, default=3.0)
     parser.add_argument("--min-crop-size-m", type=float, default=24.0)
     parser.add_argument("--min-output-px", type=int, default=128)
@@ -828,6 +844,15 @@ def main() -> int:
     # as before (raw callable, unwrapped).
     scoring_provenance_writer = jsonl_writer(args.output.parent / "scoring_provenance.jsonl")
     scorer = None if args.scorer == "gemini" else get_scorer(args.scorer).sequence
+    # ISSUE-07 verdict store: consulted inside score_target_sequences' default
+    # scorer-resolution branch (same branch the provenance wrapper uses).
+    verdict_store = None
+    if not args.no_verdict_store:
+        from scripts.temporal.verdict_store import VerdictStore
+
+        store_path = args.verdict_store or (args.output.parent / "verdict_store.jsonl")
+        verdict_store = VerdictStore(store_path)
+        print(f"verdict_store={store_path} records={len(verdict_store)}")
     target_rows, long_rows = score_target_sequences(
         review_pngs=review_pngs,
         dates=dates,
@@ -841,7 +866,12 @@ def main() -> int:
         resume_target_rows=resume_target_rows,
         resume_long_rows=resume_long_rows,
         scoring_provenance_writer=scoring_provenance_writer,
+        verdict_store=verdict_store,
     )
+    if verdict_store is not None:
+        stats = verdict_store.stats_snapshot()
+        print("verdict_store: " + " ".join(f"{k}={stats[k]}" for k in sorted(stats)))
+        verdict_store.close()
     write_csv_rows(args.output, target_rows, SEQUENCE_TARGET_FIELDS)
     write_csv_rows(args.long_output, long_rows, SEQUENCE_LONG_FIELDS)
     print(f"Review PNG manifest -> {review_manifest_path}")

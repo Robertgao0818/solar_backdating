@@ -34,7 +34,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Callable, Iterable, Mapping
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from scripts.temporal.verdict_store import VerdictStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -182,6 +185,20 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Refuse cached chips below this zoom so the ladder re-fetches and upgrades them "
         "(ISSUE-18 escape hatch; governs cache acceptance only). Default: off.",
+    )
+    parser.add_argument(
+        "--verdict-store",
+        type=Path,
+        default=None,
+        help="Path of the content-addressed verdict store JSONL (ISSUE-07). "
+        "Default: <scan-states-dir parent>/verdict_store.jsonl. Every scoring "
+        "call consults it first; identical re-runs replay verdicts and issue "
+        "zero scorer calls for already-seen chips. Single-writer per store file.",
+    )
+    parser.add_argument(
+        "--no-verdict-store",
+        action="store_true",
+        help="Disable the ISSUE-07 verdict store entirely (every chip is re-scored).",
     )
     parser.add_argument(
         "--qps",
@@ -731,6 +748,7 @@ def run_one_anchor(
     min_cache_zoom: int | None = None,
     provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
     scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
+    verdict_store: VerdictStore | None = None,
     catalog_cache: CatalogCache | None = None,
     catalog_force_refresh: bool = False,
     catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
@@ -763,6 +781,16 @@ def run_one_anchor(
         )
     elif scorer is None:
         scorer = get_scorer("gemini")
+    # ISSUE-07 verdict store: wrap the resolved scorer so every scoring call
+    # consults the content-addressed store first (re-runs pay only never-seen
+    # chips). Must wrap BEFORE the provenance sidecar so cache hits still emit
+    # sidecar rows (provenance outermost — see verdict_store module docstring).
+    # Dry-run picks carry no chip files, so the store passes them through and
+    # dry-run output stays byte-identical.
+    if verdict_store is not None:
+        from scripts.temporal.verdict_store import with_verdict_store
+
+        scorer = with_verdict_store(scorer, verdict_store)
     # ISSUE-06 scoring-provenance sidecar: wrap the resolved scorer (dry-run OR
     # real) so every scored chip emits one provenance row stamped with this
     # anchor. The wrapper delegates the scorer's declared vocabulary + failure
@@ -1113,6 +1141,20 @@ def main() -> None:
         args.scan_states_dir.parent / "scoring_provenance.jsonl"
     )
 
+    # ISSUE-07: one VerdictStore shared across every anchor worker (thread-safe;
+    # single-writer across processes, enforced via a lock file). Wrapped around
+    # the scorer inside run_one_anchor, INSIDE the provenance wrapper, so cache
+    # hits still emit scoring-provenance rows. Dry-run picks have no chip files
+    # and pass through unhashed, so enabling the store never changes dry-run
+    # output. `--no-verdict-store` keeps `verdict_store=None` end to end.
+    verdict_store = None
+    if not args.no_verdict_store:
+        from scripts.temporal.verdict_store import VerdictStore
+
+        store_path = args.verdict_store or (args.scan_states_dir.parent / "verdict_store.jsonl")
+        verdict_store = VerdictStore(store_path)
+        print(f"[CFG] verdict_store={store_path} records={len(verdict_store)}")
+
     # ISSUE-13: one CatalogCache shared across every anchor worker (thread-safe:
     # sqlite3 WAL + an internal lock). Lazily constructed only for the real path
     # (dry-run never touches GEHI) and only when the cache isn't disabled;
@@ -1146,6 +1188,7 @@ def main() -> None:
                 min_cache_zoom=args.min_cache_zoom,
                 provenance_writer=provenance_writer,
                 scoring_provenance_writer=scoring_provenance_writer,
+                verdict_store=verdict_store,
                 catalog_cache=catalog_cache,
                 catalog_force_refresh=args.force_catalog_refresh,
                 catalog_max_age_days=args.catalog_max_age_days,
@@ -1172,6 +1215,14 @@ def main() -> None:
     summarize(states)
     if catalog_cache is not None:
         print(f"[CFG] {catalog_cache.stats.summary()}")
+    if verdict_store is not None:
+        stats = verdict_store.stats_snapshot()
+        print(
+            "[CFG] verdict_store: "
+            + " ".join(f"{k}={stats[k]}" for k in sorted(stats))
+            + f" records={len(verdict_store)}"
+        )
+        verdict_store.close()
 
     # Continue-on-error means failed anchors were recorded and skipped, but a
     # partial batch must not exit 0. Surface failures and exit nonzero.

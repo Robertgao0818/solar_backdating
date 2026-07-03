@@ -24,7 +24,10 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from scripts.temporal.verdict_store import VerdictStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -472,6 +475,7 @@ def score_chip_group_matrices(
     hard_max_cells: int = HARD_MAX_MATRIX_CELLS,
     limit_chips: int | None = None,
     scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
+    verdict_store: VerdictStore | None = None,
 ) -> list[dict[str, object]]:
     """Score every chip group's date x target matrix and flatten to CSV rows.
 
@@ -495,21 +499,31 @@ def score_chip_group_matrices(
     if hard_max_cells <= 0:
         raise ValueError("hard_max_cells must be positive")
 
-    # ISSUE-06: only the default-resolution branch is provenance-wrapped, so a
-    # caller-injected raw `scorer=` callable never receives the unknown
-    # `provenance_context` kwarg. When wrapped, per-call chip_id context is passed
-    # at the scorer call below.
+    # ISSUE-06/-07: only the default-resolution branch is provenance/verdict-store
+    # wrapped, so a caller-injected raw `scorer=` callable never receives the
+    # unknown `provenance_context` kwarg. When wrapped, per-call chip_id context is
+    # passed at the scorer call below.
     provenance_active = False
     if scorer is None:
         scorer, resolved_failure_source = _resolve_default_matrix_scorer(scorer_name)
         if failure_decision_source is None:
             failure_decision_source = resolved_failure_source
-        if scoring_provenance_writer is not None:
+        if scoring_provenance_writer is not None or verdict_store is not None:
             from scripts.temporal.presence_scorer import get_scorer
-            from scripts.temporal.scoring_provenance import with_scoring_provenance
 
-            scorer = with_scoring_provenance(get_scorer(scorer_name), scoring_provenance_writer).matrix
-            provenance_active = True
+            scorer_obj = get_scorer(scorer_name)
+            if verdict_store is not None:
+                # Verdict cache under the provenance wrapper (provenance
+                # outermost), so cache hits still emit sidecar rows.
+                from scripts.temporal.verdict_store import with_verdict_store
+
+                scorer_obj = with_verdict_store(scorer_obj, verdict_store)
+            if scoring_provenance_writer is not None:
+                from scripts.temporal.scoring_provenance import with_scoring_provenance
+
+                scorer_obj = with_scoring_provenance(scorer_obj, scoring_provenance_writer)
+                provenance_active = True
+            scorer = scorer_obj.matrix
     if failure_decision_source is None:
         failure_decision_source = DEFAULT_FAILURE_DECISION_SOURCE
 
@@ -683,6 +697,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hard-max-targets", type=int, default=HARD_MAX_MATRIX_TARGETS)
     parser.add_argument("--hard-max-cells", type=int, default=HARD_MAX_MATRIX_CELLS)
     parser.add_argument("--limit-chips", type=int)
+    parser.add_argument("--verdict-store", type=Path, default=None,
+                        help="Content-addressed verdict store JSONL (ISSUE-07). Default: "
+                        "<output parent>/verdict_store.jsonl. Identical re-runs replay cached "
+                        "matrix verdicts for already-seen chip-group windows.")
+    parser.add_argument("--no-verdict-store", action="store_true",
+                        help="Disable the ISSUE-07 verdict store (every window is re-scored).")
     parser.add_argument(
         "--no-audit",
         action="store_true",
@@ -714,6 +734,15 @@ def main() -> int:
     from scripts.temporal.scoring_provenance import jsonl_writer
 
     scoring_provenance_writer = jsonl_writer(args.output.parent / "scoring_provenance.jsonl")
+    # ISSUE-07 verdict store: consulted inside score_chip_group_matrices' default
+    # scorer-resolution branch (same branch the provenance wrapper uses).
+    verdict_store = None
+    if not args.no_verdict_store:
+        from scripts.temporal.verdict_store import VerdictStore
+
+        store_path = args.verdict_store or (args.output.parent / "verdict_store.jsonl")
+        verdict_store = VerdictStore(store_path)
+        print(f"verdict_store={store_path} records={len(verdict_store)}")
     rows = score_chip_group_matrices(
         artifacts_by_chip=artifacts_by_chip,
         targets_by_chip=targets_by_chip,
@@ -726,7 +755,12 @@ def main() -> int:
         hard_max_cells=args.hard_max_cells,
         limit_chips=args.limit_chips,
         scoring_provenance_writer=scoring_provenance_writer,
+        verdict_store=verdict_store,
     )
+    if verdict_store is not None:
+        stats = verdict_store.stats_snapshot()
+        print("verdict_store: " + " ".join(f"{k}={stats[k]}" for k in sorted(stats)))
+        verdict_store.close()
     write_csv_rows(args.output, rows, MATRIX_PRESENCE_FIELDS)
     print(f"Wrote {len(rows)} matrix presence rows -> {args.output}")
     if audit_dir is not None:
