@@ -1,22 +1,28 @@
-"""Tests for `scripts.audit.coj_arcgis_fetch` (ISSUE-08).
+"""Tests for `scripts.audit.coj_arcgis_fetch` (ISSUE-08 + ISSUE-09 cohort).
 
-All network is injected (`http_get` / `sleep_fn` / `rng` callables) — no real
-requests are made. Covers: URL construction, WGS84->3857 bbox reprojection,
-retry/backoff on fake failures, the <5000-byte empty heuristic, and
-text/html WAF-challenge detection.
+All network is injected (`http_get` / `sleep_fn` / `rng` / `fetch_one`
+callables) — no real requests are made. Covers: URL construction,
+WGS84->3857 bbox reprojection, retry/backoff on fake failures, the
+<5000-byte empty heuristic, text/html WAF-challenge detection, and (ISSUE-09,
+WP-B) the 2015 layer + the across-units `fetch_units_concurrent` driver.
 """
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
 from scripts.audit.coj_arcgis_fetch import (
     COJ_LAYERS,
     FetchOutcome,
+    FetchUnit,
     backoff_seconds,
     build_export_url,
     fetch_chip,
+    fetch_units_concurrent,
     pixel_size_for_bbox,
     wgs84_bbox_to_3857,
 )
@@ -64,10 +70,25 @@ def test_build_export_url_contains_required_params():
     assert "interpolation=RSP_BilinearInterpolation" in url
 
 
-def test_coj_layers_registered_for_both_years():
-    assert set(COJ_LAYERS) == {2019, 2023}
+def test_coj_layers_registered_for_all_years():
+    # ISSUE-09 (WP-B) adds 2015; 2019/2023 URLs are unchanged (pilot depends on them).
+    assert set(COJ_LAYERS) == {2015, 2019, 2023}
+    assert COJ_LAYERS[2015].endswith("/2015/ImageServer")
     assert COJ_LAYERS[2019].endswith("/2019/ImageServer")
     assert COJ_LAYERS[2023].endswith("/2023/ImageServer")
+
+
+def test_coj_layers_2015_matches_2019_2023_url_pattern():
+    # The 2015 URL must follow the identical AerialPhotography/<year>/ImageServer pattern.
+    assert 2015 in COJ_LAYERS
+    assert (
+        COJ_LAYERS[2015]
+        == "https://ags.joburg.org.za/server/rest/services/AerialPhotography/2015/ImageServer"
+    )
+    # same prefix + suffix shape as the two verified pilot layers
+    prefix = "https://ags.joburg.org.za/server/rest/services/AerialPhotography/"
+    for year in (2015, 2019, 2023):
+        assert COJ_LAYERS[year] == f"{prefix}{year}/ImageServer"
 
 
 # ---------------------------------------------------------------------------
@@ -205,3 +226,225 @@ def test_fetch_outcome_is_jsonl_serializable():
     import json
 
     json.dumps(d)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# ISSUE-09 (WP-B) — FetchUnit + across-units concurrent driver
+#
+# Politeness invariant under test: concurrency is ACROSS units only. Each
+# `fetch_one` call stays fully sequential internally (the pilot per-request
+# sleep/backoff lives inside fetch_and_save_chip, NOT here), and the driver
+# adds NO retry of its own — a unit's outcome is terminal. The driver's job is
+# purely: submit each unit once to a thread pool, funnel every result through a
+# single lock (so the shared fetch_stats.jsonl writer can't interleave), and
+# roll up a {outcome: count} summary.
+# ---------------------------------------------------------------------------
+
+
+def _make_units(n: int, *, year: int = 2023) -> list[FetchUnit]:
+    return [
+        FetchUnit(
+            anchor_id=f"a{i:04d}",
+            year=year,
+            bbox_4326=(0.0, 0.0, 1.0, 1.0),
+            out_path=Path(f"/tmp/coj_fake/{year}/a{i:04d}.tif"),
+        )
+        for i in range(n)
+    ]
+
+
+def _delayed_ok(unit: FetchUnit) -> FetchOutcome:
+    # Deterministic-per-index tiny delay: exercises worker interleaving without
+    # touching the network or the clock in any nondeterministic way.
+    idx = int(unit.anchor_id[1:])
+    time.sleep((idx % 5) * 0.001)
+    return FetchOutcome(layer=str(unit.year), outcome="ok", attempts=1)
+
+
+def test_fetch_unit_is_frozen_dataclass():
+    u = FetchUnit(
+        anchor_id="a1", year=2015, bbox_4326=(1.0, 2.0, 3.0, 4.0), out_path=Path("/tmp/x.tif")
+    )
+    assert u.anchor_id == "a1"
+    assert u.year == 2015
+    assert u.bbox_4326 == (1.0, 2.0, 3.0, 4.0)
+    assert u.out_path == Path("/tmp/x.tif")
+    with pytest.raises(Exception):  # FrozenInstanceError — must be immutable
+        u.anchor_id = "b"  # type: ignore[misc]
+
+
+def test_fetch_units_concurrent_processes_each_unit_exactly_once():
+    units = _make_units(50)
+    recorded: list[tuple[str, str]] = []
+
+    # on_result deliberately has NO lock of its own — the driver must serialize
+    # it under a single lock, so this plain append is safe if the contract holds.
+    def on_result(unit: FetchUnit, outcome: FetchOutcome) -> None:
+        recorded.append((unit.anchor_id, outcome.outcome))
+
+    summary = fetch_units_concurrent(
+        units, fetch_one=_delayed_ok, on_result=on_result, pool_size=4
+    )
+
+    assert len(recorded) == 50
+    # every unit seen exactly once, none lost or duplicated under pool_size>1
+    assert sorted(a for a, _ in recorded) == sorted(u.anchor_id for u in units)
+    assert summary == {"ok": 50}
+    assert sum(summary.values()) == len(recorded)
+
+
+def test_fetch_units_concurrent_exception_becomes_terminal_outcome():
+    units = _make_units(50)
+    recorded: dict[str, str] = {}
+
+    def fetch_one(unit: FetchUnit) -> FetchOutcome:
+        idx = int(unit.anchor_id[1:])
+        if idx % 2 == 0:
+            raise ConnectionError(f"boom {idx}")
+        return FetchOutcome(layer=str(unit.year), outcome="ok", attempts=1)
+
+    def on_result(unit: FetchUnit, outcome: FetchOutcome) -> None:
+        recorded[unit.anchor_id] = outcome.outcome
+
+    summary = fetch_units_concurrent(
+        units, fetch_one=fetch_one, on_result=on_result, pool_size=4
+    )
+
+    # a raising fetch_one -> outcome 'exception' for THAT unit; pool not crashed,
+    # every other unit still processed.
+    assert len(recorded) == 50
+    assert summary.get("exception") == 25
+    assert summary.get("ok") == 25
+    assert recorded["a0000"] == "exception"
+    assert recorded["a0001"] == "ok"
+
+
+def test_fetch_units_concurrent_does_not_retry_units():
+    # Even a failing (non-ok) outcome is terminal: the driver must call fetch_one
+    # exactly once per unit and never re-submit.
+    units = _make_units(20)
+    call_counts: dict[str, int] = {}
+    lock = threading.Lock()
+
+    def fetch_one(unit: FetchUnit) -> FetchOutcome:
+        with lock:
+            call_counts[unit.anchor_id] = call_counts.get(unit.anchor_id, 0) + 1
+        return FetchOutcome(layer=str(unit.year), outcome="http_error", attempts=3)
+
+    def on_result(unit: FetchUnit, outcome: FetchOutcome) -> None:
+        pass
+
+    summary = fetch_units_concurrent(
+        units, fetch_one=fetch_one, on_result=on_result, pool_size=4
+    )
+
+    assert len(call_counts) == 20
+    assert all(v == 1 for v in call_counts.values())
+    assert summary == {"http_error": 20}
+
+
+def test_fetch_units_concurrent_max_units_caps_submissions():
+    units = _make_units(50)
+    seen: list[str] = []
+
+    def on_result(unit: FetchUnit, outcome: FetchOutcome) -> None:
+        seen.append(unit.anchor_id)
+
+    summary = fetch_units_concurrent(
+        units, fetch_one=_delayed_ok, on_result=on_result, pool_size=4, max_units=10
+    )
+
+    assert len(seen) == 10
+    assert summary == {"ok": 10}
+    # only the first 10 units (submission order) are ever handed to fetch_one
+    assert sorted(seen) == [f"a{i:04d}" for i in range(10)]
+
+
+class _StopAfter:
+    """should_stop() that returns False for the first ``n`` checks, then True."""
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+        self.calls = 0
+
+    def __call__(self) -> bool:
+        self.calls += 1
+        return self.calls > self.n
+
+
+def test_fetch_units_concurrent_should_stop_halts_further_submission():
+    units = _make_units(50)
+    seen: list[str] = []
+
+    def on_result(unit: FetchUnit, outcome: FetchOutcome) -> None:
+        seen.append(unit.anchor_id)
+
+    stop = _StopAfter(10)  # checks 1..10 -> False (submit), check 11 -> True (break)
+    summary = fetch_units_concurrent(
+        units, fetch_one=_delayed_ok, on_result=on_result, pool_size=4, should_stop=stop
+    )
+
+    # cooperative stop: the 10 already-submitted units finish; nothing past the stop.
+    assert len(seen) == 10
+    assert summary == {"ok": 10}
+    assert stop.calls == 11
+
+
+def test_fetch_units_concurrent_should_stop_true_from_start_submits_nothing():
+    units = _make_units(10)
+    seen: list[str] = []
+
+    def on_result(unit: FetchUnit, outcome: FetchOutcome) -> None:
+        seen.append(unit.anchor_id)
+
+    summary = fetch_units_concurrent(
+        units, fetch_one=_delayed_ok, on_result=on_result, pool_size=4,
+        should_stop=lambda: True,
+    )
+
+    assert seen == []
+    assert summary == {}
+
+
+def test_fetch_units_concurrent_empty_input_returns_empty_summary():
+    calls = {"n": 0}
+
+    def on_result(unit: FetchUnit, outcome: FetchOutcome) -> None:
+        calls["n"] += 1
+
+    summary = fetch_units_concurrent(
+        [], fetch_one=_delayed_ok, on_result=on_result, pool_size=4
+    )
+    assert summary == {}
+    assert calls["n"] == 0
+
+
+def test_fetch_units_concurrent_stop_mid_run_takes_effect_within_window():
+    # Regression: submission must be windowed (bounded in-flight), not
+    # queue-everything-upfront — otherwise a stop signal raised while units are
+    # actually fetching can never halt the run (at cohort scale, ~16k queued
+    # units would drain for hours after Ctrl-C). A slow fetch_one + a stop
+    # event flipped by the 3rd completion must leave most units unprocessed.
+    pool_size = 4
+    units = _make_units(200)
+    stop = threading.Event()
+    seen: list[str] = []
+
+    def fetch_one(unit: FetchUnit) -> FetchOutcome:
+        time.sleep(0.01)
+        return FetchOutcome(layer=str(unit.year), outcome="ok", attempts=1)
+
+    def on_result(unit: FetchUnit, outcome: FetchOutcome) -> None:
+        seen.append(unit.anchor_id)
+        if len(seen) >= 3:
+            stop.set()
+
+    summary = fetch_units_concurrent(
+        units, fetch_one=fetch_one, on_result=on_result,
+        pool_size=pool_size, should_stop=stop.is_set,
+    )
+
+    # after the stop flips, at most the bounded in-flight window (2*pool_size)
+    # plus a submission-race margin may still complete — nowhere near all 200.
+    assert 3 <= len(seen) <= 3 + 3 * pool_size
+    assert sum(summary.values()) == len(seen)

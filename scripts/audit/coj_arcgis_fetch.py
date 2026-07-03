@@ -17,7 +17,9 @@ as a hard failure (subject to retry).
 from __future__ import annotations
 
 import random
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -25,10 +27,13 @@ from typing import Any, Callable, Protocol
 from pyproj import Transformer
 
 # ---------------------------------------------------------------------------
-# Layer registry (live-verified in the ISSUE-08 scouting pass)
+# Layer registry (live-verified in the ISSUE-08 scouting pass; 2015 added for
+# the ISSUE-09 cohort — same AerialPhotography/<year>/ImageServer pattern,
+# probed live but not yet exercised against exportImage, see cohort design §9)
 # ---------------------------------------------------------------------------
 
 COJ_LAYERS: dict[int, str] = {
+    2015: "https://ags.joburg.org.za/server/rest/services/AerialPhotography/2015/ImageServer",
     2019: "https://ags.joburg.org.za/server/rest/services/AerialPhotography/2019/ImageServer",
     2023: "https://ags.joburg.org.za/server/rest/services/AerialPhotography/2023/ImageServer",
 }
@@ -289,3 +294,107 @@ def fetch_and_save_chip(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(body)
     return outcome
+
+
+# ---------------------------------------------------------------------------
+# Across-units concurrent fetch driver (ISSUE-09 cohort scale, WP-B)
+# ---------------------------------------------------------------------------
+#
+# The pilot fetched ~244 units strictly sequentially. Cohort scale (~16k units)
+# needs 4-6 workers to bring the wall-clock from ~69 h down to ~14 h. The one
+# thing that must NOT change is the per-request politeness posture: concurrency
+# is ACROSS units only. Each ``fetch_one`` call is left fully sequential
+# internally — its sleep / retry x3 backoff logic lives inside
+# ``fetch_and_save_chip`` (§8 of the pilot doc), and this driver adds NO retry
+# of its own. A unit's ``FetchOutcome`` is terminal: the driver classifies,
+# funnels it through a single lock so the shared ``fetch_stats.jsonl`` writer
+# can't interleave, tallies it, and moves on.
+
+
+@dataclass(frozen=True)
+class FetchUnit:
+    """One planned (anchor, layer-year) fetch unit for the cohort driver.
+
+    ``bbox_4326`` is the WGS84 (lon_min, lat_min, lon_max, lat_max) anchor box;
+    ``out_path`` is where the production ``fetch_one`` wrapper writes the chip.
+    Frozen so it can be a stable key / safely shared across worker threads.
+    """
+
+    anchor_id: str
+    year: int
+    bbox_4326: tuple[float, float, float, float]
+    out_path: Path
+
+
+def fetch_units_concurrent(
+    units: list[FetchUnit],
+    *,
+    fetch_one: Callable[[FetchUnit], FetchOutcome],
+    on_result: Callable[[FetchUnit, FetchOutcome], None],
+    pool_size: int = 5,
+    max_units: int | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> dict[str, int]:
+    """Fetch ``units`` concurrently across a thread pool, one call per unit.
+
+    Driver = ``concurrent.futures.ThreadPoolExecutor(pool_size)`` (the work is
+    network I/O-bound, so threads not processes). ``fetch_one`` is injected
+    (production wraps ``fetch_and_save_chip`` with the real ``requests``
+    transport) and keeps ALL per-request politeness/backoff internal — this
+    driver never retries. Every result (including a ``fetch_one`` that raises,
+    which becomes a terminal ``outcome="exception"`` for that unit rather than
+    crashing the pool) is passed to ``on_result`` under a single
+    ``threading.Lock`` and tallied into the returned ``{outcome: count}``
+    summary under that same lock, so callers can serialize their append+flush
+    of ``fetch_stats.jsonl`` without further locking.
+
+    ``max_units`` caps how many units are submitted (smoke runs). ``should_stop``
+    is polled before each submission for cooperative interruption
+    (KeyboardInterrupt) — already-submitted units still run to completion; no
+    further units are handed to the pool once it returns True.
+    """
+    to_submit = units if max_units is None else units[:max_units]
+
+    summary: dict[str, int] = {}
+    lock = threading.Lock()
+    # Bounded submission window: without it, every unit lands in the executor
+    # queue instantly and ``should_stop`` (polled at submission time) can never
+    # halt a run in progress — at cohort scale (~16k units) that would leave
+    # Ctrl-C with nothing to stop and ``Executor.__exit__`` draining the whole
+    # queue for hours. Keeping at most 2×pool_size units in flight makes
+    # cooperative stop take effect within ~2×pool_size units.
+    window = threading.BoundedSemaphore(pool_size * 2)
+
+    def _worker(unit: FetchUnit) -> None:
+        try:
+            try:
+                outcome = fetch_one(unit)
+            except Exception as exc:  # noqa: BLE001 - fetch_one is injected; a raise is a terminal outcome, not a pool crash
+                outcome = FetchOutcome(
+                    layer=str(unit.year), url="", attempts=0,
+                    outcome="exception", error=str(exc),
+                )
+            with lock:
+                summary[outcome.outcome] = summary.get(outcome.outcome, 0) + 1
+                on_result(unit, outcome)
+        finally:
+            window.release()
+
+    with ThreadPoolExecutor(max_workers=pool_size) as executor:
+        futures: list[Future] = []
+        for unit in to_submit:
+            if should_stop is not None and should_stop():
+                break
+            window.acquire()
+            try:
+                futures.append(executor.submit(_worker, unit))
+            except BaseException:
+                window.release()
+                raise
+        # Surface any driver-level failure (a bug in on_result / the lock path);
+        # fetch_one exceptions are already handled inside _worker. Not retrieving
+        # future exceptions would swallow them silently.
+        for fut in futures:
+            fut.result()
+
+    return summary

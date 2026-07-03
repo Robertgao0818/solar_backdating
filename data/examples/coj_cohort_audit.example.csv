@@ -1,0 +1,11 @@
+anchor_id,stratum,status,confidence,install_interval_start,install_interval_end,latest_absent_date,earliest_present_date,grid_id,is_negative_control,bit_2015,detector_S_2015,classifier_pv_prob_2015,contradicts_2015,bit_2019,detector_S_2019,classifier_pv_prob_2019,contradicts_2019,bit_2023,detector_S_2023,classifier_pv_prob_2023,contradicts_2023,any_contradiction,n_contradictions,n_high_margin_bits,first_present_year
+anchor_fake_001,c_cal_present_pre2019,done_appears,high,2013-01-01,2014-06-01,2013-01-01,2014-06-01,JNB0101,False,present,0.99,0.98,False,present,0.99,0.97,False,present,0.98,0.99,False,False,0,3,2015
+anchor_fake_002,c_cal_present_pre2019,done_appears,high,2016-06-01,2018-06-01,2016-06-01,2018-06-01,JNB0102,False,low_margin,0.50,,False,present,0.97,0.90,False,present,0.99,0.95,False,False,0,2,2019
+anchor_fake_003,c_findings_s3like,done_appears,medium,2024-06-01,2024-09-01,2024-06-01,2024-09-01,JNB0203,False,not_planned,,,,present,0.96,0.80,True,present,0.99,0.99,True,True,2,2,2019
+anchor_fake_004,c_probe_2023,done_appears,high,2022-01-01,2024-02-29,2022-01-01,2024-02-29,JNB0304,False,not_planned,,,,not_planned,,,,present,0.97,0.90,False,False,0,1,2023
+anchor_fake_005,c_probe_2023,done_appears,medium,2020-01-01,2023-06-01,2020-01-01,2023-06-01,JNB0305,False,not_planned,,,,absent,0.10,0.05,False,present,0.98,0.90,False,False,0,2,2023
+anchor_fake_006,c_cal_present_2019_2022,done_appears,high,2020-06-01,2021-06-01,2020-06-01,2021-06-01,JNB0306,False,not_planned,,,,not_planned,,,,present,0.99,0.95,False,False,0,1,2023
+anchor_fake_007,c_cal_present_pre2019,done_appears,low,2012-01-01,2014-06-01,2012-01-01,2014-06-01,JNB0107,False,no_coverage,,,False,present,0.99,0.90,False,present,0.98,0.90,False,False,0,2,2019
+anchor_fake_008,c_cal_present_pre2019,done_appears,high,2013-01-01,2015-06-01,2013-01-01,2015-06-01,JNB0108,False,fetch_failed,,,False,present,0.97,0.90,False,present,0.99,0.95,False,False,0,2,2019
+nc_fake_001,c_negative_control,,,,,,,JNB0400,True,not_planned,,,,absent,0.05,0.02,False,absent,0.08,0.03,False,False,0,2,
+nc_fake_002,c_negative_control,,,,,,,JNB0401,True,not_planned,,,,absent,0.10,0.05,False,low_margin,0.60,,False,False,0,1,

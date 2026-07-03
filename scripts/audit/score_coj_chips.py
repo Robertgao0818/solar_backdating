@@ -197,6 +197,133 @@ def load_classifier_probs(output_csv: Path) -> dict[str, float]:
 
 
 # ---------------------------------------------------------------------------
+# Cohort-scale resume / chunking helpers (ISSUE-09 WP-C).
+#
+# The pilot's `score_manifest` scores the whole sample (~244 chips) in one
+# pass held in memory; at cohort scale (~16k chips, hours of GPU time) a
+# crash or Ctrl-C must not lose already-scored work. These helpers make the
+# scored/classifier CSVs themselves the resume state: "pending" is always
+# derived by diffing the input manifest against what the CSV already has,
+# never a separate checkpoint file. `score_manifest_resumable` is additive
+# and delegates every per-chip call to the pilot's own `score_chip_file`
+# (unchanged) - only the resume/flush loop around it is new. The pilot's
+# `score_manifest` / CLI entry point below are untouched byte-for-byte.
+# ---------------------------------------------------------------------------
+
+
+def _scored_chip_paths(scored_csv: Path) -> set[str]:
+    """chip_path values already present in an existing (possibly absent or
+    empty) ``scored_csv``."""
+    scored: set[str] = set()
+    if not scored_csv.exists():
+        return scored
+    with open(scored_csv, newline="") as f:
+        for row in csv.DictReader(f):
+            chip_path = row.get("chip_path")
+            if chip_path:
+                scored.add(chip_path)
+    return scored
+
+
+def pending_score_rows(
+    all_rows: list[dict[str, Any]], scored_csv: Path
+) -> list[dict[str, Any]]:
+    """Rows from ``all_rows`` whose ``chip_path`` is not yet a key in
+    ``scored_csv``. An absent or empty ``scored_csv`` means every row is
+    pending (nothing scored yet)."""
+    already = _scored_chip_paths(scored_csv)
+    return [row for row in all_rows if row.get("chip_path") not in already]
+
+
+def append_scored_rows(
+    rows: list[dict[str, Any]], scored_csv: Path, *, fieldnames: list[str]
+) -> None:
+    """Append ``rows`` to ``scored_csv`` and flush, writing the header first
+    only if the file doesn't exist yet (or is empty).
+
+    Missing keys in a row are written as ``""`` so a stable ``fieldnames``
+    can be reused across chunks even if individual rows vary slightly. A
+    crash immediately after this call returns loses nothing already
+    appended — that is the whole point of chunked flushing.
+    """
+    file_has_header = scored_csv.exists() and scored_csv.stat().st_size > 0
+    scored_csv.parent.mkdir(parents=True, exist_ok=True)
+    with open(scored_csv, "a" if file_has_header else "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_has_header:
+            w.writeheader()
+        for row in rows:
+            w.writerow({k: row.get(k, "") for k in fieldnames})
+        f.flush()
+
+
+def pending_classifier_chips(
+    scored_rows: list[dict[str, Any]], classifier_scores_csv: Path
+) -> list[str]:
+    """``chip_path`` values from ``scored_rows`` (``detector_status ==
+    "scored"``) that have no probability yet in ``classifier_scores_csv``.
+
+    An absent ``classifier_scores_csv`` means every scored chip is pending
+    (mirrors ``load_classifier_probs`` returning ``{}`` for a missing file).
+    """
+    existing = load_classifier_probs(classifier_scores_csv)
+    pending: list[str] = []
+    for row in scored_rows:
+        if row.get("detector_status") != "scored":
+            continue
+        chip_path = row.get("chip_path")
+        if chip_path and chip_path not in existing:
+            pending.append(chip_path)
+    return pending
+
+
+def score_manifest_resumable(
+    rows: list[dict[str, Any]],
+    model: torch.nn.Module,
+    device: torch.device,
+    *,
+    scored_csv: Path,
+    flush_every: int = 200,
+    chip_size: int = CHIP_SIZE,
+    overlap: float = OVERLAP,
+) -> Path:
+    """Cohort-scale counterpart to ``score_manifest``: resumable + chunked.
+
+    Resume: rows already scored (per ``scored_csv``) are skipped via
+    ``pending_score_rows``. Chunking: every ``flush_every`` newly-scored
+    rows are appended and flushed (``append_scored_rows``) so a crash loses
+    at most ``flush_every`` chips of GPU work, and reruns with the same
+    arguments pick up exactly where they left off. Per-chip scoring itself
+    is unchanged from ``score_manifest`` (``score_chip_file``).
+    """
+    pending = pending_score_rows(rows, scored_csv)
+    fieldnames = sorted({k for r in rows for k in r.keys()} | {"score", "detector_status"})
+
+    buffer: list[dict[str, Any]] = []
+    for row in pending:
+        chip_path = Path(row["chip_path"])
+        result = dict(row)
+        if not chip_path.exists() or chip_path.stat().st_size == 0:
+            result["score"] = None
+            result["detector_status"] = "missing_chip"
+        else:
+            score = score_chip_file(chip_path, model, device, chip_size=chip_size, overlap=overlap)
+            if score is None:
+                result["score"] = None
+                result["detector_status"] = "unreadable"
+            else:
+                result["score"] = score
+                result["detector_status"] = "scored"
+        buffer.append(result)
+        if len(buffer) >= flush_every:
+            append_scored_rows(buffer, scored_csv, fieldnames=fieldnames)
+            buffer = []
+    if buffer:
+        append_scored_rows(buffer, scored_csv, fieldnames=fieldnames)
+    return scored_csv
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
