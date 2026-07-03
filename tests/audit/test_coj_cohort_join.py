@@ -28,7 +28,7 @@ from scripts.audit.coj_cohort_join import (
     pivot_anchors,
     wilson_ci,
 )
-from scripts.audit.coj_cohort_report import build_cohort_report
+from scripts.audit.coj_cohort_report import build_cohort_report, render_cohort_report_md
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCHEMA_MD = REPO_ROOT / "docs" / "replan_v2" / "ISSUE-09-cohort-schema.md"
@@ -402,16 +402,90 @@ def test_gate_nc_counts_false_presents_and_passes_at_threshold():
              bit="present", expected="absent", agrees=False),
         _bit(anchor_id="nc_3", stratum=NEGATIVE_CONTROL_STRATUM, year=2023,
              bit="absent", expected="absent", agrees=True),
+        # nc_4/nc_5 must also produce a scorable (absent) bit — an unscored
+        # control is NOT silently clean (see the vacuous-pass tests below).
+        _bit(anchor_id="nc_4", stratum=NEGATIVE_CONTROL_STRATUM, year=2023,
+             bit="absent", expected="absent", agrees=True),
+        _bit(anchor_id="nc_5", stratum=NEGATIVE_CONTROL_STRATUM, year=2023,
+             bit="absent", expected="absent", agrees=True),
     ]
     gates = compute_cohort_gates(bits, nc_anchor_ids=nc_ids)
     nc = gates["gate_nc"]
     assert nc["n_controls"] == 5
+    assert nc["n_scored_controls"] == 5
     assert nc["n_false_present"] == 2
     assert sorted(nc["false_present_anchor_ids"]) == ["nc_1", "nc_2"]
     assert nc["rate"] == pytest.approx(0.4)
-    assert nc["passes"] is True  # 2 <= 2
+    assert nc["evaluable"] is True
+    assert nc["passes"] is True  # scored + 2 <= 2
     lo, hi = nc["wilson_ci"]
     assert 0.0 <= lo <= nc["rate"] <= hi <= 1.0
+
+
+def test_gate_nc_vacuous_pass_rejected_when_no_controls():
+    # No controls declared at all: the calibration gate cannot certify the
+    # absent-side thresholds because the instrument was never exercised on any
+    # control, so it must NOT report PASS (regression for the vacuous-pass bug).
+    gates = compute_cohort_gates([], nc_anchor_ids=set())
+    nc = gates["gate_nc"]
+    assert nc["n_controls"] == 0
+    assert nc["n_scored_controls"] == 0
+    assert nc["evaluable"] is False
+    assert nc["passes"] is False
+
+
+def test_gate_nc_vacuous_pass_rejected_when_no_control_scored():
+    # 300 declared controls whose 2019/2023 fetches all degraded to
+    # fetch_failed / no_coverage -> zero produced a scorable presence bit.
+    # k_fp is trivially 0, but the instrument never ran on a single control, so
+    # the gate must NOT pass on that vacuous basis.
+    nc_ids = {f"nc_{i:04d}" for i in range(300)}
+    bits = []
+    for i, aid in enumerate(sorted(nc_ids)):
+        state = "fetch_failed" if i % 2 == 0 else "no_coverage"
+        bits.append(_bit(anchor_id=aid, stratum=NEGATIVE_CONTROL_STRATUM, year=2019,
+                         bit=state, expected="absent", agrees=""))
+        bits.append(_bit(anchor_id=aid, stratum=NEGATIVE_CONTROL_STRATUM, year=2023,
+                         bit=state, expected="absent", agrees=""))
+    gates = compute_cohort_gates(bits, nc_anchor_ids=nc_ids)
+    nc = gates["gate_nc"]
+    assert nc["n_controls"] == 300
+    assert nc["n_false_present"] == 0
+    assert nc["n_scored_controls"] == 0
+    assert nc["evaluable"] is False
+    assert nc["passes"] is False
+
+
+def test_gate_nc_requires_scored_fraction():
+    # Only half the controls produced a scorable bit -> below the scored floor
+    # -> not evaluable -> must NOT pass even with zero false-presents.
+    nc_ids = {f"nc_{i:04d}" for i in range(10)}
+    bits = []
+    for i, aid in enumerate(sorted(nc_ids)):
+        state = "absent" if i < 5 else "fetch_failed"
+        bits.append(_bit(anchor_id=aid, stratum=NEGATIVE_CONTROL_STRATUM, year=2023,
+                         bit=state, expected="absent"))
+    gates = compute_cohort_gates(bits, nc_anchor_ids=nc_ids)
+    nc = gates["gate_nc"]
+    assert nc["n_scored_controls"] == 5
+    assert nc["evaluable"] is False
+    assert nc["passes"] is False
+
+
+def test_gate_nc_passes_when_fully_scored_and_below_threshold():
+    # Every control produced a scorable (absent) bit and there are no
+    # false-presents -> evaluable + PASS.
+    nc_ids = {f"nc_{i:04d}" for i in range(10)}
+    bits = [
+        _bit(anchor_id=aid, stratum=NEGATIVE_CONTROL_STRATUM, year=2023,
+             bit="absent", expected="absent")
+        for aid in sorted(nc_ids)
+    ]
+    gates = compute_cohort_gates(bits, nc_anchor_ids=nc_ids)
+    nc = gates["gate_nc"]
+    assert nc["n_scored_controls"] == 10
+    assert nc["evaluable"] is True
+    assert nc["passes"] is True
 
 
 def test_gate_nc_fails_above_two_false_presents():
@@ -549,6 +623,33 @@ def test_coverage_report_all_covered_passes():
     assert cov["passes_95pct"] is True
 
 
+def test_coverage_report_ok_but_unscorable_bit_is_a_gap():
+    # An `ok` fetch that yielded no scorable chip -> build_cohort_bit assigns
+    # bit='fetch_failed'. Coverage must key on that computed presence bit (the
+    # schema doc says fetch_failed "Counts as a coverage gap"), NOT on the
+    # fetch_outcome='ok', so the unit is a gap and gets enumerated instead of
+    # silently counted covered.
+    planned = [{"anchor_id": "A", "year": 2015, "stratum": "c_cal_present_pre2019"}]
+    bits = [{"anchor_id": "A", "year": 2015, "fetch_outcome": "ok", "bit": "fetch_failed"}]
+    cov = coverage_report(planned, bits)
+    assert cov["covered_anchors"] == 0
+    assert cov["coverage"] == pytest.approx(0.0)
+    assert cov["passes_95pct"] is False
+    assert cov["n_failed_units"] == 1
+    f = cov["failed_units"][0]
+    assert (f["anchor_id"], f["year"]) == ("A", 2015)
+    assert f["outcome"] != "ok"  # not passed off as a clean fetch
+
+
+def test_coverage_report_no_coverage_bit_still_covered():
+    # bit='no_coverage' (empty imagery) is a real terminal answer -> covered.
+    planned = [{"anchor_id": "A", "year": 2023, "stratum": "c_cal_present_pre2019"}]
+    bits = [{"anchor_id": "A", "year": 2023, "fetch_outcome": "empty", "bit": "no_coverage"}]
+    cov = coverage_report(planned, bits)
+    assert cov["covered_anchors"] == 1
+    assert cov["n_failed_units"] == 0
+
+
 # ---------------------------------------------------------------------------
 # wilson_ci — known values (precise, asserted to 1e-3)
 # ---------------------------------------------------------------------------
@@ -678,3 +779,49 @@ def test_build_cohort_report_renders_headline_table_and_csv(tmp_path):
         header = f.readline()
     assert "rate" in header and "ci_low" in header
     assert result["cohort_report_md"] == root / "cohort_report.md"
+
+
+def test_render_cohort_report_md_flattens_nested_dropped_values():
+    # dropped_units_summary.json carries three nested-container values
+    # (anchors_missing_bbox={count,anchor_ids}, strata_counts, layer_year_unit_counts)
+    # alongside scalar counts. The roll-up table must not render them as raw
+    # Python dict/list reprs in the count column.
+    dropped = {
+        "dropped_2015_end_ge_2019": 12,
+        "anchors_missing_bbox": {"count": 3, "anchor_ids": ["JNB0001", "JNB0002", "JNB0003"]},
+        "strata_counts": {"c_probe_2023": 12, "c_findings_s3like": 8},
+        "layer_year_unit_counts": {"2015": 40, "2019": 60, "2023": 90},
+    }
+    md = render_cohort_report_md(
+        population={}, coverage={}, gates={},
+        contradiction_rows=[], dropped_summary=dropped,
+    )
+    # scalar rows still render cleanly
+    assert "| dropped_2015_end_ge_2019 | 12 |" in md
+    # NO raw Python dict / list reprs leak into any table cell
+    assert "{'" not in md
+    assert "['" not in md
+    assert "anchor_ids': " not in md
+    # nested breakdowns are flattened into readable sub-rows
+    assert "strata_counts.c_probe_2023" in md
+    assert "anchors_missing_bbox.count" in md
+    assert ("layer_year_unit_counts.2015" in md
+            or "layer_year_unit_counts.2019" in md
+            or "layer_year_unit_counts.2023" in md)
+
+
+# ---------------------------------------------------------------------------
+# schema-doc / reality consistency
+# ---------------------------------------------------------------------------
+
+
+def test_schema_doc_probe2023_row_documents_2019_bisector():
+    # The c_probe_2023 stratum row must acknowledge that 2019 is also fetched as
+    # a bisector (coj_cohort_build._plan_2019 fires the bisector branch
+    # stratum-agnostically), not only for the falsification subsample.
+    for line in SCHEMA_MD.read_text().splitlines():
+        if line.strip().startswith("| `c_probe_2023`"):
+            assert "bisector" in line
+            break
+    else:
+        raise AssertionError("c_probe_2023 stratum row not found in schema doc")

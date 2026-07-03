@@ -53,7 +53,7 @@ year 2015 (their `present` expectation only kicks in at 2019). The unit's
 |---|---|---|
 | `c_cal_present_pre2019` | `install_interval_end < 2019-01-01` | 2015, 2019, 2023 |
 | `c_cal_present_2019_2022` | `2019-01-01 ≤ end < 2023-01-01` | 2023 (+2019 if bisector) |
-| `c_probe_2023` | `end ≥ 2023-01-01 AND start ≤ 2023-12-31` | 2023 (+2019 if in falsification subsample) |
+| `c_probe_2023` | `end ≥ 2023-01-01 AND start ≤ 2023-12-31` | 2023 (+2019 if bisector or in falsification subsample) |
 | `c_findings_s3like` | `install_interval_start > 2023-12-31` | 2019, 2023 |
 | `c_negative_control` | generated true-negatives | 2019, 2023 |
 
@@ -176,7 +176,12 @@ expects `gates_report.json` to carry `{"gates": <compute_cohort_gates output>,
 
 - `gate_a` — present-side known-sign agreement per (stratum × year) over
   expectation-bearing high-margin non-control units, target ≥ 0.95 per cell.
-- `gate_nc` — negative-control false-present count; PASS iff ≤ 2; + rate + Wilson CI.
+- `gate_nc` — negative-control false-present count; PASS iff the gate is
+  **evaluable** (≥ `NC_SCORED_THRESHOLD` = 0.95 of the declared controls produced
+  a scored present/absent/low_margin bit — a gate that never scored a control,
+  all fetch_failed/no_coverage or none declared, is *not* evaluable and cannot
+  pass vacuously) **and** the false-present count ≤ 2; + scored fraction + rate +
+  Wilson CI.
 - `gate_b` — within-audit monotonicity noise floor (present@earlier ∧
   absent@later over {2015,2019,2023}); reported count + ids, not a hard gate.
 - `clamp_findings` — count + ids of anchors with a high-margin present@2023 bit
@@ -184,8 +189,11 @@ expects `gates_report.json` to carry `{"gates": <compute_cohort_gates output>,
 
 Coverage AC: `coverage_report(planned_units, bit_rows)` →
 `covered_anchors / dated_anchors ≥ 0.95` (an anchor is covered iff all its
-planned units reached `ok`/`skipped_existing`/`empty`); every gap is enumerated
-into `fetch_failures.csv`.
+planned units yielded a real terminal presence bit —
+`present`/`absent`/`low_margin`/`no_coverage` — i.e. none is `fetch_failed`;
+coverage keys on the computed `bit`, not on `fetch_outcome`, so an `ok` fetch
+that produced no scorable chip is a gap, enumerated with a `<outcome>_unscorable`
+reason). Every gap is enumerated into `fetch_failures.csv`.
 
 ---
 

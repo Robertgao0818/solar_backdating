@@ -57,6 +57,33 @@ def _fmt_rate(value: Any) -> str:
         return str(value)
 
 
+def _iter_dropped_rows(dropped_summary: dict) -> list[tuple[str, Any]]:
+    """Flatten the dropped-units summary into ``(label, count)`` rows.
+
+    ``dropped_units_summary.json`` mixes scalar counts with three nested-container
+    values (``anchors_missing_bbox={count,anchor_ids}``, ``strata_counts``,
+    ``layer_year_unit_counts``). Rendering those nested values straight into a
+    single markdown cell prints raw Python dict/list reprs; instead expand each
+    nested dict into ``parent.key`` sub-rows and collapse any list value to its
+    length (so a long ``anchor_ids`` never blows up the cell).
+    """
+    rows: list[tuple[str, Any]] = []
+    for reason, value in dropped_summary.items():
+        if isinstance(value, dict):
+            for k, v in value.items():
+                if isinstance(v, (list, tuple, set)):
+                    rows.append((f"{reason}.{k}", len(v)))
+                elif isinstance(v, dict):
+                    rows.append((f"{reason}.{k}", "; ".join(f"{kk}={vv}" for kk, vv in v.items())))
+                else:
+                    rows.append((f"{reason}.{k}", v))
+        elif isinstance(value, (list, tuple, set)):
+            rows.append((reason, len(value)))
+        else:
+            rows.append((reason, value))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # headline CSV
 # ---------------------------------------------------------------------------
@@ -169,6 +196,12 @@ def render_cohort_report_md(
                  f"({'PASS' if gate_nc.get('passes') else 'FAIL'})")
     lines.append("")
     lines.append(
+        f"- Scored {gate_nc.get('n_scored_controls', 0)} / {gate_nc.get('n_controls', 0)} "
+        f"controls (rate {_fmt_rate(gate_nc.get('scored_rate'))}; evaluable "
+        f"{'yes' if gate_nc.get('evaluable') else 'NO — gate not exercised'} "
+        f"at ≥ {gate_nc.get('scored_threshold')})"
+    )
+    lines.append(
         f"- {gate_nc.get('n_false_present', 0)} / {gate_nc.get('n_controls', 0)} controls "
         f"show a high-margin present bit (rate {_fmt_rate(gate_nc.get('rate'))}, "
         f"Wilson CI [{_fmt_rate(ci[0])}, {_fmt_rate(ci[1])}]); "
@@ -228,7 +261,7 @@ def render_cohort_report_md(
     if dropped_summary:
         lines.append("| reason | count |")
         lines.append("|---|---|")
-        for reason, count in dropped_summary.items():
+        for reason, count in _iter_dropped_rows(dropped_summary):
             lines.append(f"| {reason} | {count} |")
     else:
         lines.append("- (no `dropped_units_summary.json` present)")

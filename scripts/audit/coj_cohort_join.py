@@ -83,16 +83,29 @@ BIT_LOW_MARGIN = "low_margin"
 BIT_NO_COVERAGE = "no_coverage"
 BIT_FETCH_FAILED = "fetch_failed"
 _HIGH_MARGIN_BITS = frozenset({BIT_PRESENT, BIT_ABSENT})
+# a bit that came from actually scoring a chip (the detector ran): present /
+# absent / low_margin. no_coverage / fetch_failed are coverage states, NOT a
+# scored presence measurement.
+_SCORED_BITS = frozenset({BIT_PRESENT, BIT_ABSENT, BIT_LOW_MARGIN})
+# a planned unit is "covered" (not a coverage gap) iff its computed presence
+# bit is one of these — i.e. anything except fetch_failed (schema doc: a
+# no_coverage/empty response is a real terminal answer, fetch_failed is a gap).
+_COVERED_BITS = frozenset({BIT_PRESENT, BIT_ABSENT, BIT_LOW_MARGIN, BIT_NO_COVERAGE})
 
 # fetch_outcome buckets
 _SCORABLE_OUTCOMES = frozenset({"ok", "skipped_existing"})
 _NO_COVERAGE_OUTCOME = "empty"
-# a planned unit is "covered" (not a fetch gap) iff its fetch reached one of:
+# a planned unit is "covered" (not a fetch gap) iff its fetch reached one of
+# these terminal outcomes. Used only as a fallback when a bit row carries no
+# computed `bit` (coverage keys on the presence bit when it is present).
 COVERED_FETCH_OUTCOMES = frozenset({"ok", "skipped_existing", "empty"})
 
-# negative-control gate threshold (design §3): PASS iff <= this many controls
-# show a high-margin present bit.
+# negative-control gate thresholds (design §3): PASS iff <= this many controls
+# show a high-margin present bit AND the gate is evaluable (enough controls
+# actually produced a scored presence bit — a calibration gate that never ran
+# on any control must not certify the absent-side thresholds vacuously).
 NC_FALSE_PRESENT_THRESHOLD = 2
+NC_SCORED_THRESHOLD = 0.95
 
 # known-sign / coverage acceptance thresholds
 KNOWN_SIGN_THRESHOLD = 0.95
@@ -340,7 +353,12 @@ def compute_cohort_gates(bit_rows: Iterable[dict], *, nc_anchor_ids: set[str]) -
       * ``gate_a`` -- present-side known-sign agreement per (stratum × year)
         over expectation-bearing high-margin non-control units, target ≥95%.
       * ``gate_nc`` -- negative-control false-present count (# controls with ≥1
-        high-margin present bit); PASS iff ≤ 2; plus rate + Wilson CI.
+        high-margin present bit); PASS iff the gate is *evaluable* (≥
+        ``NC_SCORED_THRESHOLD`` of the declared controls produced a scored
+        present/absent/low_margin bit) **and** the false-present count ≤ 2. A
+        gate that never scored a control (all fetch_failed/no_coverage, or no
+        controls declared) is not evaluable and cannot pass vacuously. Plus
+        scored fraction, rate + Wilson CI.
       * ``gate_b`` -- within-audit monotonicity noise floor: anchors with a
         high-margin present@earlier ∧ absent@later pair over {2015,2019,2023}
         (count + ids; a noise floor, not a hard pass/fail).
@@ -381,21 +399,42 @@ def compute_cohort_gates(bit_rows: Iterable[dict], *, nc_anchor_ids: set[str]) -
     gate_a = {"cells": cells, "passes": all(c["passes"] for c in cells)}
 
     # --- gate (nc): negative-control false-present ---
+    #
+    # A control's absent-side bit only counts if the instrument actually ran on
+    # it (a present/absent/low_margin bit). A control whose 2019/2023 fetches all
+    # degraded to fetch_failed/no_coverage was never scored, so it can neither be
+    # a false-present nor evidence that the thresholds are calibrated. The gate
+    # is therefore only *evaluable* when a sufficient fraction of the declared
+    # controls produced a scored bit; without that floor the gate would report
+    # PASS on an instrument that never ran (k_fp trivially 0).
     nc_false_present: set[str] = set()
+    nc_scored: set[str] = set()
     for b in rows:
         anchor_id = str(b.get("anchor_id"))
-        if anchor_id in nc_anchor_ids and b.get("bit") == BIT_PRESENT:
+        if anchor_id not in nc_anchor_ids:
+            continue
+        bit = b.get("bit")
+        if bit in _SCORED_BITS:
+            nc_scored.add(anchor_id)
+        if bit == BIT_PRESENT:
             nc_false_present.add(anchor_id)
     n_controls = len(nc_anchor_ids)
+    n_scored = len(nc_scored)
     k_fp = len(nc_false_present)
+    scored_rate = (n_scored / n_controls) if n_controls else None
+    evaluable = (scored_rate is not None) and (scored_rate >= NC_SCORED_THRESHOLD)
     gate_nc = {
         "n_controls": n_controls,
+        "n_scored_controls": n_scored,
+        "scored_rate": scored_rate,
+        "scored_threshold": NC_SCORED_THRESHOLD,
+        "evaluable": evaluable,
         "n_false_present": k_fp,
         "false_present_anchor_ids": sorted(nc_false_present),
         "rate": (k_fp / n_controls) if n_controls else None,
         "wilson_ci": wilson_ci(k_fp, n_controls),
         "threshold": NC_FALSE_PRESENT_THRESHOLD,
-        "passes": k_fp <= NC_FALSE_PRESENT_THRESHOLD,
+        "passes": evaluable and (k_fp <= NC_FALSE_PRESENT_THRESHOLD),
     }
 
     # --- gate (b): within-audit monotonicity noise floor (3-year) ---
@@ -540,34 +579,63 @@ def contradiction_rate_by_stratum(bit_rows: Iterable[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def _unit_covered_and_reason(bit_row: dict | None) -> tuple[bool, str]:
+    """Decide whether a planned unit is *covered* and, if not, a gap reason.
+
+    Coverage keys on the **computed presence bit**, not on ``fetch_outcome``: a
+    unit is covered iff its ``bit`` is a real terminal answer
+    (present/absent/low_margin/no_coverage) and a gap iff its ``bit`` is
+    ``fetch_failed`` — this honours the schema doc, where an ``ok`` fetch that
+    yielded no scorable chip is still a coverage gap (``bit == fetch_failed``).
+    When a bit row carries no computed ``bit`` (a simplified caller / a planned
+    unit with no bit row at all), it falls back to the ``fetch_outcome``.
+    """
+    if bit_row is None:
+        return False, "not_fetched"
+    bit = str(bit_row.get("bit") or "").strip()
+    fetch_outcome = str(bit_row.get("fetch_outcome") or "").strip() or "not_fetched"
+    if bit:
+        if bit in _COVERED_BITS:
+            return True, ""
+        # bit == fetch_failed (the only non-covered bit): surface WHY it failed.
+        # An ok/skipped fetch that produced no score is an unscorable gap, not a
+        # transport failure — label it so ``fetch_failures.csv`` is honest.
+        if fetch_outcome in COVERED_FETCH_OUTCOMES:
+            return False, f"{fetch_outcome}_unscorable"
+        return False, fetch_outcome
+    # no computed bit -> fall back to the raw fetch outcome.
+    if fetch_outcome in COVERED_FETCH_OUTCOMES:
+        return True, ""
+    return False, fetch_outcome
+
+
 def coverage_report(planned_units: Iterable[dict], bit_rows: Iterable[dict]) -> dict:
     """Coverage accounting over the planned units.
 
-    A planned unit is *covered* iff its fetch reached a terminal ok/empty
-    outcome (``ok`` / ``skipped_existing`` / ``empty``); anything else (a
-    retried failure, ``not_fetched``, or a planned unit with no bit row at all)
-    is a gap. An anchor is covered iff **all** its planned units are covered.
+    A planned unit is *covered* iff its computed presence ``bit`` is a real
+    terminal answer (``present`` / ``absent`` / ``low_margin`` / ``no_coverage``);
+    a ``fetch_failed`` bit — including an ``ok`` fetch that never yielded a
+    scorable chip — a retried transport failure, ``not_fetched``, or a planned
+    unit with no bit row at all is a gap. (When a bit row carries no computed
+    ``bit`` the decision falls back to its ``fetch_outcome``.) An anchor is
+    covered iff **all** its planned units are covered.
     ``coverage = covered_dated_anchors / dated_anchors`` (negative controls are
     excluded from the dated denominator). Every gap is enumerated in
     ``failed_units`` (feeds ``fetch_failures.csv``).
     """
-    outcome_by_unit: dict[tuple[str, int], str] = {}
+    bit_row_by_unit: dict[tuple[str, int], dict] = {}
     for b in bit_rows:
-        outcome_by_unit[(str(b.get("anchor_id")), int(b["year"]))] = (
-            str(b.get("fetch_outcome") or "").strip()
-        )
+        bit_row_by_unit[(str(b.get("anchor_id")), int(b["year"]))] = b
 
     dated_anchor_ok: dict[str, bool] = {}
     failed_units: list[dict] = []
     for u in planned_units:
         anchor_id = str(u.get("anchor_id"))
         year = int(u["year"])
-        outcome = outcome_by_unit.get((anchor_id, year), "not_fetched")
-        if not outcome:
-            outcome = "not_fetched"
-        is_covered = outcome in COVERED_FETCH_OUTCOMES
+        bit_row = bit_row_by_unit.get((anchor_id, year))
+        is_covered, reason = _unit_covered_and_reason(bit_row)
         if not is_covered:
-            failed_units.append({"anchor_id": anchor_id, "year": year, "outcome": outcome})
+            failed_units.append({"anchor_id": anchor_id, "year": year, "outcome": reason})
 
         if _is_negative_control(u):
             continue  # controls do not enter the dated coverage denominator
