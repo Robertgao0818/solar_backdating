@@ -40,6 +40,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.temporal.gehi_catalog_cache import (
+    DB_FILENAME,
+    CatalogCache,
+    DEFAULT_CATALOG_MAX_AGE_DAYS,
+    add_catalog_cache_cli_args,
+)
 from scripts.temporal.presence_scorer import (
     PresenceScorer,
     get_scorer,
@@ -236,6 +242,7 @@ def parse_args() -> argparse.Namespace:
         "off because Wayback's availability lists layer-release dates, not "
         "captured dates, so the completeness intersection would be empty.",
     )
+    add_catalog_cache_cli_args(parser)
     return parser.parse_args()
 
 
@@ -349,6 +356,9 @@ def make_vintage_check(
     *,
     available_dates_by_zoom: dict[int, set[str]],
     config: AdaptiveScanConfig,
+    catalog_cache: CatalogCache | None = None,
+    catalog_force_refresh: bool = False,
+    catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
 ) -> Callable[[int, str], bool]:
     """Build a vintage_check Callable for `download_chip_with_zoom_ladder`.
 
@@ -356,6 +366,9 @@ def make_vintage_check(
     `_fetch_real_vintage_catalog`. Other ladder zooms lazy-fetch their own
     bbox availability on first lookup. Returns False when the requested
     capture_date is not complete for the requested zoom/chip bbox.
+
+    `catalog_cache=None` (the default) makes zero behavior change: every
+    lazy zoom lookup issues a live GEHI call exactly as before ISSUE-13.
     """
     catalogs: dict[int, set[str]] = {
         int(zoom): set(dates) for zoom, dates in available_dates_by_zoom.items()
@@ -374,11 +387,21 @@ def make_vintage_check(
                     max_date=config.catalog_max_date,
                     parallel=config.availability_parallel,
                     complete=True,
+                    catalog_cache=catalog_cache,
+                    force_refresh=catalog_force_refresh,
+                    max_age_days=catalog_max_age_days,
                 )
             else:
                 from scripts.temporal.gehi_info import fetch_vintages_for_anchor
 
-                rows = fetch_vintages_for_anchor(anchor, zoom=zoom, provider=config.provider)
+                rows = fetch_vintages_for_anchor(
+                    anchor,
+                    zoom=zoom,
+                    provider=config.provider,
+                    catalog_cache=catalog_cache,
+                    force_refresh=catalog_force_refresh,
+                    max_age_days=catalog_max_age_days,
+                )
             catalogs[zoom] = {str(r.get("capture_date", ""))[:10] for r in rows if r.get("capture_date")}
         return capture_date[:10] in catalogs[zoom]
 
@@ -707,6 +730,10 @@ def run_one_anchor(
     overwrite_chips: bool = False,
     min_cache_zoom: int | None = None,
     provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
+    scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
+    catalog_cache: CatalogCache | None = None,
+    catalog_force_refresh: bool = False,
+    catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
     state_path = state_path_for(anchor_id, scan_states_dir)
@@ -736,11 +763,33 @@ def run_one_anchor(
         )
     elif scorer is None:
         scorer = get_scorer("gemini")
+    # ISSUE-06 scoring-provenance sidecar: wrap the resolved scorer (dry-run OR
+    # real) so every scored chip emits one provenance row stamped with this
+    # anchor. The wrapper delegates the scorer's declared vocabulary + failure
+    # sources verbatim, so decide_next_action's Case-E rule below is unaffected.
+    if scoring_provenance_writer is not None:
+        from scripts.temporal.scoring_provenance import with_scoring_provenance
+
+        scorer = with_scoring_provenance(
+            scorer, scoring_provenance_writer, context={"anchor_id": anchor_id}
+        )
+    # ISSUE-13 catalog-cache kwargs are only forwarded when a cache is actually
+    # active, so a default (`catalog_cache=None`) call is byte-identical to the
+    # pre-ISSUE-13 call shape — this matters because test seams monkeypatch
+    # `_fetch_real_vintage_catalog`/`make_vintage_check` with fixed-arity stubs
+    # (see tests/temporal/test_run_adaptive_scan_seam.py `_install_gehi_stubs`).
+    catalog_kwargs: dict[str, object] = {}
+    if catalog_cache is not None:
+        catalog_kwargs = {
+            "catalog_cache": catalog_cache,
+            "catalog_force_refresh": catalog_force_refresh,
+            "catalog_max_age_days": catalog_max_age_days,
+        }
     real_catalog: VintageCatalog | None = None
     if dry_run:
         vintages = dry_run_vintages(anchor_id)
     else:
-        real_catalog = _fetch_real_vintage_catalog(anchor, config)
+        real_catalog = _fetch_real_vintage_catalog(anchor, config, **catalog_kwargs)
         vintages = real_catalog.vintages
     vintage_check = None
     if not dry_run:
@@ -749,6 +798,7 @@ def run_one_anchor(
             anchor,
             available_dates_by_zoom=real_catalog.available_dates_by_zoom,
             config=config,
+            **catalog_kwargs,
         )
 
     assert scorer is not None
@@ -815,7 +865,14 @@ def run_one_anchor(
     raise RuntimeError(f"Scan loop exceeded {max_iter} rounds for {anchor_id}")
 
 
-def _fetch_real_vintage_catalog(anchor: dict[str, str], config: AdaptiveScanConfig) -> VintageCatalog:
+def _fetch_real_vintage_catalog(
+    anchor: dict[str, str],
+    config: AdaptiveScanConfig,
+    *,
+    catalog_cache: CatalogCache | None = None,
+    catalog_force_refresh: bool = False,
+    catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
+) -> VintageCatalog:
     """Fetch bbox-complete GEHI vintages for an anchor.
 
     The catalog is a union over `config.discovery_zoom_ladder` in priority
@@ -823,13 +880,23 @@ def _fetch_real_vintage_catalog(anchor: dict[str, str], config: AdaptiveScanConf
     wider historical picture when z19 is sparse. With
     `require_complete_coverage_for_catalog=True`, a date must be complete for
     the full chip bbox at that zoom before it can drive the adaptive scan.
+
+    `catalog_cache=None` (the default) makes zero behavior change: every zoom
+    in the ladder issues a live GEHI call exactly as before ISSUE-13.
     """
     from scripts.temporal.gehi_info import fetch_vintages_for_anchor
 
     available_dates_by_zoom: dict[int, set[str]] = {}
     by_date: dict[str, VintageEntry] = {}
     for zoom in config.discovery_zoom_ladder:
-        info_rows = fetch_vintages_for_anchor(anchor, zoom=zoom, provider=config.provider)
+        info_rows = fetch_vintages_for_anchor(
+            anchor,
+            zoom=zoom,
+            provider=config.provider,
+            catalog_cache=catalog_cache,
+            force_refresh=catalog_force_refresh,
+            max_age_days=catalog_max_age_days,
+        )
         info_by_date: dict[str, object] = {}
         for row in info_rows:
             capture_date = str(row.get("capture_date", "")).strip()[:10]
@@ -847,6 +914,9 @@ def _fetch_real_vintage_catalog(anchor: dict[str, str], config: AdaptiveScanConf
                 max_date=config.catalog_max_date,
                 parallel=config.availability_parallel,
                 complete=True,
+                catalog_cache=catalog_cache,
+                force_refresh=catalog_force_refresh,
+                max_age_days=catalog_max_age_days,
             )
             allowed_dates = {
                 str(row.get("capture_date", ""))[:10]
@@ -1033,6 +1103,27 @@ def main() -> None:
             with provenance_lock, provenance_path.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
 
+    # Scoring-provenance sidecar (ISSUE-06 / D5): one JSONL row per scored chip,
+    # written next to the scan-states dir. Enabled for BOTH dry-run and real runs
+    # (a dry-run still scores chips through the seam), so its scorer identity is
+    # captured regardless of transport. Thread-safe append (its own lock).
+    from scripts.temporal.scoring_provenance import jsonl_writer as _scoring_jsonl_writer
+
+    scoring_provenance_writer = _scoring_jsonl_writer(
+        args.scan_states_dir.parent / "scoring_provenance.jsonl"
+    )
+
+    # ISSUE-13: one CatalogCache shared across every anchor worker (thread-safe:
+    # sqlite3 WAL + an internal lock). Lazily constructed only for the real path
+    # (dry-run never touches GEHI) and only when the cache isn't disabled;
+    # `--no-catalog-cache` keeps `catalog_cache=None` end to end, which is a
+    # zero-behavior-change no-op in run_one_anchor / make_vintage_check /
+    # _fetch_real_vintage_catalog.
+    catalog_cache: CatalogCache | None = None
+    if not args.dry_run and not args.no_catalog_cache:
+        db_path = (args.catalog_cache_dir / DB_FILENAME) if args.catalog_cache_dir else None
+        catalog_cache = CatalogCache(db_path)
+
     def handle(anchor: dict[str, str]) -> ScanState:
         anchor_id = anchor["anchor_id"]
         try:
@@ -1054,6 +1145,10 @@ def main() -> None:
                 overwrite_chips=args.overwrite_chips,
                 min_cache_zoom=args.min_cache_zoom,
                 provenance_writer=provenance_writer,
+                scoring_provenance_writer=scoring_provenance_writer,
+                catalog_cache=catalog_cache,
+                catalog_force_refresh=args.force_catalog_refresh,
+                catalog_max_age_days=args.catalog_max_age_days,
             )
         except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
             state = _record_orchestrator_failure(anchor, args.scan_states_dir, exc)
@@ -1075,6 +1170,8 @@ def main() -> None:
             for future in as_completed(futures):
                 states.append(future.result())
     summarize(states)
+    if catalog_cache is not None:
+        print(f"[CFG] {catalog_cache.stats.summary()}")
 
     # Continue-on-error means failed anchors were recorded and skipped, but a
     # partial batch must not exit 0. Surface failures and exit nonzero.
