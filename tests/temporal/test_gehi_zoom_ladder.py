@@ -16,7 +16,6 @@ import pytest
 
 from scripts.temporal.gehi_common import GehiRunResult
 from scripts.temporal.gehi_download import (
-    DownloadResult,
     _chip_path_for,
     download_chip_with_zoom_ladder,
     parse_zoom_ladder,
@@ -425,11 +424,6 @@ def test_vintage_check_all_zooms_excluded_returns_failed(anchor, tmp_path: Path)
 
 
 def test_runner_exception_falls_through_to_next_zoom(anchor, tmp_path: Path) -> None:
-    plan = {
-        20: {"returncode": 0, "writes_file": True},
-        19: {"returncode": 0, "writes_file": True},
-    }
-
     def raising_runner(cmd_args, *, executable, timeout):
         zoom = None
         for i, arg in enumerate(cmd_args):
@@ -460,6 +454,117 @@ def test_runner_exception_falls_through_to_next_zoom(anchor, tmp_path: Path) -> 
     )
     assert result.status == "ok"
     assert result.actual_zoom == 19
+
+
+def test_min_cache_zoom_forces_refetch_of_low_zoom_cache(anchor, tmp_path: Path) -> None:
+    """THE acceptance test: a chip pinned at z=19 in the cache must be re-fetched
+    when min_cache_zoom=20 forces the ladder to run live and upgrade it."""
+    pre_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2024-06-15", "12345", 19)
+    pre_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_path.write_bytes(b"CACHED_AT_Z19")
+    plan = {20: {"returncode": 0, "writes_file": True}}
+    runner = _make_runner(plan, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2024-06-15",
+        version=12345,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        min_cache_zoom=20,
+        runner=runner,
+    )
+    assert result.status == "ok"
+    assert result.actual_zoom == 20
+    assert len(runner.calls) == 1
+    assert runner.calls[0]["zoom"] == 20
+
+
+def test_control_without_min_cache_zoom_uses_cached_low_zoom(anchor, tmp_path: Path) -> None:
+    """Control for the escape-hatch test: same staged z=19 cache, no min_cache_zoom,
+    returns the cached chip (skipped_existing at z=19) with no GEHI call."""
+    pre_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2024-06-15", "12345", 19)
+    pre_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_path.write_bytes(b"CACHED_AT_Z19")
+    runner = _make_runner({}, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2024-06-15",
+        version=12345,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        runner=runner,
+    )
+    assert result.status == "skipped_existing"
+    assert result.actual_zoom == 19
+    assert len(runner.calls) == 0
+
+
+def test_min_cache_zoom_emits_skip_reason_log(anchor, tmp_path: Path) -> None:
+    """Rejecting a below-min cached chip must emit a raw_log record carrying
+    skip_reason='cache_below_min_zoom' and the pinned cached zoom."""
+    pre_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2024-06-15", "12345", 19)
+    pre_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_path.write_bytes(b"CACHED_AT_Z19")
+    plan = {20: {"returncode": 0, "writes_file": True}}
+    runner = _make_runner(plan, tmp_path)
+    logs: list[dict[str, Any]] = []
+    download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2024-06-15",
+        version=12345,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        min_cache_zoom=20,
+        runner=runner,
+        raw_log_callback=logs.append,
+    )
+    skip_logs = [r for r in logs if r.get("skip_reason") == "cache_below_min_zoom"]
+    assert len(skip_logs) == 1
+    assert skip_logs[0].get("cached_zoom") == 19
+    assert skip_logs[0].get("min_cache_zoom") == 20
+
+
+def test_min_cache_zoom_does_not_loosen_live_attempts(anchor, tmp_path: Path) -> None:
+    """min_cache_zoom governs CACHE acceptance only: a fresh live z=19 download is
+    still legal when z=20 has no vintage, even with min_cache_zoom=20 set."""
+    plan = {
+        20: {"returncode": 2, "writes_file": False, "stderr": "no z=20"},
+        19: {"returncode": 0, "writes_file": True},
+    }
+    runner = _make_runner(plan, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2015-08-30",
+        version=200,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        min_cache_zoom=20,
+        runner=runner,
+    )
+    assert result.status == "ok"
+    assert result.actual_zoom == 19
+    assert [c["zoom"] for c in runner.calls] == [20, 19]
+
+
+def test_overwrite_bypasses_even_with_min_cache_zoom(anchor, tmp_path: Path) -> None:
+    """overwrite=True bypasses the cache entirely regardless of min_cache_zoom."""
+    pre_path = _chip_path_for(tmp_path, anchor["anchor_id"], "2024-06-15", "12345", 20)
+    pre_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_path.write_bytes(b"OLD_Z20")
+    plan = {20: {"returncode": 0, "writes_file": True}}
+    runner = _make_runner(plan, tmp_path)
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2024-06-15",
+        version=12345,
+        zoom_ladder=(20, 19),
+        output_root=tmp_path,
+        overwrite=True,
+        min_cache_zoom=20,
+        runner=runner,
+    )
+    assert result.status == "ok"
+    assert len(runner.calls) == 1
 
 
 def test_manifest_zoom_is_requested_not_actual(anchor, tmp_path: Path, monkeypatch) -> None:

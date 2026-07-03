@@ -10,10 +10,16 @@ the download is skipped.
 
 from __future__ import annotations
 
+# Imports follow a sys.path bootstrap (below) so the subrepo can be run as a
+# script; E402 is expected for the scripts.* imports, matching the sibling
+# temporal modules' convention.
+# ruff: noqa: E402
+
 import argparse
 import csv
 import hashlib
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +35,6 @@ from scripts.temporal.gehi_common import (
     DEFAULT_PROVIDER,
     GehiRunResult,
     anchor_bbox_args,
-    assert_gehi_success,
     iso_to_gehi_date,
     run_gehi,
 )
@@ -58,7 +63,44 @@ FIELDS = [
     "exact_date",
     "download_stdout_sha256",
     "gehi_command",
+    # Raster-measured provenance (ISSUE-18 / D17). Additive: measured from the
+    # chip on disk via build_chip_provenance for both ok and skipped_existing.
+    "raster_width_px",
+    "raster_height_px",
+    "raster_crs",
+    "extent_minx",
+    "extent_miny",
+    "extent_maxx",
+    "extent_maxy",
+    "gsd_x_m",
+    "gsd_y_m",
+    "raster_error",
 ]
+
+# Canonical per-chip provenance keys (ISSUE-18 / D17). Pinned so both ISSUE-18
+# work items and the provenance docs use exactly these names; shaped to join the
+# ISSUE-06 scoring sidecar on (anchor_id, capture_date, version) + chip_sha256.
+CHIP_PROVENANCE_FIELDS = (
+    "anchor_id",
+    "capture_date",
+    "version",
+    "provider",
+    "requested_zoom_ladder",
+    "achieved_zoom",
+    "status",
+    "chip_path",
+    "chip_sha256",
+    "raster_width_px",
+    "raster_height_px",
+    "raster_crs",
+    "extent_minx",
+    "extent_miny",
+    "extent_maxx",
+    "extent_maxy",
+    "gsd_x_m",
+    "gsd_y_m",
+    "raster_error",
+)
 
 
 @dataclass
@@ -104,6 +146,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--min-cache-zoom",
+        type=int,
+        default=None,
+        help="Cache-refresh escape hatch: refuse cached chips below this zoom so the "
+        "ladder re-fetches and upgrades them. Governs cache acceptance only; live "
+        "attempts are unaffected. Default: off (accept any cached zoom).",
+    )
     parser.add_argument("--allow-nearest", action="store_true", help="Do not pass GEHI --exact-date.")
     parser.add_argument(
         "--allow-failures",
@@ -119,6 +169,105 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def build_chip_provenance(
+    outcome: "DownloadResult",
+    anchor: Mapping[str, object],
+    provider: str,
+) -> dict[str, object]:
+    """Build the canonical per-chip provenance record for a download outcome.
+
+    Returns exactly the keys in ``CHIP_PROVENANCE_FIELDS``. The record is shaped
+    to join the ISSUE-06 presence-scoring sidecar on the tuple
+    ``(anchor_id, capture_date, version)`` plus ``chip_sha256`` — keep these
+    field names stable so that join holds.
+
+    Raster geometry (pixel dims, CRS, extent, GSD) is measured from the chip on
+    disk with rasterio and is produced for **both** ``status="ok"`` and
+    ``status="skipped_existing"``: cache hits are measured too, because the
+    skip-existing cache is exactly where a low-zoom chip hides after a ladder
+    upgrade — provenance is worthless if it stops at the cache boundary. On any
+    raster read failure (missing/corrupt/unreadable file) every raster field is
+    ``None`` and ``raster_error`` carries the message; this function never
+    raises.
+
+    Geographic (degree) CRSs are converted to metres/pixel for GSD using the
+    chip-centre latitude: ``gsd_x_m = xres_deg * 111320 * cos(lat)`` and
+    ``gsd_y_m = yres_deg * 111320``. Projected CRSs are already metric, so their
+    pixel resolution is used directly.
+
+    Caveat: ``achieved_zoom`` is the ladder rung GEHI *reported* for the chip as
+    a whole. GEHI can silently substitute coarser tiles (nearest-neighbour
+    upsampled) for individual 256 px tiles inside a nominally-successful
+    download; that in-chip substitution is invisible at this level and is
+    instead flagged by the sentinel effective-resolution estimator (a sibling
+    ISSUE-18 deliverable). ``anchor`` is accepted for caller symmetry / future
+    provenance enrichment; the measured latitude comes from the raster itself.
+    """
+    path = outcome.path
+    chip_sha256: str | None
+    if outcome.sha256:
+        chip_sha256 = outcome.sha256
+    elif path is not None and path.exists():
+        chip_sha256 = sha256_file(path)
+    else:
+        chip_sha256 = None
+
+    record: dict[str, object] = {
+        "anchor_id": outcome.anchor_id,
+        "capture_date": outcome.capture_date,
+        "version": outcome.version,
+        "provider": provider,
+        "requested_zoom_ladder": [int(z) for z in outcome.requested_zoom_ladder],
+        "achieved_zoom": outcome.actual_zoom,
+        "status": outcome.status,
+        "chip_path": str(path) if path is not None else None,
+        "chip_sha256": chip_sha256,
+        "raster_width_px": None,
+        "raster_height_px": None,
+        "raster_crs": None,
+        "extent_minx": None,
+        "extent_miny": None,
+        "extent_maxx": None,
+        "extent_maxy": None,
+        "gsd_x_m": None,
+        "gsd_y_m": None,
+        "raster_error": None,
+    }
+    if path is None:
+        record["raster_error"] = "no chip path (download produced no file)"
+        return record
+    try:
+        import rasterio
+
+        with rasterio.open(path) as ds:
+            bounds = ds.bounds
+            xres, yres = ds.res
+            crs = ds.crs
+            record["raster_width_px"] = int(ds.width)
+            record["raster_height_px"] = int(ds.height)
+            record["raster_crs"] = crs.to_string() if crs is not None else None
+            record["extent_minx"] = float(bounds.left)
+            record["extent_miny"] = float(bounds.bottom)
+            record["extent_maxx"] = float(bounds.right)
+            record["extent_maxy"] = float(bounds.top)
+            if crs is not None and crs.is_geographic:
+                center_lat = (float(bounds.bottom) + float(bounds.top)) / 2.0
+                record["gsd_x_m"] = float(xres) * 111320.0 * math.cos(math.radians(center_lat))
+                record["gsd_y_m"] = float(yres) * 111320.0
+            else:
+                record["gsd_x_m"] = float(xres)
+                record["gsd_y_m"] = float(yres)
+    except Exception as exc:  # noqa: BLE001 - provenance must never break the pipeline
+        record["raster_error"] = f"{type(exc).__name__}: {exc}"
+        for key in (
+            "raster_width_px", "raster_height_px", "raster_crs",
+            "extent_minx", "extent_miny", "extent_maxx", "extent_maxy",
+            "gsd_x_m", "gsd_y_m",
+        ):
+            record[key] = None
+    return record
 
 
 def load_anchor_index(path: Path) -> dict[str, Mapping[str, str]]:
@@ -189,6 +338,7 @@ def download_chip_with_zoom_ladder(
     no_cache: bool = False,
     timeout: float = 600.0,
     overwrite: bool = False,
+    min_cache_zoom: int | None = None,
     target_sr: str = "",
     allow_nearest: bool = False,
     runner: Callable[..., GehiRunResult] = run_gehi,
@@ -209,6 +359,15 @@ def download_chip_with_zoom_ladder(
     skips any zoom whose vintage catalog does not contain `capture_date`. The
     intended source is a per-anchor, per-zoom GEHI info catalog cached by the
     caller (see `make_vintage_check` in run_adaptive_scan).
+
+    `min_cache_zoom` is the cache-refresh escape hatch (ISSUE-18 / D17). It
+    governs *cache acceptance only*: during the skip-existing scan a cached
+    chip whose zoom is below `min_cache_zoom` is refused (a raw_log record with
+    `skip_reason="cache_below_min_zoom"` is emitted), so the ladder falls
+    through to a live download and can upgrade the pinned chip. It does NOT
+    tighten live attempts — a fresh lower-zoom download is still legal when the
+    higher rung has no vintage. `overwrite=True` bypasses the cache scan
+    entirely and so ignores `min_cache_zoom`.
     """
     if not zoom_ladder:
         raise ValueError("zoom_ladder must be non-empty")
@@ -221,6 +380,25 @@ def download_chip_with_zoom_ladder(
         for zoom in ladder:
             candidate_path = _chip_path_for(output_root, anchor_id, capture_date, version_str, zoom)
             if candidate_path.exists() and candidate_path.stat().st_size > 0:
+                if min_cache_zoom is not None and zoom < min_cache_zoom:
+                    last_error = (
+                        f"cache_below_min_zoom at z={zoom}: cached zoom below "
+                        f"min_cache_zoom={min_cache_zoom}"
+                    )
+                    if raw_log_callback is not None:
+                        raw_log_callback(
+                            {
+                                "anchor_id": anchor_id,
+                                "capture_date": capture_date,
+                                "version": version_str,
+                                "zoom_attempt": zoom,
+                                "path": str(candidate_path),
+                                "skip_reason": "cache_below_min_zoom",
+                                "cached_zoom": zoom,
+                                "min_cache_zoom": min_cache_zoom,
+                            }
+                        )
+                    continue
                 if vintage_check is not None:
                     try:
                         vintage_present = bool(vintage_check(zoom, capture_date))
@@ -429,10 +607,12 @@ def main() -> None:
                 no_cache=args.no_cache,
                 timeout=args.timeout,
                 overwrite=args.overwrite,
+                min_cache_zoom=args.min_cache_zoom,
                 target_sr=args.target_sr,
                 allow_nearest=args.allow_nearest,
                 raw_log_callback=_log,
             )
+            provenance = build_chip_provenance(outcome, anchor, args.provider)
             artifact_id = hashlib.sha1(
                 f"{anchor_id}|{outcome.actual_zoom or ''}|{row['capture_date']}|{row.get('version', '')}".encode("utf-8")
             ).hexdigest()[:16]
@@ -454,6 +634,16 @@ def main() -> None:
                     "exact_date": int(not args.allow_nearest),
                     "download_stdout_sha256": outcome.download_stdout_sha256,
                     "gehi_command": outcome.gehi_command,
+                    "raster_width_px": provenance["raster_width_px"],
+                    "raster_height_px": provenance["raster_height_px"],
+                    "raster_crs": provenance["raster_crs"],
+                    "extent_minx": provenance["extent_minx"],
+                    "extent_miny": provenance["extent_miny"],
+                    "extent_maxx": provenance["extent_maxx"],
+                    "extent_maxy": provenance["extent_maxy"],
+                    "gsd_x_m": provenance["gsd_x_m"],
+                    "gsd_y_m": provenance["gsd_y_m"],
+                    "raster_error": provenance["raster_error"],
                 }
             )
 
