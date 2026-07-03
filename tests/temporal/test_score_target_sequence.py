@@ -131,6 +131,88 @@ def test_score_target_sequences_preserves_missing_review_png_targets(tmp_path: P
     assert {row["decision_source"] for row in long_rows} == {"sequence_pending"}
 
 
+def test_score_target_sequences_default_routes_through_seam(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With no explicit ``scorer=``, the sequence path must resolve its scorer
+    from the PresenceScorer registry (get_scorer('gemini').sequence), not a
+    hardwired import. Patch the registry lookup and prove the default flows
+    through it."""
+    from scripts.temporal import presence_scorer as ps
+
+    calls: list[list[str]] = []
+
+    def fake_sequence(date_picks, *, config, audit_writer, max_tokens):
+        calls.append([pick.capture_date for pick in date_picks])
+        return _result([False, True])
+
+    class _FakeScorer:
+        name = "gemini"
+        sequence = staticmethod(fake_sequence)
+
+    requested: list[str] = []
+
+    def fake_get_scorer(name, **_kwargs):
+        requested.append(name)
+        return _FakeScorer()
+
+    monkeypatch.setattr(ps, "get_scorer", fake_get_scorer)
+
+    target_rows, long_rows = score_target_sequences(
+        review_pngs=_review_pngs(tmp_path, ["2018-03-30", "2019-07-30"]),
+        dates=["2018-03-30", "2019-07-30"],
+        config=_config(),
+    )
+
+    assert requested == ["gemini"]
+    assert calls == [["2018-03-30", "2019-07-30"]]
+    assert target_rows[0]["sequence_pattern"] == "0-1"
+    assert {row["decision_source"] for row in long_rows} == {"gemini_sequence"}
+
+
+def test_score_target_sequences_registered_scorer_sequence_accessor(
+    tmp_path: Path,
+) -> None:
+    """A non-Gemini scorer registered in the seam is usable via its ``.sequence``
+    accessor (the shape fullstack_noscan_run.py / main() resolve): declares its
+    own failure decision-source, yet drives the sequence path unchanged."""
+    from scripts.temporal import presence_scorer as ps
+
+    calls: list[list[str]] = []
+
+    def fake_sequence(date_picks, *, config, audit_writer, max_tokens):
+        calls.append([pick.capture_date for pick in date_picks])
+        return _result([True, True])
+
+    class _StubSeqScorer:
+        name = "stub_seq"
+        failure_decision_sources = frozenset({"stubscorer_failed"})
+        quality_flags = frozenset({"usable"})
+        decision_sources = frozenset({"gemini_sequence"})
+        sequence = staticmethod(fake_sequence)
+
+        def score(self, picks, *, config, **_kwargs):
+            return []
+
+    ps.register_scorer("stub_seq", lambda **_kwargs: _StubSeqScorer())
+    try:
+        scorer = ps.get_scorer("stub_seq").sequence
+        assert ps.get_scorer("stub_seq").failure_decision_sources == frozenset(
+            {"stubscorer_failed"}
+        )
+        target_rows, _long_rows = score_target_sequences(
+            review_pngs=_review_pngs(tmp_path, ["2018-03-30", "2019-07-30"]),
+            dates=["2018-03-30", "2019-07-30"],
+            config=_config(),
+            scorer=scorer,
+        )
+    finally:
+        ps._SCORER_FACTORIES.pop("stub_seq", None)
+
+    assert calls == [["2018-03-30", "2019-07-30"]]
+    assert target_rows[0]["sequence_pattern"] == "1-1"
+
+
 def test_render_review_png_manifest_creates_target_centered_png(tmp_path: Path) -> None:
     Image = pytest.importorskip("PIL.Image")
     tif = tmp_path / "chip.tif"
@@ -211,3 +293,23 @@ def test_pending_result_consistency_flag_in_documented_enum():
         notes="missing review PNG for dates: 2020-01-01",
     )
     assert res.consistency_flag in CONSISTENCY_ENUM
+
+
+def test_unregistered_emission_rejected_at_ingest(tmp_path: Path) -> None:
+    """Write-time vocab enforcement (AC5): a scorer emitting an unregistered
+    quality_flag is rejected where its result enters the sequence write path."""
+
+    def fake_scorer(date_picks, *, config, audit_writer, max_tokens):
+        res = _result([False, True])
+        res.quality_flag = "never_registered_flag"
+        return res
+
+    with pytest.raises(ValueError, match="never_registered_flag"):
+        score_target_sequences(
+            review_pngs=_review_pngs(tmp_path, ["2018-03-30", "2019-07-30"]),
+            dates=["2018-03-30", "2019-07-30"],
+            config=_config(),
+            audit_dir=tmp_path / "audit",
+            scorer=fake_scorer,
+            max_tokens=None,
+        )

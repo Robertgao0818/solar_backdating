@@ -35,6 +35,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.temporal.gehi_common import ensure_single_target_review_png
 from scripts.temporal.geid_temporal_common import parse_iso_date, read_csv_rows, write_csv_rows
+from scripts.temporal.presence_scorer import validate_emission
 from scripts.temporal.score_anchor_presence import PRESENCE_FIELDS
 from scripts.temporal.score_chip_group_matrix import (
     ChipArtifact,
@@ -50,7 +51,6 @@ from scripts.validation.gemini_solar_image_review import (
     SequenceDatePick,
     env_value,
     load_env_file,
-    score_single_target_sequence,
 )
 
 DEFAULT_REVIEW_PNG_MANIFEST = (
@@ -567,7 +567,7 @@ def score_target_sequences(
     dates: Sequence[str],
     config: GeminiClientConfig,
     audit_dir: Path | None = None,
-    scorer: Callable[..., GeminiSequenceResult] = score_single_target_sequence,
+    scorer: Callable[..., GeminiSequenceResult] | None = None,
     max_tokens: int | None = None,
     workers: int = 1,
     qps: float | None = None,
@@ -577,6 +577,14 @@ def score_target_sequences(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if workers <= 0:
         raise ValueError("workers must be positive")
+    if scorer is None:
+        # Default routes through the PresenceScorer seam registry rather than a
+        # hardwired import. `.sequence` lazily pulls the concrete Gemini callable
+        # (score_single_target_sequence) only when the gemini scorer is selected,
+        # keeping the native GeminiSequenceResult -> byte-identical CSV output.
+        from scripts.temporal.presence_scorer import get_scorer
+
+        scorer = get_scorer("gemini").sequence
     grouped = _group_review_pngs(review_pngs)
     jobs = sorted(grouped.items(), key=lambda item: (item[0].chip_id, item[0].anchor_id, item[0].target_label))
     if limit_targets is not None:
@@ -635,6 +643,10 @@ def score_target_sequences(
             audit_writer=audit_writer,
             max_tokens=max_tokens,
         )
+        # Write-time vocab enforcement at scorer-output ingest; the
+        # _pending_result sentinel above is call-site-synthesized, not a
+        # scorer emission, and stays exempt.
+        validate_emission(result.quality_flag, result.decision_source)
         return (
             _target_row(
                 key=key,
@@ -731,6 +743,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional Gemini output cap. Default omits max_tokens/maxOutputTokens.",
     )
     parser.add_argument("--timeout", type=int, help="Gemini request timeout in seconds. Defaults to GEMINI_TIMEOUT or 120.")
+    parser.add_argument(
+        "--scorer",
+        default="gemini",
+        help="Registered PresenceScorer name to score sequences with (default: gemini).",
+    )
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--qps", type=float, default=0.3)
     parser.add_argument("--limit-targets", type=int)
@@ -781,11 +798,15 @@ def main() -> int:
 
     config = _load_gemini_config_from_args(args)
     audit_dir = None if args.no_audit else args.audit_dir
+    from scripts.temporal.presence_scorer import get_scorer
+
+    scorer = get_scorer(args.scorer).sequence
     target_rows, long_rows = score_target_sequences(
         review_pngs=review_pngs,
         dates=dates,
         config=config,
         audit_dir=audit_dir,
+        scorer=scorer,
         max_tokens=args.max_tokens,
         workers=args.workers,
         qps=args.qps,

@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from scripts.temporal import presence_scorer
+
 SPEC_VERSION = "phase0_v2"
 
 ROUND_TYPES = {"initial", "walk_back", "bisection", "tail", "anchor_recovery"}
@@ -177,7 +179,22 @@ def load_scan_state(path: Path) -> ScanState | None:
     )
 
 
+def _validate_state_vocab(state: ScanState) -> None:
+    """Reject unregistered quality_flag / decision_source values at write time.
+
+    The single choke-point where adaptive-scan RoundResults are persisted. Values
+    are checked against the additive registries in `presence_scorer`; register
+    new scorer vocabulary via `presence_scorer.register_quality_flag` /
+    `register_decision_source` before saving states that carry it.
+    """
+    for rnd in state.rounds:
+        for res in rnd.results:
+            presence_scorer.validate_quality_flag(res.quality_flag)
+            presence_scorer.validate_decision_source(res.decision_source)
+
+
 def save_scan_state(state: ScanState, path: Path) -> None:
+    _validate_state_vocab(state)
     path.parent.mkdir(parents=True, exist_ok=True)
     state.updated_at = now_iso()
     payload = asdict(state)

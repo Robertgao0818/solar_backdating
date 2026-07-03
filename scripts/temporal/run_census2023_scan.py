@@ -48,14 +48,16 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.temporal.gehi_common import ensure_review_png
-from scripts.temporal.gehi_download import download_chip_with_zoom_ladder
+from scripts.temporal.gehi_download import build_chip_provenance, download_chip_with_zoom_ladder
+from scripts.temporal.presence_scorer import PresenceScorer, get_scorer, validate_emission
+from scripts.temporal.scan_config import AdaptiveScanConfig, load_config
 from scripts.temporal.scan_state import load_scan_state
 from scripts.temporal.score_target_sequence import RateLimiter
 from scripts.validation.gemini_solar_image_review import (
@@ -64,11 +66,12 @@ from scripts.validation.gemini_solar_image_review import (
     SequenceDatePick,
     env_value,
     load_env_file,
-    score_single_target_sequence,
 )
 
 DEFAULT_MODEL = "gemini-3-flash"
-DEFAULT_ZOOM_LADDER = (19, 18)
+# Wayback census-narrowing zoom ladder is single-sourced from the shared config
+# (adaptive_scan.census2023_zoom_ladder); see resolve_census_zoom_ladder.
+DEFAULT_CONFIG_YAML = PROJECT_ROOT / "configs" / "geid_anchor_presence.yaml"
 
 CENSUS_FIELDS = [
     "anchor_id",
@@ -104,6 +107,9 @@ CENSUS_FIELDS = [
     # bookkeeping
     "n_2023_used",
     "n_2023_missing",
+    # achieved-zoom histogram over this anchor's downloaded 2023 Wayback frames
+    # (ISSUE-18 / D17), e.g. "18:1;19:2"; "unknown" buckets a null served zoom.
+    "achieved_zoom_counts",
     "audit_path",
     "notes",
 ]
@@ -166,6 +172,31 @@ def _routing_salt(mode: str, model: str, anchor_id: str) -> str | None:
     if mode == "auto" and "pro" not in (model or "").lower():
         return None
     return f"{model}:{anchor_id}:census2023"
+
+
+def _format_zoom_counts(zooms: list[int | None]) -> str:
+    """Render a per-anchor achieved-zoom histogram as ``"18:1;19:2"`` (sorted,
+    CSV-safe). A null served zoom buckets as ``unknown``."""
+    counts: dict[str, int] = {}
+    for z in zooms:
+        key = str(z) if z is not None else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return ";".join(f"{k}:{counts[k]}" for k in sorted(counts))
+
+
+def _parse_zoom_counts(value: object) -> dict[str, int]:
+    """Inverse of ``_format_zoom_counts`` for the end-of-run aggregate summary."""
+    out: dict[str, int] = {}
+    for part in str(value or "").split(";"):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        key, raw = part.rsplit(":", 1)
+        try:
+            out[key] = out.get(key, 0) + int(raw)
+        except ValueError:
+            continue
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +264,7 @@ def _base_out(job: CensusJob) -> dict[str, object]:
         "date_provider": "gehi_census2023",
         "n_2023_used": 0,
         "n_2023_missing": 0,
+        "achieved_zoom_counts": "",
         "audit_path": "",
         "notes": "",
     }
@@ -250,6 +282,10 @@ def run_one_anchor(
     max_tokens: int | None,
     routing_salt_mode: str,
     limiter: RateLimiter,
+    scorer: PresenceScorer,
+    overwrite_chips: bool = False,
+    min_cache_zoom: int | None = None,
+    provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
 ) -> dict[str, object]:
     out = _base_out(job)
     if job.A is None or job.P is None or job.A > job.P:
@@ -272,7 +308,13 @@ def run_one_anchor(
     # download the 2023 Wayback frames strictly inside the bracket
     anchor = job.anchor_dict()
     wb_frames: list[tuple[date, Path, int | None]] = []  # (date, png_path, zoom)
+    achieved_zooms: list[int | None] = []
     n_missing = 0
+    escape_kwargs: dict[str, object] = {}
+    if overwrite_chips:
+        escape_kwargs["overwrite"] = True
+    if min_cache_zoom is not None:
+        escape_kwargs["min_cache_zoom"] = min_cache_zoom
     for d in sorted(job.wb_dates):
         if not (job.A < d < job.P):
             continue
@@ -284,10 +326,14 @@ def run_one_anchor(
             output_root=census_chips_dir,
             provider="Wayback",
             allow_nearest=False,
+            **escape_kwargs,
         )
+        if provenance_writer is not None:
+            provenance_writer(build_chip_provenance(outcome, anchor, "Wayback"))
         if outcome.status not in ("ok", "skipped_existing") or outcome.path is None:
             n_missing += 1
             continue
+        achieved_zooms.append(outcome.actual_zoom)
         try:
             png = ensure_review_png(Path(outcome.path))
         except Exception as exc:  # noqa: BLE001
@@ -297,6 +343,7 @@ def run_one_anchor(
         wb_frames.append((d, png, outcome.actual_zoom))
 
     out["n_2023_missing"] = n_missing
+    out["achieved_zoom_counts"] = _format_zoom_counts(achieved_zooms)
     if not wb_frames:
         out["census_decision"] = "kept_no_usable_2023"
         out["notes"] = (f"{out['notes']} | no usable 2023 frame downloaded").strip(" |")
@@ -344,7 +391,7 @@ def run_one_anchor(
     salt = _routing_salt(routing_salt_mode, config.model, job.anchor_id)
     limiter.wait()
     try:
-        result = score_single_target_sequence(
+        result = scorer.sequence(
             picks, config=config, audit_writer=audit_writer, max_tokens=max_tokens,
             routing_salt=salt,
         )
@@ -352,6 +399,7 @@ def run_one_anchor(
         if audit_dir is not None:
             fh.close()
 
+    validate_emission(result.quality_flag, result.decision_source)
     out["sequence_pattern"] = result.sequence_pattern
     out["consistency_flag"] = result.consistency_flag
     out["gemini_quality_flag"] = result.quality_flag
@@ -360,7 +408,6 @@ def run_one_anchor(
 
     # map 2023 dates -> reading
     obs_by_date = {o.capture_date[:10]: o for o in result.observations}
-    wb_iso = {d.isoformat() for d, _, _ in wb_frames}
     readings: list[str] = []
     present_2023: list[date] = []
     absent_2023: list[date] = []
@@ -379,7 +426,7 @@ def run_one_anchor(
             absent_2023.append(d)
     out["wb_2023_readings"] = ";".join(readings)
 
-    if result.decision_source == "gemini_failed":
+    if result.decision_source in scorer.failure_decision_sources:
         out["census_decision"] = "kept_gemini_failed"
         return out
 
@@ -476,6 +523,22 @@ def _load_config(args: argparse.Namespace) -> GeminiClientConfig:
     )
 
 
+def resolve_census_zoom_ladder(
+    cli_zoom_ladder: str | None, config: AdaptiveScanConfig
+) -> tuple[int, ...]:
+    """Resolve the Wayback census-narrowing zoom ladder.
+
+    Single source of truth: ``config.census2023_zoom_ladder`` (from the shared
+    ``adaptive_scan:`` YAML section) governs, unless an explicit ``--zoom-ladder``
+    CLI value is given, which wins. A blank/whitespace CLI value falls back to the
+    config value. Diverges from ``download_zoom_ladder`` because Wayback has almost
+    no z20 (see the YAML comment on ``census2023_zoom_ladder``).
+    """
+    if cli_zoom_ladder is not None and str(cli_zoom_ladder).strip():
+        return tuple(int(z) for z in str(cli_zoom_ladder).split(",") if z.strip())
+    return tuple(config.census2023_zoom_ladder)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--cohort-csv", type=Path, required=True, help="build_census2023_cohort.py output.")
@@ -498,10 +561,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--qps", type=float, default=0.0)
     p.add_argument("--routing-salt-mode", choices=("none", "auto", "target"), default="none")
-    p.add_argument("--zoom-ladder", default="19,18")
+    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG_YAML,
+                   help="Shared scan config; supplies census2023_zoom_ladder when --zoom-ladder omitted.")
+    p.add_argument("--zoom-ladder", default=None,
+                   help="Comma-separated Wayback zoom ladder. Overrides "
+                   "adaptive_scan.census2023_zoom_ladder from --config; default (19,18) comes from that config.")
     p.add_argument("--limit", type=int, default=None, help="Process only the first N cohort rows (pilot).")
     p.add_argument("--resume", action="store_true", help="Skip anchors already present in --output.")
     p.add_argument("--flush-every", type=int, default=50, help="Atomic-write the output every N completed anchors.")
+    p.add_argument("--scorer", default="gemini",
+                   help="Registered PresenceScorer to route scoring through (default gemini).")
+    p.add_argument("--overwrite-chips", action="store_true",
+                   help="Re-download every 2023 Wayback chip, bypassing the skip-existing cache "
+                   "(ISSUE-18 escape hatch). Default: off.")
+    p.add_argument("--min-cache-zoom", type=int, default=None,
+                   help="Refuse cached chips below this zoom so the ladder re-fetches and upgrades "
+                   "them (ISSUE-18 escape hatch; cache acceptance only). Default: off.")
     return p.parse_args()
 
 
@@ -509,8 +584,10 @@ def main() -> int:
     args = parse_args()
     if not args.cohort_csv.exists():
         raise SystemExit(f"cohort CSV not found: {args.cohort_csv}")
-    zoom_ladder = tuple(int(z) for z in str(args.zoom_ladder).split(",") if z.strip())
+    scan_cfg = load_config(args.config)
+    zoom_ladder = resolve_census_zoom_ladder(args.zoom_ladder, scan_cfg)
     config = _load_config(args)
+    scorer = get_scorer(args.scorer)
 
     cohort = _read_csv(args.cohort_csv)
     if args.limit is not None:
@@ -533,12 +610,26 @@ def main() -> int:
     lock = threading.Lock()
     n_done = 0
 
+    # Per-chip provenance sidecar (ISSUE-18 / D17): one JSONL record per Wayback
+    # download outcome, written next to --output. Thread-safe: the census runs a
+    # thread pool, so a lock guards the append.
+    provenance_path = args.output.parent / "chip_provenance.jsonl"
+    provenance_path.parent.mkdir(parents=True, exist_ok=True)
+    provenance_lock = threading.Lock()
+
+    def provenance_writer(record: Mapping[str, object]) -> None:
+        line = json.dumps(record, ensure_ascii=False)
+        with provenance_lock, provenance_path.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
     def work(job: CensusJob) -> dict[str, object]:
         return run_one_anchor(
             job, main_dir=args.main_scan_states_dir, norecent_dir=args.norecent_scan_states_dir,
             census_chips_dir=args.census_chips_dir, audit_dir=audit_dir, config=config,
             zoom_ladder=zoom_ladder, max_tokens=args.max_tokens,
-            routing_salt_mode=args.routing_salt_mode, limiter=limiter,
+            routing_salt_mode=args.routing_salt_mode, limiter=limiter, scorer=scorer,
+            overwrite_chips=args.overwrite_chips, min_cache_zoom=args.min_cache_zoom,
+            provenance_writer=provenance_writer,
         )
 
     def record(res: dict[str, object]) -> None:
@@ -577,6 +668,24 @@ def main() -> int:
     for k, v in sorted(by_dec.items(), key=lambda kv: -kv[1]):
         print(f"  {k}: {v}")
     print(f"[census] narrowed {n_narrowed} anchors")
+
+    # Aggregated achieved-zoom distribution over every downloaded 2023 Wayback
+    # frame (ISSUE-18 / D17); re-summed from each row's achieved_zoom_counts so
+    # resumed rows are included. Wayback is empirically ~97% z19 — surfacing it
+    # here means it no longer hides in raw scan-state JSON.
+    zoom_totals: dict[str, int] = {}
+    for r in results:
+        for key, count in _parse_zoom_counts(r.get("achieved_zoom_counts", "")).items():
+            zoom_totals[key] = zoom_totals.get(key, 0) + count
+    total_frames = sum(zoom_totals.values())
+    print("[census] achieved-zoom distribution (2023 Wayback frames):")
+    if total_frames == 0:
+        print("  (no frames downloaded)")
+    else:
+        for key in sorted(zoom_totals):
+            n = zoom_totals[key]
+            label = f"z{key}" if key != "unknown" else "unknown"
+            print(f"  {label}: {n} ({100.0 * n / total_frames:.1f}%)")
     return 0
 
 

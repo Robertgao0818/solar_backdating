@@ -64,7 +64,7 @@ def test_round_one_uses_cheap_tier_round_two_plus_escalates(tmp_path: Path, monk
     def fake_vintage_check(anchor, *, available_dates_by_zoom, config):
         return lambda zoom, capture_date: True
 
-    def fake_decide(state, vintages, config):
+    def fake_decide(state, vintages, config, *, failure_decision_sources=None):
         n = len(state.rounds)
         if n == 0:
             return ExecuteRoundAction(kind="execute_round", round=_round(1))
@@ -73,6 +73,7 @@ def test_round_one_uses_cheap_tier_round_two_plus_escalates(tmp_path: Path, monk
         return TerminateAction(kind="terminate", status="done_appears", notes="")
 
     def fake_execute(rnd, anchor, config, *, chips_dir, audit_dir, gemini_config,
+                     scorer=None,
                      vintage_check=None, census_mid_date_iso=None,
                      limiter=None, routing_salt_mode="none"):
         captured.append((rnd.round_id, gemini_config.model, routing_salt_mode, limiter))
@@ -139,13 +140,14 @@ def test_no_round1_config_keeps_single_tier(tmp_path: Path, monkeypatch) -> None
         lambda anchor, *, available_dates_by_zoom, config: (lambda z, d: True),
     )
 
-    def fake_decide(state, vintages, config):
+    def fake_decide(state, vintages, config, *, failure_decision_sources=None):
         n = len(state.rounds)
         if n < 2:
             return ExecuteRoundAction(kind="execute_round", round=_round(n + 1))
         return TerminateAction(kind="terminate", status="done_appears", notes="")
 
     def fake_execute(rnd, anchor, config, *, chips_dir, audit_dir, gemini_config,
+                     scorer=None,
                      vintage_check=None, census_mid_date_iso=None,
                      limiter=None, routing_salt_mode="none"):
         captured.append(gemini_config.model)
@@ -187,7 +189,7 @@ def test_round_type_routing_keeps_bisection_cheap(tmp_path: Path, monkeypatch) -
             available_dates_by_zoom={19: {"2020-06-15"}},
         )
 
-    def fake_decide(state, vintages, config):
+    def fake_decide(state, vintages, config, *, failure_decision_sources=None):
         n = len(state.rounds)
         if n == 0:
             return ExecuteRoundAction(kind="execute_round", round=_round_t(1, "initial"))
@@ -198,6 +200,7 @@ def test_round_type_routing_keeps_bisection_cheap(tmp_path: Path, monkeypatch) -
         return TerminateAction(kind="terminate", status="done_appears", notes="")
 
     def fake_execute(rnd, anchor, config, *, chips_dir, audit_dir, gemini_config,
+                     scorer=None,
                      vintage_check=None, census_mid_date_iso=None,
                      limiter=None, routing_salt_mode="none"):
         captured.append((rnd.round_id, rnd.round_type, gemini_config.model))

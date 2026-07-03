@@ -32,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.temporal.gehi_common import ReviewTargetMarker, ensure_target_review_png
 from scripts.temporal.geid_temporal_common import read_csv_rows, write_csv_rows
+from scripts.temporal.presence_scorer import get_scorer, validate_emission
 from scripts.temporal.score_anchor_presence import PRESENCE_FIELDS
 from scripts.validation.gemini_solar_image_review import (
     API_FORMATS,
@@ -43,11 +44,20 @@ from scripts.validation.gemini_solar_image_review import (
     GeminiMatrixObservation,
     MatrixDatePick,
     MatrixTarget,
-    _failed_matrix_observation,
     env_value,
     load_env_file,
-    score_target_date_matrix,
 )
+
+# NOTE: no hardwired scorer import here. The concrete matrix-scoring callable
+# (Gemini's `score_target_date_matrix`, or any future implementation) is
+# resolved lazily through `scripts.temporal.presence_scorer.get_scorer(...)` —
+# see `_resolve_default_matrix_scorer()` below and the `scorer=` seam param on
+# `score_chip_group_matrices`. `presence_scorer` itself never pulls Gemini /
+# network deps at import time; the actual Gemini import only happens the first
+# time `.matrix` is accessed on a resolved scorer instance, i.e. when the
+# default (gemini) scorer path is genuinely used.
+DEFAULT_FAILURE_DECISION_SOURCE = "gemini_failed"
+DEFAULT_SUCCESS_DECISION_SOURCE = "gemini_matrix"
 
 DEFAULT_CHIP_TARGETS = (
     Path.home()
@@ -261,12 +271,22 @@ def _append_note(row: dict[str, object], note: str) -> None:
     row["notes"] = f"{existing}; {note}" if existing else note
 
 
-def flag_non_monotonic_rows(rows: list[dict[str, object]]) -> None:
+def flag_non_monotonic_rows(
+    rows: list[dict[str, object]],
+    *,
+    success_decision_source: str = DEFAULT_SUCCESS_DECISION_SOURCE,
+) -> None:
     """Mark target time series with usable present->absent transitions.
 
     Matrix scoring can split one chip across several date chunks, where each
     chunk has local date_index values. The final rows carry true capture_date,
     so monotonic checks are deliberately done here at the CSV-row layer.
+
+    `success_decision_source` is the decision_source value the active scorer
+    emits for a genuine (non-degraded) matrix verdict. It defaults to Gemini's
+    `"gemini_matrix"` sentinel so callers that don't pass an injected scorer see
+    byte-identical behavior; a non-Gemini scorer should pass its own declared
+    decision_source here instead of relying on the Gemini-specific literal.
     """
     by_target: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     for row in rows:
@@ -280,7 +300,7 @@ def flag_non_monotonic_rows(rows: list[dict[str, object]]) -> None:
         seen_present = False
         flagged = False
         for row in sorted(target_rows, key=lambda r: str(r.get("capture_date") or "")):
-            if row.get("decision_source") != "gemini_matrix":
+            if row.get("decision_source") != success_decision_source:
                 continue
             if row.get("quality_flag") != "usable":
                 continue
@@ -323,6 +343,41 @@ def _audit_writer_for(
     return _write
 
 
+def _failed_matrix_observation(
+    *,
+    cell_index: int,
+    date_pick: MatrixDatePick,
+    target: MatrixTarget,
+    error: str,
+    decision_source: str = DEFAULT_FAILURE_DECISION_SOURCE,
+    quality_flag: str = "unusable",
+) -> GeminiMatrixObservation:
+    """Build a degraded observation for one (date, target) cell.
+
+    Locally-owned analogue of `gemini_solar_image_review._failed_matrix_observation`,
+    parameterized by `decision_source`/`quality_flag` instead of hardcoding
+    Gemini's sentinel. With the defaults unchanged (`"gemini_failed"` /
+    `"unusable"`) this reproduces the old helper byte-for-byte; an injected
+    non-Gemini scorer's own declared `failure_decision_sources` member should be
+    threaded in via `failure_decision_source=` on `score_chip_group_matrices`
+    instead.
+    """
+    return GeminiMatrixObservation(
+        cell_index=cell_index,
+        date_index=date_pick.date_index,
+        capture_date=date_pick.capture_date,
+        target_id=target.target_id,
+        target_label=target.target_label,
+        pv_present=None,
+        confidence=None,
+        quality_flag=quality_flag,
+        evidence="",
+        notes=f"{decision_source}: {error[:300]}",
+        decision_source=decision_source,
+        error=error,
+    )
+
+
 def _failed_chunk_rows(
     *,
     chip_id: str,
@@ -330,6 +385,7 @@ def _failed_chunk_rows(
     artifact_chunk: Sequence[ChipArtifact],
     review_png_by_date_index: Mapping[int, Path],
     error: str,
+    failure_decision_source: str = DEFAULT_FAILURE_DECISION_SOURCE,
 ) -> list[dict[str, object]]:
     """Emit unusable presence rows for every (date, target) cell in a chunk.
 
@@ -339,6 +395,11 @@ def _failed_chunk_rows(
     chip-group batch must keep going. Each cell becomes a failed observation
     (pv_present=None, quality_flag=unusable, gemini_error carrying str(exc)),
     kept in the exact MATRIX_PRESENCE_FIELDS shape via _presence_row.
+
+    `failure_decision_source` carries the active scorer's declared failure
+    sentinel (see `PresenceScorer.failure_decision_sources` on the seam) so a
+    non-Gemini injected scorer's own failure identity survives into the
+    persisted rows instead of the Gemini-specific `"gemini_failed"` literal.
     """
     rows: list[dict[str, object]] = []
     cell_index = 1
@@ -357,6 +418,7 @@ def _failed_chunk_rows(
                 date_pick=date_pick,
                 target=target.matrix_target,
                 error=error,
+                decision_source=failure_decision_source,
             )
             rows.append(
                 _presence_row(
@@ -371,25 +433,73 @@ def _failed_chunk_rows(
     return rows
 
 
+def _resolve_default_matrix_scorer(scorer_name: str = "gemini") -> tuple[
+    Callable[..., list[Any]], str
+]:
+    """Resolve the default matrix-scoring callable through the PresenceScorer seam.
+
+    Returns `(scorer_callable, failure_decision_source)`. Importing
+    `presence_scorer` never pulls Gemini/network deps; instantiating the
+    registered scorer is likewise cheap. The actual Gemini import only happens
+    the moment `.matrix` is accessed below — i.e. lazily, and only when this
+    resolver actually runs (which only happens when a caller of
+    `score_chip_group_matrices` did not inject its own `scorer=`).
+    """
+    scorer_obj = get_scorer(scorer_name)
+    matrix_callable = scorer_obj.matrix  # type: ignore[attr-defined]
+    failure_sources = scorer_obj.failure_decision_sources
+    failure_source = (
+        next(iter(failure_sources))
+        if len(failure_sources) == 1
+        else DEFAULT_FAILURE_DECISION_SOURCE
+    )
+    return matrix_callable, failure_source
+
+
 def score_chip_group_matrices(
     *,
     artifacts_by_chip: Mapping[str, Sequence[ChipArtifact]],
     targets_by_chip: Mapping[str, Sequence[ChipTarget]],
     config: GeminiClientConfig,
     audit_dir: Path | None = None,
-    scorer: Callable[..., list[GeminiMatrixObservation]] = score_target_date_matrix,
+    scorer: Callable[..., list[Any]] | None = None,
+    scorer_name: str = "gemini",
+    failure_decision_source: str | None = None,
+    success_decision_source: str = DEFAULT_SUCCESS_DECISION_SOURCE,
     max_dates: int = DEFAULT_MAX_MATRIX_DATES,
     max_targets: int = DEFAULT_MAX_MATRIX_TARGETS,
     hard_max_targets: int = HARD_MAX_MATRIX_TARGETS,
     hard_max_cells: int = HARD_MAX_MATRIX_CELLS,
     limit_chips: int | None = None,
 ) -> list[dict[str, object]]:
+    """Score every chip group's date x target matrix and flatten to CSV rows.
+
+    `scorer` is the injected `PresenceScorer`-style raw callable (matching the
+    existing Gemini `score_target_date_matrix(date_picks, targets, *, config,
+    ...) -> list[...]` shape). When omitted, it is resolved via the
+    `presence_scorer` registry using `scorer_name` (default `"gemini"`) — no
+    scorer implementation is imported directly by this module.
+
+    `failure_decision_source` is the decision_source stamped onto degraded
+    (render/scorer-exception) rows; when omitted and `scorer` is also omitted,
+    it is taken from the resolved scorer's own `failure_decision_sources`.
+    Callers injecting a custom `scorer=` callable directly (e.g. in tests)
+    should pass `failure_decision_source=` explicitly if they want something
+    other than the Gemini default `"gemini_failed"`.
+    """
     if max_dates <= 0:
         raise ValueError("max_dates must be positive")
     if max_targets <= 0:
         raise ValueError("max_targets must be positive")
     if hard_max_cells <= 0:
         raise ValueError("hard_max_cells must be positive")
+
+    if scorer is None:
+        scorer, resolved_failure_source = _resolve_default_matrix_scorer(scorer_name)
+        if failure_decision_source is None:
+            failure_decision_source = resolved_failure_source
+    if failure_decision_source is None:
+        failure_decision_source = DEFAULT_FAILURE_DECISION_SOURCE
 
     rows: list[dict[str, object]] = []
     chip_ids = sorted(set(targets_by_chip) & set(artifacts_by_chip))
@@ -461,10 +571,17 @@ def score_chip_group_matrices(
                             artifact_chunk=artifact_chunk,
                             review_png_by_date_index=review_png_by_date_index,
                             error=error,
+                            failure_decision_source=failure_decision_source,
                         )
                     )
                     continue
                 for obs in observations:
+                    # Write-time vocab enforcement at scorer-output ingest;
+                    # deliberately outside the degrade-to-failed-rows except
+                    # above so an unregistered value fails loudly. The
+                    # _failed_chunk_rows fill is call-site-synthesized and
+                    # exempt.
+                    validate_emission(obs.quality_flag, obs.decision_source)
                     target = target_lookup[obs.target_label]
                     artifact = artifact_by_date_index[obs.date_index]
                     review_png = review_png_by_date_index[obs.date_index]
@@ -477,7 +594,7 @@ def score_chip_group_matrices(
                             obs=obs,
                         )
                     )
-    flag_non_monotonic_rows(rows)
+    flag_non_monotonic_rows(rows, success_decision_source=success_decision_source)
     return rows
 
 
@@ -555,6 +672,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not write per-call Gemini audit JSONL files.",
     )
+    parser.add_argument(
+        "--scorer-impl",
+        default="gemini",
+        help=(
+            "Registered PresenceScorer implementation to use for matrix scoring "
+            "(see scripts.temporal.presence_scorer.available_scorers()). Must expose "
+            "a `.matrix` raw-callable accessor; defaults to 'gemini'."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -573,6 +699,7 @@ def main() -> int:
         targets_by_chip=targets_by_chip,
         config=config,
         audit_dir=audit_dir,
+        scorer_name=args.scorer_impl,
         max_dates=args.max_dates,
         max_targets=args.max_targets,
         hard_max_targets=args.hard_max_targets,

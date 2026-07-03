@@ -25,8 +25,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Iterable, Literal
+from typing import Collection, Iterable, Literal
 
+from scripts.temporal.presence_scorer import DEFAULT_FAILURE_DECISION_SOURCES
 from scripts.temporal.scan_config import AdaptiveScanConfig
 from scripts.temporal.scan_state import (
     Pick,
@@ -109,10 +110,25 @@ def usable_observations(results: Iterable[RoundResult]) -> list[RoundResult]:
     return [r for r in results if r.quality_flag == "usable" and r.pv_present is not None]
 
 
-def failure_pct(results: list[RoundResult]) -> float:
+def failure_pct(
+    results: list[RoundResult],
+    failure_decision_sources: Collection[str] | None = None,
+) -> float:
+    """Percent of results whose decision_source is a scorer-declared failure.
+
+    `failure_decision_sources` is the set of decision_source strings the active
+    scorer emits to mean "no verdict". Defaults to
+    `DEFAULT_FAILURE_DECISION_SOURCES` ({"gemini_failed"}), preserving the
+    pre-ISSUE-05 behavior exactly.
+    """
     if not results:
         return 0.0
-    failed = sum(1 for r in results if r.decision_source == "gemini_failed")
+    sources = (
+        DEFAULT_FAILURE_DECISION_SOURCES
+        if failure_decision_sources is None
+        else failure_decision_sources
+    )
+    failed = sum(1 for r in results if r.decision_source in sources)
     return 100.0 * failed / len(results)
 
 
@@ -358,8 +374,17 @@ def decide_next_action(
     state: ScanState,
     vintages: list[VintageEntry],
     config: AdaptiveScanConfig,
+    *,
+    failure_decision_sources: Collection[str] | None = None,
 ) -> Action:
-    """Return the next Action for the orchestrator: execute another round or terminate."""
+    """Return the next Action for the orchestrator: execute another round or terminate.
+
+    `failure_decision_sources` (defaulting to `DEFAULT_FAILURE_DECISION_SOURCES`)
+    is the active scorer's declared set of failure decision_source strings the
+    >50%-failed ambiguity rule (Case E) counts. The terminal status string
+    `"done_ambiguous_gemini_failed"` is intentionally unchanged regardless of
+    which scorer's sentinel tripped the rule.
+    """
     if state.is_terminal:
         return TerminateAction(kind="terminate", status=state.status)
 
@@ -368,11 +393,12 @@ def decide_next_action(
 
     all_results = collect_all_results(state.rounds)
 
-    if all_results and failure_pct(all_results) > config.case_e_failure_pct:
+    pct = failure_pct(all_results, failure_decision_sources)
+    if all_results and pct > config.case_e_failure_pct:
         return TerminateAction(
             kind="terminate",
             status="done_ambiguous_gemini_failed",
-            notes=f"failure_pct={failure_pct(all_results):.1f} > threshold={config.case_e_failure_pct:.1f}",
+            notes=f"failure_pct={pct:.1f} > threshold={config.case_e_failure_pct:.1f}",
         )
 
     usable = usable_observations(all_results)

@@ -17,23 +17,36 @@ Quick start (dry-run, jhb_vexcel10_smoke):
 
 from __future__ import annotations
 
+# Imports follow a sys.path bootstrap (below) so the subrepo can be run as a
+# script; E402 is expected for the scripts.* imports, matching the sibling
+# temporal modules' convention.
+# ruff: noqa: E402
+
 import argparse
 import csv
 import dataclasses
 import hashlib
+import json
 import sys
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.temporal.presence_scorer import (
+    PresenceScorer,
+    get_scorer,
+)
+from scripts.temporal.presence_scorer import (
+    Pick as ScorerPick,
+)
 from scripts.temporal.scan_config import AdaptiveScanConfig, load_config
 from scripts.temporal.scan_decision import (
     Action,
@@ -41,7 +54,6 @@ from scripts.temporal.scan_decision import (
     TerminateAction,
     VintageEntry,
     decide_next_action,
-    parse_iso,
 )
 from scripts.temporal.scan_state import (
     Pick,
@@ -123,7 +135,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Skip GEHI/Gemini calls; mock vintage list and Gemini results from anchor_id hash.",
+        help="Skip GEHI/Gemini calls; mock vintage list and score results from anchor_id hash "
+        "(routes through the registered 'dry_run' scorer).",
+    )
+    parser.add_argument(
+        "--scorer",
+        type=str,
+        default="gemini",
+        help="Registered PresenceScorer name used for the real (non-dry-run) scan path. "
+        "Default 'gemini'. Ignored when --dry-run is set (that forces the per-anchor "
+        "'dry_run' stub scorer). See presence_scorer.available_scorers().",
     )
     parser.add_argument("--limit-anchors", type=int, help="Process only the first N anchors")
     parser.add_argument(
@@ -142,6 +163,19 @@ def parse_args() -> argparse.Namespace:
         "--force-restart",
         action="store_true",
         help="Delete and recreate every scan_state. Default behavior is resume from existing state.",
+    )
+    parser.add_argument(
+        "--overwrite-chips",
+        action="store_true",
+        help="Re-download every chip, bypassing the skip-existing cache (ISSUE-18 escape hatch). "
+        "Default: off (reuse cached chips).",
+    )
+    parser.add_argument(
+        "--min-cache-zoom",
+        type=int,
+        default=None,
+        help="Refuse cached chips below this zoom so the ladder re-fetches and upgrades them "
+        "(ISSUE-18 escape hatch; governs cache acceptance only). Default: off.",
     )
     parser.add_argument(
         "--qps",
@@ -245,41 +279,66 @@ def dry_run_vintages(anchor_id: str) -> list[VintageEntry]:
     return out
 
 
-def dry_run_gemini_result(
-    pick: Pick,
-    profile: DryRunProfile,
-) -> RoundResult:
-    pv_present: bool | None
-    quality = "usable"
-    notes = f"dry_run profile={profile.label}"
-    pick_date = parse_iso(pick.capture_date)
-    if profile.label == "all_present":
-        pv_present = True
-    elif profile.label == "all_absent":
-        pv_present = False
-    else:
-        assert profile.install_date is not None
-        pv_present = pick_date >= profile.install_date
-    return RoundResult(
-        chip_index=pick.chip_index,
-        capture_date=pick.capture_date,
-        version=pick.version,
-        pv_present=pv_present,
-        confidence=0.95,
-        quality_flag=quality,
-        decision_source="dry_run_stub",
-        evidence=f"stub evidence for {profile.label}",
-        notes=notes,
-        chip_path="",
-        actual_zoom=pick.requested_zoom,
-    )
+def _scorer_failure_source(scorer: PresenceScorer) -> str:
+    """The single decision_source the orchestrator stamps on synthesized failures.
+
+    Download failures and missing-observation rows are orchestrator-level events,
+    not scorer verdicts, but they must still count toward the >50%-failed
+    ambiguity rule (Case E). They therefore carry a decision_source drawn from the
+    active scorer's *declared* failure set. The Gemini scorer declares
+    ``{"gemini_failed"}`` so the persisted string — and every existing
+    scan_state.json / regression fixture — stays byte-identical. A non-Gemini
+    scorer's own failure sentinel flows through the same path. Falls back to the
+    historical literal when a scorer declares no failure sources (e.g. dry-run,
+    which never reaches this path).
+    """
+    sources = sorted(scorer.failure_decision_sources)
+    return sources[0] if sources else "gemini_failed"
 
 
 def execute_round_dry_run(
     rnd: Round,
-    profile: DryRunProfile,
+    scorer: PresenceScorer,
 ) -> Round:
-    rnd.results = [dry_run_gemini_result(pick, profile) for pick in rnd.picks]
+    """Score a round via the injected dry-run scorer (no GEHI/Gemini calls).
+
+    Builds a post-download seam ``Pick`` per scan_state ``Pick`` (dry-run has no
+    real chip, so ``chip_path=""`` and ``actual_zoom=pick.requested_zoom``), scores
+    them through the seam, and maps each ``PresenceObservation`` back onto the
+    persisted ``RoundResult`` shape byte-identically to the old
+    ``dry_run_gemini_result``.
+    """
+    scorer_picks = [
+        ScorerPick(
+            chip_path="",
+            capture_date=pick.capture_date,
+            version=pick.version,
+            actual_zoom=pick.requested_zoom,
+            index=pick.chip_index,
+        )
+        for pick in rnd.picks
+    ]
+    observations = scorer.score(scorer_picks, config=None)
+    obs_by_index = {obs.index: obs for obs in observations}
+    results: list[RoundResult] = []
+    for pick in rnd.picks:
+        obs = obs_by_index[pick.chip_index]
+        results.append(
+            RoundResult(
+                chip_index=pick.chip_index,
+                capture_date=pick.capture_date,
+                version=pick.version,
+                pv_present=obs.pv_present,
+                confidence=obs.pv_score,
+                quality_flag=obs.quality_flag,
+                decision_source=obs.decision_source,
+                evidence=obs.evidence,
+                notes=obs.notes,
+                chip_path="",
+                actual_zoom=pick.requested_zoom,
+            )
+        )
+    rnd.results = results
     rnd.completed = True
     rnd.failed = False
     return rnd
@@ -377,12 +436,22 @@ def _score_batch_picks_chunked(
     gemini_config,
     audit_writer,
     census_mid_date_iso: str | None,
+    scorer: PresenceScorer | None = None,
     limiter=None,
     routing_salt: str | None = None,
 ):
-    """Score date picks in bounded Gemini calls and return original-index observations."""
-    from scripts.validation.gemini_solar_image_review import BatchPick, score_batch_with_fallback
+    """Score date picks in bounded scorer calls and return original-index observations.
 
+    The concrete scorer arrives via the injected ``scorer`` (its ``.batch`` raw
+    callable has the exact ``score_batch_with_fallback`` signature, so native
+    ``GeminiObservation`` results — and downstream CSV/scan_state bytes — are
+    unchanged). Defaults to the registered ``gemini`` scorer when not supplied so
+    legacy direct callers keep working.
+    """
+    from scripts.validation.gemini_solar_image_review import BatchPick
+
+    if scorer is None:
+        scorer = get_scorer("gemini")
     if not score_picks:
         return {}
     max_dates = max(1, int(config.gemini_max_dates_per_call))
@@ -414,7 +483,7 @@ def _score_batch_picks_chunked(
         if limiter is not None:
             limiter.wait()
         salt_kwargs = {} if routing_salt is None else {"routing_salt": routing_salt}
-        observations = score_batch_with_fallback(
+        observations = scorer.batch(
             local_picks,
             config=gemini_config,
             audit_writer=_chunk_audit,
@@ -436,16 +505,46 @@ def execute_round_real(
     chips_dir: Path,
     audit_dir: Path,
     gemini_config,  # GeminiClientConfig - imported lazily
+    scorer: PresenceScorer | None = None,
     vintage_check=None,
     census_mid_date_iso: str | None = None,
     limiter=None,
     routing_salt_mode: str = "none",
+    overwrite_chips: bool = False,
+    min_cache_zoom: int | None = None,
+    provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
 ) -> Round:
-    """Download chips for each pick (zoom ladder), batch-score with Gemini, return Round with results."""
+    """Download chips for each pick (zoom ladder), batch-score via the injected
+    scorer, return Round with results.
+
+    ``scorer`` is the injected :class:`PresenceScorer` (defaults to the registered
+    ``gemini`` scorer for legacy direct callers). Its declared
+    ``failure_decision_sources`` supplies the decision_source stamped on
+    orchestrator-level failure rows (download failures / missing observations), so
+    the >50%-failed ambiguity rule stays scorer-parameterized while Gemini keeps
+    emitting the byte-identical ``"gemini_failed"`` sentinel.
+
+    ``overwrite_chips`` / ``min_cache_zoom`` are the ISSUE-18 cache-refresh escape
+    hatch, forwarded to every download call only when set (a default run passes
+    neither, so the download call is byte-identical to before). ``provenance_writer``,
+    when supplied, receives one canonical chip-provenance record per download
+    outcome (built via ``build_chip_provenance``); it must be safe to call
+    concurrently across anchor workers.
+    """
     import json as _json
 
     from scripts.temporal.gehi_common import ensure_review_png
-    from scripts.temporal.gehi_download import download_chip_with_zoom_ladder
+    from scripts.temporal.gehi_download import build_chip_provenance, download_chip_with_zoom_ladder
+
+    if scorer is None:
+        scorer = get_scorer("gemini")
+    failure_source = _scorer_failure_source(scorer)
+
+    escape_kwargs: dict[str, object] = {}
+    if overwrite_chips:
+        escape_kwargs["overwrite"] = True
+    if min_cache_zoom is not None:
+        escape_kwargs["min_cache_zoom"] = min_cache_zoom
 
     download_outcomes: list[tuple[Pick, object]] = []
     for pick in rnd.picks:
@@ -457,8 +556,11 @@ def execute_round_real(
             output_root=chips_dir,
             provider=config.provider,
             vintage_check=vintage_check,
+            **escape_kwargs,
         )
         download_outcomes.append((pick, outcome))
+        if provenance_writer is not None:
+            provenance_writer(build_chip_provenance(outcome, anchor, config.provider))
 
     download_by_index: dict[int, object] = {pick.chip_index: outcome for pick, outcome in download_outcomes}
     score_picks, batch_to_original = _build_batch_picks_with_remap(download_outcomes, ensure_review_png)
@@ -487,6 +589,7 @@ def execute_round_real(
                 gemini_config=gemini_config,
                 audit_writer=_audit,
                 census_mid_date_iso=census_mid_date_iso,
+                scorer=scorer,
                 limiter=limiter,
                 routing_salt=routing_salt,
             )
@@ -503,7 +606,7 @@ def execute_round_real(
                     pv_present=None,
                     confidence=None,
                     quality_flag="unusable",
-                    decision_source="gemini_failed",
+                    decision_source=failure_source,
                     evidence="",
                     notes=f"download_failed: status={outcome.status} error={outcome.error or ''}"[:300],
                     chip_path="",
@@ -521,7 +624,7 @@ def execute_round_real(
                     pv_present=None,
                     confidence=None,
                     quality_flag="unusable",
-                    decision_source="gemini_failed",
+                    decision_source=failure_source,
                     evidence="",
                     notes="missing observation in batch results",
                     chip_path=str(outcome.path),
@@ -600,6 +703,10 @@ def run_one_anchor(
     limiter=None,
     routing_salt_mode: str = "none",
     census_mid_date_iso: str | None = None,
+    scorer: PresenceScorer | None = None,
+    overwrite_chips: bool = False,
+    min_cache_zoom: int | None = None,
+    provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
     state_path = state_path_for(anchor_id, scan_states_dir)
@@ -617,7 +724,18 @@ def run_one_anchor(
     if state.is_terminal:
         return state
 
-    profile = dry_run_profile_for(anchor_id) if dry_run else None
+    # Resolve the scorer this anchor scores through. Dry-run builds a per-anchor
+    # dry-run stub from the anchor's deterministic profile (mirroring how the old
+    # code derived a DryRunProfile per anchor); the real path uses the injected
+    # scorer (default = registered gemini). The scorer's declared
+    # failure_decision_sources parameterizes Case E via decide_next_action below.
+    if dry_run:
+        profile = dry_run_profile_for(anchor_id)
+        scorer = get_scorer(
+            "dry_run", label=profile.label, install_date=profile.install_date
+        )
+    elif scorer is None:
+        scorer = get_scorer("gemini")
     real_catalog: VintageCatalog | None = None
     if dry_run:
         vintages = dry_run_vintages(anchor_id)
@@ -633,9 +751,13 @@ def run_one_anchor(
             config=config,
         )
 
+    assert scorer is not None
     max_iter = 32
     for _ in range(max_iter):
-        action: Action = decide_next_action(state, vintages, config)
+        action: Action = decide_next_action(
+            state, vintages, config,
+            failure_decision_sources=scorer.failure_decision_sources,
+        )
         if isinstance(action, TerminateAction):
             state.status = action.status
             if action.notes:
@@ -646,8 +768,7 @@ def run_one_anchor(
         assert isinstance(action, ExecuteRoundAction)
         rnd = action.round
         if dry_run:
-            assert profile is not None
-            rnd = execute_round_dry_run(rnd, profile)
+            rnd = execute_round_dry_run(rnd, scorer)
         else:
             assert chips_dir is not None and audit_dir is not None and gemini_config is not None
             # Model tiering by round_type: routine present/absent rounds (initial
@@ -666,13 +787,25 @@ def run_one_anchor(
                     use_cheap = rnd.round_type in cheap_round_types
                 if use_cheap:
                     round_config = gemini_config_round1
+            # Forward the ISSUE-18 escape hatch / provenance sink only when active,
+            # so a default run's call is byte-identical to before (keeps existing
+            # execute_round_real stubs / call sites intact).
+            issue18_kwargs: dict[str, object] = {}
+            if overwrite_chips:
+                issue18_kwargs["overwrite_chips"] = True
+            if min_cache_zoom is not None:
+                issue18_kwargs["min_cache_zoom"] = min_cache_zoom
+            if provenance_writer is not None:
+                issue18_kwargs["provenance_writer"] = provenance_writer
             rnd = execute_round_real(
                 rnd, anchor, config,
                 chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=round_config,
+                scorer=scorer,
                 vintage_check=vintage_check,
                 census_mid_date_iso=census_mid_date_iso,
                 limiter=limiter,
                 routing_salt_mode=routing_salt_mode,
+                **issue18_kwargs,
             )
         state.rounds.append(rnd)
         # Informational checkpoint metadata only: resume never reads next_action,
@@ -750,15 +883,33 @@ def _fetch_real_vintages(anchor: dict[str, str], config: AdaptiveScanConfig) -> 
 
 def summarize(states: Iterable[ScanState]) -> None:
     by_status: dict[str, int] = defaultdict(int)
+    zoom_counts: dict[str, int] = defaultdict(int)
     total_rounds = 0
     total_observations = 0
     for s in states:
         by_status[s.status] += 1
         total_rounds += len(s.rounds)
-        total_observations += sum(len(r.results) for r in s.rounds)
+        for rnd in s.rounds:
+            total_observations += len(rnd.results)
+            for r in rnd.results:
+                key = str(r.actual_zoom) if r.actual_zoom is not None else "unknown"
+                zoom_counts[key] += 1
     print(f"\nProcessed {sum(by_status.values())} anchors, {total_rounds} rounds, {total_observations} observations.")
     for status in sorted(by_status):
         print(f"  {status}: {by_status[status]}")
+
+    # Achieved-zoom distribution over every scored chip (ISSUE-18 / D17): the
+    # ladder rung GEHI actually served, which rung-level tooling otherwise buries
+    # in raw scan-state JSON. None (download failed / never scored) -> "unknown".
+    total_zoom = sum(zoom_counts.values())
+    print("Achieved-zoom distribution:")
+    if total_zoom == 0:
+        print("  (no scored chips)")
+    else:
+        for key in sorted(zoom_counts):
+            n = zoom_counts[key]
+            label = f"z{key}" if key != "unknown" else "unknown"
+            print(f"  {label}: {n} ({100.0 * n / total_zoom:.1f}%)")
 
 
 def _resolve_census_mid_date(anchor: dict[str, str], override: str | None) -> str | None:
@@ -830,7 +981,12 @@ def main() -> None:
     gemini_config_round1 = None
     cheap_round_types: frozenset[str] | None = None
     limiter = None
+    # The real-path scorer is selected via the registry (default 'gemini'), never
+    # a hardwired import. Dry-run builds its per-anchor 'dry_run' stub inside
+    # run_one_anchor, so it stays None here.
+    scorer: PresenceScorer | None = None
     if not args.dry_run:
+        scorer = get_scorer(args.scorer)
         env_file = args.gemini_env_file or _default_gemini_env()
         gemini_config = _load_gemini_config(env_file)
         if args.round2_model:
@@ -862,6 +1018,21 @@ def main() -> None:
     }
     print_lock = threading.Lock()
 
+    # Per-chip provenance sidecar (ISSUE-18 / D17): one JSONL record per download
+    # outcome, written next to the scan-states dir. Only the real path downloads
+    # chips, so dry-run writes nothing. Thread-safe: a lock guards the append so
+    # concurrent anchor workers never interleave a line.
+    provenance_writer: Callable[[Mapping[str, object]], None] | None = None
+    if not args.dry_run:
+        provenance_path = args.scan_states_dir.parent / "chip_provenance.jsonl"
+        provenance_path.parent.mkdir(parents=True, exist_ok=True)
+        provenance_lock = threading.Lock()
+
+        def provenance_writer(record: Mapping[str, object]) -> None:
+            line = json.dumps(record, ensure_ascii=False)
+            with provenance_lock, provenance_path.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+
     def handle(anchor: dict[str, str]) -> ScanState:
         anchor_id = anchor["anchor_id"]
         try:
@@ -879,6 +1050,10 @@ def main() -> None:
                 limiter=limiter,
                 routing_salt_mode=args.routing_salt_mode,
                 census_mid_date_iso=census_by_anchor[anchor_id],
+                scorer=scorer,
+                overwrite_chips=args.overwrite_chips,
+                min_cache_zoom=args.min_cache_zoom,
+                provenance_writer=provenance_writer,
             )
         except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
             state = _record_orchestrator_failure(anchor, args.scan_states_dir, exc)

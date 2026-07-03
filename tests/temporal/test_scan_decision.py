@@ -412,6 +412,65 @@ def test_case_e_failure_pct_terminates(state_factory) -> None:
     assert action.status == "done_ambiguous_gemini_failed"
 
 
+def test_case_e_triggers_for_non_gemini_scorer_declared_failure_source(state_factory) -> None:
+    """ISSUE-05: the >50%-failed rule fires on a non-Gemini scorer's declared
+    failure decision_source when that set is threaded through, keeping the
+    terminal status string unchanged."""
+    config = AdaptiveScanConfig(case_e_failure_pct=50.0)
+    vintages = _vintages_yearly(2018, 2024)
+    r1 = _round(
+        1,
+        "initial",
+        results=[
+            _result("2018-06-15", present=None, quality="unusable", source="stubscorer_failed"),
+            _result("2020-06-15", present=None, quality="unusable", source="stubscorer_failed"),
+            _result("2022-06-15", present=None, quality="unusable", source="stubscorer_failed"),
+            _result("2024-06-15", present=False, quality="usable"),
+        ],
+        window_start="2018-06-15",
+        window_end="2024-06-15",
+    )
+    state = state_factory([r1])
+    action = decide_next_action(
+        state, vintages, config, failure_decision_sources=frozenset({"stubscorer_failed"})
+    )
+    assert isinstance(action, TerminateAction)
+    assert action.status == "done_ambiguous_gemini_failed"
+
+
+def test_case_e_default_sources_ignore_non_gemini_failure(state_factory) -> None:
+    """With the default failure set ({'gemini_failed'}), a non-Gemini failure
+    source does NOT trip Case E — the pre-ISSUE-05 behavior is preserved."""
+    config = AdaptiveScanConfig(case_e_failure_pct=50.0)
+    vintages = _vintages_yearly(2018, 2024)
+    r1 = _round(
+        1,
+        "initial",
+        results=[
+            _result("2018-06-15", present=None, quality="unusable", source="stubscorer_failed"),
+            _result("2020-06-15", present=None, quality="unusable", source="stubscorer_failed"),
+            _result("2022-06-15", present=None, quality="unusable", source="stubscorer_failed"),
+            _result("2024-06-15", present=False, quality="usable"),
+        ],
+        window_start="2018-06-15",
+        window_end="2024-06-15",
+    )
+    state = state_factory([r1])
+    action = decide_next_action(state, vintages, config)
+    assert not (isinstance(action, TerminateAction) and action.status == "done_ambiguous_gemini_failed")
+
+
+def test_failure_pct_parameterized_source_set() -> None:
+    from scripts.temporal.scan_decision import failure_pct
+
+    results = [
+        _result("2018-06-15", present=None, source="alt_failed"),
+        _result("2020-06-15", present=False, source="gemini_batch"),
+    ]
+    assert failure_pct(results) == 0.0  # default only counts gemini_failed
+    assert failure_pct(results, frozenset({"alt_failed"})) == 50.0
+
+
 def test_no_usable_obs_triggers_anchor_recovery(state_factory, config) -> None:
     vintages = _vintages_yearly(2018, 2024)
     r1 = _round(
