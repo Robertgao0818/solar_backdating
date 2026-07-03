@@ -116,7 +116,15 @@ def main() -> int:
     # hardwired import. `.sequence` lazily resolves the concrete Gemini callable
     # only when the gemini scorer is selected, preserving the native
     # GeminiSequenceResult shape run_job flattens below.
-    score_sequence = get_scorer(a.scorer).sequence
+    #
+    # ISSUE-06 scoring-provenance sidecar: wrap the resolved scorer here (this
+    # call-site resolves its own scorer, so it wraps directly rather than through
+    # a library default branch) and thread the per-job (rep / window / anchor /
+    # chip / target) context into every sequence call via provenance_context.
+    from scripts.temporal.scoring_provenance import jsonl_writer, with_scoring_provenance
+
+    scoring_provenance_writer = jsonl_writer(a.out_dir / "scoring_provenance.jsonl")
+    score_sequence = with_scoring_provenance(get_scorer(a.scorer), scoring_provenance_writer).sequence
 
     review_pngs = load_review_png_manifest(a.manifest)
     by_target: dict[TargetKey, dict[str, object]] = defaultdict(dict)
@@ -185,7 +193,16 @@ def main() -> int:
         rows = []
         err = ""
         try:
-            res = score_sequence(picks, config=config, audit_writer=None, max_tokens=a.max_tokens)
+            res = score_sequence(
+                picks, config=config, audit_writer=None, max_tokens=a.max_tokens,
+                provenance_context={
+                    "anchor_id": key.anchor_id,
+                    "chip_id": key.chip_id,
+                    "target_label": key.target_label,
+                    "rep": rep,
+                    "window_idx": wi,
+                },
+            )
             # Vocab enforcement at ingest: an unregistered value degrades this
             # window to an explicit error row instead of flowing into the CSV.
             validate_emission(res.quality_flag, res.decision_source)

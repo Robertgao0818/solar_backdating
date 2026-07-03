@@ -286,6 +286,7 @@ def run_one_anchor(
     overwrite_chips: bool = False,
     min_cache_zoom: int | None = None,
     provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
+    scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
 ) -> dict[str, object]:
     out = _base_out(job)
     if job.A is None or job.P is None or job.A > job.P:
@@ -304,6 +305,17 @@ def run_one_anchor(
         out["census_decision"] = "kept_no_anchor_frame"
         out["notes"] = "missing cached absent/present anchor frame"
         return out
+
+    # ISSUE-06 scoring-provenance sidecar: wrap the injected scorer so the single
+    # per-anchor sequence call emits one provenance row per scored frame, stamped
+    # with this anchor. Wrapper delegates failure_decision_sources verbatim, so
+    # the kept_gemini_failed gate below is unaffected.
+    if scoring_provenance_writer is not None:
+        from scripts.temporal.scoring_provenance import with_scoring_provenance
+
+        scorer = with_scoring_provenance(
+            scorer, scoring_provenance_writer, context={"anchor_id": job.anchor_id}
+        )
 
     # download the 2023 Wayback frames strictly inside the bracket
     anchor = job.anchor_dict()
@@ -622,6 +634,12 @@ def main() -> int:
         with provenance_lock, provenance_path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
+    # Scoring-provenance sidecar (ISSUE-06 / D5): one JSONL row per scored frame,
+    # written next to --output. Thread-safe append (its own lock).
+    from scripts.temporal.scoring_provenance import jsonl_writer as _scoring_jsonl_writer
+
+    scoring_provenance_writer = _scoring_jsonl_writer(args.output.parent / "scoring_provenance.jsonl")
+
     def work(job: CensusJob) -> dict[str, object]:
         return run_one_anchor(
             job, main_dir=args.main_scan_states_dir, norecent_dir=args.norecent_scan_states_dir,
@@ -630,6 +648,7 @@ def main() -> int:
             routing_salt_mode=args.routing_salt_mode, limiter=limiter, scorer=scorer,
             overwrite_chips=args.overwrite_chips, min_cache_zoom=args.min_cache_zoom,
             provenance_writer=provenance_writer,
+            scoring_provenance_writer=scoring_provenance_writer,
         )
 
     def record(res: dict[str, object]) -> None:

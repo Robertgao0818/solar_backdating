@@ -1,6 +1,6 @@
 # ISSUE-06: Provenance sidecar per scoring call
 
-Status: ready-for-agent
+Status: done
 Phase: 1 — Provenance
 Blocked by: ISSUE-05
 
@@ -23,11 +23,11 @@ and for any retroactive drift audit going forward.
 
 ## Acceptance criteria
 
-- [ ] Every call through the seam emits sidecar rows for all scored chips
-- [ ] Scorer identity captured from resolved config (not re-read from env downstream); verified for both cheap and capable model tiers
-- [ ] Prompt/config hash stable across runs with identical config; changes when the prompt changes (test)
-- [ ] Chip content hash computed on encoded bytes; identical chip → identical hash across runs
-- [ ] Documented limitation: historical scans cannot be backfilled (no model identity was recorded) — stated where downstream consumers will see it
+- [x] Every call through the seam emits sidecar rows for all scored chips
+- [x] Scorer identity captured from resolved config (not re-read from env downstream); verified for both cheap and capable model tiers
+- [x] Prompt/config hash stable across runs with identical config; changes when the prompt changes (test)
+- [x] Chip content hash computed on encoded bytes; identical chip → identical hash across runs
+- [x] Documented limitation: historical scans cannot be backfilled (no model identity was recorded) — stated where downstream consumers will see it
 
 ## Blocked by
 

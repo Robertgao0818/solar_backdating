@@ -287,6 +287,49 @@ class GeminiPresenceScorer:
 
         return score_target_date_matrix
 
+    def prompt_config_fingerprint(self, mode: str, config: Any) -> dict[str, Any]:
+        """Instruction + config identity for the scoring-provenance hash (ISSUE-06).
+
+        Returns the exact prompt templates that construct the request for `mode`
+        plus the config knobs that change the *instruction the model executes*.
+        Lazily imports the prompt constants so this stays free of Gemini/network
+        deps until a provenance-wrapped scorer actually hashes.
+
+        Batch mode lists all three templates its retry policy can render — the
+        batch template, the census-calibration suffix, and the per-image fallback
+        prompt (`DEFAULT_PROMPT`) — because a change to any of them changes what
+        some scored chip in a batch was actually asked. `base_url` / `api_key` /
+        `native_path` / `timeout` are gateway/transport identity, not instruction
+        identity, and are deliberately EXCLUDED (and the api_key must never enter a
+        hash input payload). Tolerates `config=None` (fields resolve to None).
+        """
+        from scripts.validation.gemini_solar_image_review import (
+            BATCH_CENSUS_CALIBRATION_SUFFIX,
+            BATCH_PROMPT_TEMPLATE,
+            DEFAULT_PROMPT,
+            MATRIX_PROMPT_TEMPLATE,
+            SEQUENCE_PROMPT_TEMPLATE,
+        )
+
+        templates = {
+            "batch": [BATCH_PROMPT_TEMPLATE, BATCH_CENSUS_CALIBRATION_SUFFIX, DEFAULT_PROMPT],
+            "sequence": [SEQUENCE_PROMPT_TEMPLATE],
+            "matrix": [MATRIX_PROMPT_TEMPLATE],
+        }.get(mode, [])
+        payload: dict[str, Any] = {
+            "scorer": "gemini",
+            "mode": mode,
+            "prompt_templates": templates,
+            "model": getattr(config, "model", None),
+            "api_format": getattr(config, "api_format", None),
+            "max_tokens_per_chip": getattr(config, "max_tokens_per_chip", None),
+            "thinking_level": getattr(config, "thinking_level", None),
+            "thinking_budget": getattr(config, "thinking_budget", None),
+        }
+        if mode == "matrix":
+            payload["matrix_json_mode"] = getattr(config, "matrix_json_mode", None)
+        return payload
+
     @staticmethod
     def _to_observation(obs: "GeminiObservation") -> PresenceObservation:
         return PresenceObservation(
@@ -377,6 +420,20 @@ class DryRunPresenceScorer:
     decision_sources: frozenset[str] = field(
         default=frozenset({"dry_run_stub"}), init=False
     )
+
+    def prompt_config_fingerprint(self, mode: str, config: Any = None) -> dict[str, Any]:
+        """Instruction identity for the dry-run stub (ISSUE-06).
+
+        The stub has no prompt and reads no `config`; its verdicts are a pure
+        function of the anchor's deterministic `label` + `install_date`, so those
+        two fields fully describe "what produced this verdict".
+        """
+        return {
+            "scorer": "dry_run",
+            "mode": mode,
+            "label": self.label,
+            "install_date": str(self.install_date),
+        }
 
     def _pv_present(self, capture_date: str) -> bool:
         if self.label == "all_present":

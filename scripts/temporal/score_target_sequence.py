@@ -574,9 +574,15 @@ def score_target_sequences(
     limit_targets: int | None = None,
     resume_target_rows: Mapping[tuple[str, str, str, str], Mapping[str, object]] | None = None,
     resume_long_rows: Mapping[tuple[str, str, str, str], Sequence[Mapping[str, object]]] | None = None,
+    scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if workers <= 0:
         raise ValueError("workers must be positive")
+    # ISSUE-06: only the default-resolution branch is provenance-wrapped, so a
+    # caller-injected raw `scorer=` callable (e.g. a test's fake) is never handed
+    # the unknown `provenance_context` kwarg. When wrapped, the per-job context
+    # (anchor / chip / target) is threaded per call inside run_one.
+    provenance_active = False
     if scorer is None:
         # Default routes through the PresenceScorer seam registry rather than a
         # hardwired import. `.sequence` lazily pulls the concrete Gemini callable
@@ -584,7 +590,13 @@ def score_target_sequences(
         # keeping the native GeminiSequenceResult -> byte-identical CSV output.
         from scripts.temporal.presence_scorer import get_scorer
 
-        scorer = get_scorer("gemini").sequence
+        scorer_obj = get_scorer("gemini")
+        if scoring_provenance_writer is not None:
+            from scripts.temporal.scoring_provenance import with_scoring_provenance
+
+            scorer_obj = with_scoring_provenance(scorer_obj, scoring_provenance_writer)
+            provenance_active = True
+        scorer = scorer_obj.sequence
     grouped = _group_review_pngs(review_pngs)
     jobs = sorted(grouped.items(), key=lambda item: (item[0].chip_id, item[0].anchor_id, item[0].target_label))
     if limit_targets is not None:
@@ -637,11 +649,19 @@ def score_target_sequences(
             for index, (date, row) in enumerate(zip(dates, valid_rows, strict=True), start=1)
         ]
         limiter.wait()
+        provenance_kwargs: dict[str, object] = {}
+        if provenance_active:
+            provenance_kwargs["provenance_context"] = {
+                "anchor_id": key.anchor_id,
+                "chip_id": key.chip_id,
+                "target_label": key.target_label,
+            }
         result = scorer(
             picks,
             config=config,
             audit_writer=audit_writer,
             max_tokens=max_tokens,
+            **provenance_kwargs,
         )
         # Write-time vocab enforcement at scorer-output ingest; the
         # _pending_result sentinel above is call-site-synthesized, not a
@@ -799,8 +819,15 @@ def main() -> int:
     config = _load_gemini_config_from_args(args)
     audit_dir = None if args.no_audit else args.audit_dir
     from scripts.temporal.presence_scorer import get_scorer
+    from scripts.temporal.scoring_provenance import jsonl_writer
 
-    scorer = get_scorer(args.scorer).sequence
+    # ISSUE-06 scoring-provenance sidecar next to the output. The default gemini
+    # scorer routes through score_target_sequences' provenance-wrapping
+    # default-resolution branch (scorer=None) so each scored frame carries full
+    # per-job (anchor/chip/target) context; a non-default --scorer is pre-resolved
+    # as before (raw callable, unwrapped).
+    scoring_provenance_writer = jsonl_writer(args.output.parent / "scoring_provenance.jsonl")
+    scorer = None if args.scorer == "gemini" else get_scorer(args.scorer).sequence
     target_rows, long_rows = score_target_sequences(
         review_pngs=review_pngs,
         dates=dates,
@@ -813,6 +840,7 @@ def main() -> int:
         limit_targets=args.limit_targets,
         resume_target_rows=resume_target_rows,
         resume_long_rows=resume_long_rows,
+        scoring_provenance_writer=scoring_provenance_writer,
     )
     write_csv_rows(args.output, target_rows, SEQUENCE_TARGET_FIELDS)
     write_csv_rows(args.long_output, long_rows, SEQUENCE_LONG_FIELDS)

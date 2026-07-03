@@ -69,6 +69,75 @@ provider re-renders pixels under stable metadata, D6), a churned re-render lands
 as a new `chip_sha256` and cannot silently reuse a stale verdict. `achieved_zoom`
 travels with both so every downstream stratification (below) can key on it.
 
+## Scoring provenance sidecar (ISSUE-06 / D5)
+
+The scoring sidecar is the *verdict* side of the join above. Every chip that flows
+through the `PresenceScorer` seam (`scripts/temporal/presence_scorer.py`) — batch,
+sequence, or matrix — emits one JSONL row via
+`scripts/temporal/scoring_provenance.py` (`with_scoring_provenance` proxy). It
+makes each verdict attributable to the exact model, instruction, and pixels that
+produced it — the precondition for the verdict store (ISSUE-07) and any drift
+audit.
+
+**Row schema** (`SCORING_PROVENANCE_FIELDS`, one JSON object per line):
+
+| field | meaning |
+| --- | --- |
+| `record_version` | schema version (currently `1`) |
+| `ts_utc` | scoring timestamp, UTC `…Z` |
+| `scorer_name` | seam identity (`gemini` / `dry_run` / …) |
+| `model_id` | resolved model string, read from the `config` object **passed at call time** (not re-read from env). Null for the dry-run stub / `config=None` |
+| `api_format` | `native` / `openai` / `agy` — recorded so identity is honest for the `agy` backend, which ignores `model` |
+| `prompt_config_hash` | `sha256:…` of the exact prompt templates + instruction-bearing config knobs for this mode (see below) |
+| `scoring_mode` | `batch` / `sequence` / `matrix` |
+| `anchor_id`, `chip_id`, `target_id`, `target_label` | join / attribution keys (populated per call-site; matrix fills `target_id`/`target_label` from the observation) |
+| `chip_index` | ordinal within the call (batch `chip_index` / sequence & matrix `date_index`) |
+| `capture_date`, `version` | scan-slot join keys (to the chip sidecar) |
+| `chip_path` | path to the **scored** asset (the review PNG, not the source GeoTIFF) |
+| `chip_sha256` | bare-hex sha256 of the scored asset bytes; null when the asset is missing/unreadable |
+| `chip_sha256_error` | null on success, else the reason `chip_sha256` is null (never raises) |
+| `decision_source`, `quality_flag` | the scorer's own verdict vocabulary (sequence carries the target-level pair on every date row) |
+| `context` | free-form dict for per-call keys without a dedicated column (`rep`, `window_idx`, …) |
+
+**File locations** (always `scoring_provenance.jsonl`, next to that call-site's
+primary output):
+
+| call-site | location |
+| --- | --- |
+| `run_adaptive_scan.py` (dry-run **and** real) | `<scan_states_dir>/../scoring_provenance.jsonl` |
+| `run_census2023_scan.py` | `<--output>/../scoring_provenance.jsonl` |
+| `score_target_sequence.py` | `<--output>/../scoring_provenance.jsonl` |
+| `score_chip_group_matrix.py` | `<--output>/../scoring_provenance.jsonl` |
+| `fullstack_noscan_run.py` | `<--out-dir>/scoring_provenance.jsonl` |
+
+**Join contract.** `scoring_provenance ⋈ chip_provenance ON (anchor_id,
+capture_date, version)`. This is the *same* tuple the chip sidecar pins.
+
+**PNG-vs-TIF hash caveat.** `chip_sha256` here hashes the **scored** asset — the
+review PNG (marker overlay) actually handed to the model, which is the D6
+verdict-store correctness condition (the bytes the model saw). The chip sidecar's
+`chip_sha256` hashes the **source** GeoTIFF. The two sha fields therefore
+intentionally do **not** match when a review PNG was scored; join the two sidecars
+on the `(anchor_id, capture_date, version)` tuple, not on the hash.
+
+**What `prompt_config_hash` covers.** The digest is over the mode-specific prompt
+templates (batch: the batch template + census-calibration suffix + the per-image
+fallback prompt; sequence / matrix: their single template) plus the
+instruction-bearing config knobs (`model`, `api_format`, `max_tokens_per_chip`,
+`thinking_level`, `thinking_budget`, and `matrix_json_mode` for matrix). It
+deliberately **excludes** gateway/transport identity (`base_url`, `api_key`,
+`native_path`, `timeout`) — those change *where* the request goes, not *what
+instruction* the model executes — and the `api_key` is never placed in any hash
+input. Changing a prompt template moves the hash; swapping the gateway does not.
+
+**Backfill limitation — historical scans CANNOT be backfilled.** Before this
+sidecar existed, the model id was resolved from env at run time and then
+discarded; no scorer identity was ever persisted for those verdicts. There is
+therefore no way to reconstruct which model / instruction produced a
+pre-deployment verdict. Drift audits and the ISSUE-07 verdict store begin at
+sidecar deployment, not at the start of scan history — any pre-existing scan
+state is treated as identity-unknown, never assumed to be the current model.
+
 ## Cache escape hatch (`--overwrite-chips` / `--min-cache-zoom`)
 
 Sibling deliverable in the download path. Two escapes close the first-cached-zoom

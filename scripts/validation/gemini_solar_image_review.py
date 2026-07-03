@@ -191,6 +191,27 @@ HARD_MAX_MATRIX_TARGETS = 6
 HARD_MAX_MATRIX_CELLS = 24
 
 
+# Census-calibration clause appended to the batch prompt when the batch contains
+# a chip from the census period. Hoisted out of `_build_batch_prompt` (ISSUE-06)
+# so the scoring-provenance prompt fingerprint can hash the exact instruction
+# text. `{ref_idx}` / `{ref_date}` are placeholders substituted at render time
+# via .replace() — do NOT f-string this constant; the rendered prompt must stay
+# byte-identical to the pre-hoist literal (locked by a regression test).
+BATCH_CENSUS_CALIBRATION_SUFFIX = (
+    "\nCALIBRATION: chip {ref_idx} (capture_date {ref_date}) is the most recent\n"
+    "imagery in this batch and is from the census period. Each anchor is a known\n"
+    "PV installation per the higher-level ground truth, so chip {ref_idx} should\n"
+    "show PV at the yellow ring marker. Use it to calibrate panel appearance for\n"
+    "this exact roof: same building, same roof material, same orientation. If chip\n"
+    "{ref_idx} clearly shows PV at the marker, label it pv_present=true; if you\n"
+    "cannot see PV at the marker in chip {ref_idx}, that means the marker is not\n"
+    "well-positioned for this anchor and you should label that chip\n"
+    "quality_flag='ambiguous' rather than absent. Do NOT propagate the GT-prior to\n"
+    "other chips — score each older chip on its own visual evidence at the marker,\n"
+    "using chip {ref_idx} only as appearance-calibration reference.\n"
+)
+
+
 class RateLimiter:
     """Thread-safe global request pacer shared across worker threads.
 
@@ -1335,18 +1356,8 @@ def _build_batch_prompt(
     ref_idx, ref_date = _identify_census_reference_chip(picks, census_mid_date_iso)
     if ref_idx is None:
         return base
-    suffix = (
-        f"\nCALIBRATION: chip {ref_idx} (capture_date {ref_date}) is the most recent\n"
-        "imagery in this batch and is from the census period. Each anchor is a known\n"
-        "PV installation per the higher-level ground truth, so chip {ref_idx} should\n"
-        "show PV at the yellow ring marker. Use it to calibrate panel appearance for\n"
-        "this exact roof: same building, same roof material, same orientation. If chip\n"
-        "{ref_idx} clearly shows PV at the marker, label it pv_present=true; if you\n"
-        "cannot see PV at the marker in chip {ref_idx}, that means the marker is not\n"
-        "well-positioned for this anchor and you should label that chip\n"
-        "quality_flag='ambiguous' rather than absent. Do NOT propagate the GT-prior to\n"
-        "other chips — score each older chip on its own visual evidence at the marker,\n"
-        "using chip {ref_idx} only as appearance-calibration reference.\n"
+    suffix = BATCH_CENSUS_CALIBRATION_SUFFIX.replace(
+        "{ref_date}", str(ref_date)
     ).replace("{ref_idx}", str(ref_idx))
     return base + suffix
 

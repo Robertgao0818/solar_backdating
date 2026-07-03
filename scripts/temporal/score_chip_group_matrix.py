@@ -471,6 +471,7 @@ def score_chip_group_matrices(
     hard_max_targets: int = HARD_MAX_MATRIX_TARGETS,
     hard_max_cells: int = HARD_MAX_MATRIX_CELLS,
     limit_chips: int | None = None,
+    scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
 ) -> list[dict[str, object]]:
     """Score every chip group's date x target matrix and flatten to CSV rows.
 
@@ -494,10 +495,21 @@ def score_chip_group_matrices(
     if hard_max_cells <= 0:
         raise ValueError("hard_max_cells must be positive")
 
+    # ISSUE-06: only the default-resolution branch is provenance-wrapped, so a
+    # caller-injected raw `scorer=` callable never receives the unknown
+    # `provenance_context` kwarg. When wrapped, per-call chip_id context is passed
+    # at the scorer call below.
+    provenance_active = False
     if scorer is None:
         scorer, resolved_failure_source = _resolve_default_matrix_scorer(scorer_name)
         if failure_decision_source is None:
             failure_decision_source = resolved_failure_source
+        if scoring_provenance_writer is not None:
+            from scripts.temporal.presence_scorer import get_scorer
+            from scripts.temporal.scoring_provenance import with_scoring_provenance
+
+            scorer = with_scoring_provenance(get_scorer(scorer_name), scoring_provenance_writer).matrix
+            provenance_active = True
     if failure_decision_source is None:
         failure_decision_source = DEFAULT_FAILURE_DECISION_SOURCE
 
@@ -547,6 +559,9 @@ def score_chip_group_matrices(
                                 actual_zoom=artifact.actual_zoom,
                             )
                         )
+                    provenance_kwargs: dict[str, object] = {}
+                    if provenance_active:
+                        provenance_kwargs["provenance_context"] = {"chip_id": chip_id}
                     observations = scorer(
                         date_picks,
                         matrix_targets,
@@ -561,6 +576,7 @@ def score_chip_group_matrices(
                         max_targets=max_targets,
                         hard_max_targets=hard_max_targets,
                         hard_max_cells=hard_max_cells,
+                        **provenance_kwargs,
                     )
                 except Exception as exc:  # noqa: BLE001 - degrade one chunk, keep the batch going.
                     error = f"{type(exc).__name__}: {exc}"
@@ -694,6 +710,10 @@ def main() -> int:
     artifacts_by_chip = load_artifacts_by_chip(args.image_artifacts_csv)
     config = _load_gemini_config_from_args(args)
     audit_dir = None if args.no_audit else args.audit_dir
+    # ISSUE-06 scoring-provenance sidecar next to the matrix output CSV.
+    from scripts.temporal.scoring_provenance import jsonl_writer
+
+    scoring_provenance_writer = jsonl_writer(args.output.parent / "scoring_provenance.jsonl")
     rows = score_chip_group_matrices(
         artifacts_by_chip=artifacts_by_chip,
         targets_by_chip=targets_by_chip,
@@ -705,6 +725,7 @@ def main() -> int:
         hard_max_targets=args.hard_max_targets,
         hard_max_cells=args.hard_max_cells,
         limit_chips=args.limit_chips,
+        scoring_provenance_writer=scoring_provenance_writer,
     )
     write_csv_rows(args.output, rows, MATRIX_PRESENCE_FIELDS)
     print(f"Wrote {len(rows)} matrix presence rows -> {args.output}")
