@@ -1,56 +1,33 @@
-# GEID historical PV anchor-presence defaults.
-# Existing aerial/Vexcel masks are used as anchors, not exact historical masks.
-
-anchor_manifest:
-  chip_min_half_m: 18.0
-  chip_max_half_m: 45.0
-  mask_margin_m: 8.0
-  search_radius_m: 10.0
-  anchor_policy: gt_centroid_buffered_bbox
-
-geid_download:
-  provider_status: legacy_fallback
-  zoom_from: 21
-  zoom_to: 21
-  requested_date_month_day: "06-15"
-  save_root: "/home/gaosh/zasolar_data/geid_raw/temporal_anchor_presence"
-  legacy_windows_staging_root: "D:\\ZAsolar\\geid_raw\\temporal_anchor_presence"
-  downloader_bridge: "/home/gaosh/projects/geid_reverse_engineering/python/geid_historical_cli_batch.py"
-  sunset_condition: "Archive after GEHI completes 18-anchor run and install-interval QA is accepted."
-
-gehi_download:
-  provider_status: primary_candidate
-  executable: "/home/gaosh/zasolar_data/tools/GEHistoricalImagery/GEHistoricalImagery"
-  provider: "TM"
-  vintage_probe_zoom: 19
-  discovery_zoom_candidates: [19, 18]
-  download_zoom_candidates: [20, 19, 18]
-  default_download_zoom: 19
-  min_probe_date: "2009-01-01"
-  max_probe_date: "2025-12-31"
-  require_exact_date: true
-  require_complete_coverage_for_catalog: true
-  output_root: "/home/gaosh/zasolar_data/geid_temporal/gehi_chips"
-  cache_policy: "use_GEHistoricalImagery_default_cache"
-  coordinate_order_policy: "wrapper converts anchor lon/lat fields to GEHI LAT,LONG CLI args"
-  vintage_dedupe_key: ["anchor_id", "capture_date"]
-
-presence_scoring:
-  task_type: anchor_conditioned_binary_presence
-  default_threshold: 0.5
-  shifted_crop_aggregation: max_or_topk_mean
-  use_exact_source_mask_for_history: false
-  ambiguity_flags:
-    - missing_chip
-    - no_date_metadata
-    - large_best_offset
-    - cloud_shadow
-    - nonmonotonic_timeseries
-
-breakpoint_inference:
-  min_consecutive_present: 1
-  use_capture_date_before_requested_date: true
-  monotonicity_policy: flag_later_absence_as_ambiguous
+# GEID historical PV anchor-presence config.
+#
+# Truth boundary (2026-07-03 chip-geometry & resolution audit, PRD D16 /
+# ISSUE-17): `adaptive_scan:` is the ONLY live section. The repo's sole YAML
+# loader, scripts/temporal/scan_config.py::load_config(), reads nothing else,
+# and scan_config.unconsumed_keys() + the CONSUMED_KEYS registry make any key no
+# code reads fail tests/temporal/test_config_truth.py. Do not re-add a section
+# unless a loader consumes it (and register its keys in CONSUMED_KEYS).
+#
+# Removed as dead config (2026-07-03 audit, PRD D16) — read by nothing; editing
+# them changed nothing. Live replacement knobs, so a reader who came looking:
+#   - anchor_manifest (chip_min/max_half_m, mask_margin_m, search_radius_m):
+#     chip geometry is NOT a config knob. Production chip size is frozen at 96 m
+#     (chip_half_m = 48.0) in scripts/temporal/build_inventory_chip_groups.py.
+#     Any change is a gated, cache-aware migration (PRD D18), never a YAML edit.
+#   - geid_download (legacy GEID provider): retired. GEHistoricalImagery is the
+#     sole download provider; its executable is
+#     scripts/temporal/gehi_common.py::DEFAULT_GEHI_EXE (override: --gehi-exe).
+#   - gehi_download (download/discovery zoom candidates, output_root):
+#     download zoom -> adaptive_scan.download_zoom_ladder; discovery zoom ->
+#     adaptive_scan.discovery_zoom_ladder / info_zoom; provider/vintage-date
+#     bounds -> adaptive_scan.provider / catalog_min_date / catalog_max_date;
+#     chip output root is a --chips-dir / --census-chips-dir CLI arg.
+#   - presence_scoring (thresholds, ambiguity flags): superseded by the Gemini
+#     sequence scorer (scripts/validation/gemini_solar_image_review.py) and the
+#     scan_state quality_flag / decision_source registries in
+#     scripts/temporal/presence_scorer.py.
+#   - breakpoint_inference (monotonicity policy): superseded by the adaptive
+#     scan's in-code narrowing/monotonicity logic (run_adaptive_scan.py /
+#     run_census2023_scan.py).
 
 adaptive_scan:
   spec_version: phase0_v1
@@ -59,17 +36,19 @@ adaptive_scan:
   picks_per_round: 5
   tail_round_threshold: 3
   case_e_failure_pct: 50.0
-  bisection_window: open
   download_zoom_ladder: [20, 19, 18]
   discovery_zoom_ladder: [19, 18]
   info_zoom: 19
+  # Census-narrowing (run_census2023_scan.py) ladder. Deliberately diverges from
+  # download_zoom_ladder: that scan runs on the Wayback provider, where z20 is
+  # essentially unavailable (the production Wayback corpus is 97% z19), so
+  # starting at z20 only wastes a failing rung. --zoom-ladder on the CLI
+  # overrides this; otherwise this value governs.
+  census2023_zoom_ladder: [19, 18]
   require_complete_coverage_for_catalog: true
   require_complete_coverage_for_download: true
   catalog_min_date: "2009-01-01"
   catalog_max_date: "2025-12-31"
   availability_parallel: 4
   gemini_max_dates_per_call: 5
-  gemini_max_targets_per_call: 4
-  gemini_hard_max_targets_per_call: 6
-  gemini_hard_max_cells_per_call: 24
   max_anchor_recovery_rounds: 2
