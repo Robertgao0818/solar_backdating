@@ -1,8 +1,29 @@
 # ISSUE-09: CoJ audit at cohort scale + contradiction dataset
 
-Status: ready-for-agent
+Status: in-progress — code landed + reviewed, full cohort run LIVE since 2026-07-04 09:45
 Phase: 2 — Accuracy channel
 Blocked by: ISSUE-08
+
+## Execution status (2026-07-04)
+
+- Implementation committed (`9f53d15` + review fixes `440e3a4`): cohort
+  builder (5 strata, 12,190 dated anchors + 300 negative controls, 16,166
+  fetch units = -36% vs all-layers), concurrent fetch (5 workers, pilot
+  politeness per worker), resumable scoring, cohort join/gates/report,
+  orchestrator CLI `scripts/audit/coj_audit_cohort.py` + tmux launcher.
+  Schema: [`ISSUE-09-cohort-schema.md`](ISSUE-09-cohort-schema.md).
+- Smoke run (24 anchors + 2 NC, 55 live units incl. first live 2015-layer
+  fetches) passed end-to-end; full run launched in tmux session
+  `coj_cohort` → `~/zasolar_data/geid_temporal/coj_audit_cohort_20260704/`
+  (fetch ETA ~14 h, then score/join/gates/report chain automatically).
+- Go-condition 2 spot-check (`spotcheck_20260704/` under the pilot dir):
+  all 7 gate-(c) anchors visually CONFIRMED as real PV@2023 (census
+  boundary false-absents are real). CAVEAT: all 4 high-margin
+  present@2019 s3 bits are audit false-positives (tile texture / roof
+  clutter / bright metal) — 2019-layer present bits carry elevated FP
+  risk; treat 2019-based contradictions as human-queue candidates
+  (ISSUE-10/11 adjudication), not headline, and read gate_nc@2019
+  closely when the run lands.
 
 ## Parent
 
