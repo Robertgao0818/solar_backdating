@@ -34,6 +34,7 @@ from solar_backdating.estimators import (
     get_estimator,
 )
 from solar_backdating.estimators.emissions import EmissionModel, fit_emissions_em
+from solar_backdating.estimators.survival import cohort_prior_from_json
 from solar_backdating.eval.metrics import (
     METRIC_KEYS,
     hpd_contains_rate,
@@ -105,7 +106,8 @@ def _round3(v):
 
 
 def _write_summary(out_dir: Path, name: str, headline: dict, config: EstimatorConfig,
-                   weights_fallback: bool, emissions_source: str = "none") -> None:
+                   weights_fallback: bool, emissions_source: str = "none",
+                   cohort_prior_source: str = "none") -> None:
     summary = {
         "estimator": name,
         "config": {
@@ -115,6 +117,7 @@ def _write_summary(out_dir: Path, name: str, headline: dict, config: EstimatorCo
             "prior_weight": config.prior_weight,
             "decoder_epoch_gap_days": config.decoder_epoch_gap_days,
             "cohort_prior_set": config.cohort_prior is not None,
+            "cohort_prior_source": cohort_prior_source,
         },
         # Provenance for the ISSUE-02 decoder's emission matrix (fitted / loaded
         # / none). Harmless no-op for fpd/sustained/pava, which ignore
@@ -286,6 +289,10 @@ def main() -> int:
                          "into the EstimatorConfig used for this run")
     ap.add_argument("--emissions-json", type=Path, default=None,
                     help="load a pre-fitted EmissionModel JSON instead of --fit-emissions")
+    ap.add_argument("--cohort-prior-json", type=Path, default=None,
+                    help="ISSUE-03 empirical-Bayes CohortPrior JSON to inject into the "
+                         "changepoint decoder (fpd/sustained/pava ignore it). Absent -> flat "
+                         "prior, so this flag is bit-exact inert for the regression gate.")
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     ap.add_argument("--targets", type=Path, default=None,
                     help="optional JSON overriding the PUBLISHED gate targets")
@@ -314,6 +321,14 @@ def main() -> int:
     weights = load_inventory_weights(a.sample_manifest)
     weights_fallback = a.sample_manifest is None or not Path(a.sample_manifest).exists()
 
+    cohort_prior_source = "none"
+    if a.cohort_prior_json:
+        cp = cohort_prior_from_json(json.loads(Path(a.cohort_prior_json).read_text()))
+        config = dataclasses.replace(config, cohort_prior=cp)
+        cohort_prior_source = str(a.cohort_prior_json)
+        print(f"[cohort_prior] loaded {a.cohort_prior_json} "
+              f"({len(cp.year_log_mass)} year atoms + beyond)")
+
     emissions_source = "none"
     if a.emissions_json:
         emissions_model = EmissionModel.from_json(json.loads(Path(a.emissions_json).read_text()))
@@ -339,7 +354,8 @@ def main() -> int:
     for name in a.estimators:
         per_unit, headline = run_estimator(name, panel, chip_of, strata, weights, config)
         results[name] = headline
-        _write_summary(a.out_dir, name, headline, config, weights_fallback, emissions_source)
+        _write_summary(a.out_dir, name, headline, config, weights_fallback, emissions_source,
+                       cohort_prior_source)
         _write_per_unit(a.out_dir, name, per_unit)
         _write_report(a.out_dir, name, headline)
         unw = headline["overall_unweighted"]

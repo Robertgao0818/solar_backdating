@@ -142,12 +142,17 @@ def _load_emissions(path: Path | None):
 
 
 def _build_config(
-    *, epoch_gap_days: int | None, decoder_epoch_gap_days: int | None, emissions
+    *, epoch_gap_days: int | None, decoder_epoch_gap_days: int | None, emissions,
+    cohort_prior=None,
 ) -> EstimatorConfig:
     """Construct ``EstimatorConfig`` defensively via field introspection
     (getattr-with-default pattern) so this script works whether or not the
     ISSUE-02 decoder-specific fields (``decoder_epoch_gap_days`` /
-    ``emissions`` / ``cohort_prior``) have landed on ``EstimatorConfig`` yet."""
+    ``emissions`` / ``cohort_prior``) have landed on ``EstimatorConfig`` yet.
+
+    ``cohort_prior`` (ISSUE-03) is threaded through the same introspection
+    guard: it is only set when non-``None`` AND the field exists, so ``None``
+    leaves the payload byte-identical to the pre-ISSUE-03 flat-prior run."""
     names = {f.name for f in dataclasses.fields(EstimatorConfig)}
     kwargs: dict = {}
     if epoch_gap_days is not None and "epoch_gap_days" in names:
@@ -156,6 +161,8 @@ def _build_config(
         kwargs["decoder_epoch_gap_days"] = decoder_epoch_gap_days
     if emissions is not None and "emissions" in names:
         kwargs["emissions"] = emissions
+    if cohort_prior is not None and "cohort_prior" in names:
+        kwargs["cohort_prior"] = cohort_prior
     return EstimatorConfig(**kwargs)
 
 
@@ -189,6 +196,7 @@ def decode_rep(
     decoder_epoch_gap_days: int | None,
     emissions,
     vexcel_ceiling: dict[str, date],
+    cohort_prior=None,
 ) -> dict:
     """One rep, one estimator: baseline (delivery) + decoded year per sfid + counts."""
     est = get_estimator(estimator_name)
@@ -238,6 +246,7 @@ def decode_rep(
             epoch_gap_days=epoch_gap_days,
             decoder_epoch_gap_days=decoder_epoch_gap_days,
             emissions=emissions,
+            cohort_prior=cohort_prior,
         )
         posterior = est(obs, clamp, config)
         year = posterior.map_date[:4] if posterior.map_date else ""
@@ -357,6 +366,8 @@ def main() -> int:
         help="skip the always-on pava sanity column (default: run it alongside --estimator)",
     )
     ap.add_argument("--emissions-json", type=Path, default=None)
+    ap.add_argument("--cohort-prior-json", type=Path, default=None,
+                    help="ISSUE-03 CohortPrior JSON injected into the decoder (None = flat)")
     ap.add_argument("--decoder-epoch-gap-days", type=int, default=None)
     ap.add_argument("--epoch-gap-days", type=int, default=None)
     ap.add_argument("--vexcel-capture-csv", type=Path, default=DEFAULT_VEXCEL_CSV)
@@ -378,12 +389,18 @@ def main() -> int:
     clamp_used = bool(vexcel_ceiling)
 
     emissions = _load_emissions(a.emissions_json)
+    cohort_prior = None
+    if a.cohort_prior_json:
+        from solar_backdating.estimators.survival import cohort_prior_from_json  # noqa: PLC0415
+
+        cohort_prior = cohort_prior_from_json(json.loads(Path(a.cohort_prior_json).read_text()))
 
     decode_kwargs = dict(
         epoch_gap_days=a.epoch_gap_days,
         decoder_epoch_gap_days=a.decoder_epoch_gap_days,
         emissions=emissions,
         vexcel_ceiling=vexcel_ceiling,
+        cohort_prior=cohort_prior,
     )
 
     # Resolve the ACTUAL gap values that will be threaded into every
@@ -442,6 +459,7 @@ def main() -> int:
             "n_grids_with_ceiling": len(vexcel_ceiling),
         },
         "emissions_json": str(a.emissions_json) if a.emissions_json else None,
+        "cohort_prior_json": str(a.cohort_prior_json) if a.cohort_prior_json else None,
         "channels": channels,
     }
     out_path = a.out_dir / "endtoend_decode_tvd.json"

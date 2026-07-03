@@ -29,7 +29,7 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 |---|-------|-------|--------|-----------|
 | 1 | [Estimator seam + PAVA floor + harness](ISSUE-01-estimator-seam-floor-harness.md) | 0 | done | — |
 | 2 | [Changepoint posterior decoder](ISSUE-02-changepoint-posterior-decoder.md) | 0 | done | 1 |
-| 3 | [Turnbull survival prior + aggregation](ISSUE-03-turnbull-survival-prior.md) | 0 | ready-for-agent | 1 (integration: 2) |
+| 3 | [Turnbull survival prior + aggregation](ISSUE-03-turnbull-survival-prior.md) | 0 | done | 1 (integration: 2) |
 | 4 | [Reliability panel repair](ISSUE-04-reliability-panel-repair.md) | 0 | done | — |
 | 5 | [PresenceScorer seam, 4 call-sites](ISSUE-05-presence-scorer-seam.md) | 1 | done | — |
 | 6 | [Provenance sidecar](ISSUE-06-provenance-sidecar.md) | 1 | done | 5 |
@@ -47,11 +47,14 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 18 | [Resolution provenance + cache escape](ISSUE-18-resolution-provenance-cache-escape.md) | 1 | done | — (integration: 6) |
 | 19 | [Chip-geometry policy at Phase-3 re-render](ISSUE-19-chip-geometry-policy.md) | 3 | ready-for-agent | 4, 12 |
 
-Unblocked start set: **3, 8, 10, 19** (14 unblocked on the replan side once
-dinov3 slice 3 lands; 15 additionally needs 14). Done so far: 1, 2, 4, 5, 6,
-7, 12, 13, 17, 18. ISSUE-02 note: its endtoend year-TVD AC is recorded
+Unblocked start set: **8, 10, 19** (14 unblocked on the replan side once
+dinov3 slice 3 lands; 15 additionally needs 14). Done so far: 1, 2, 3, 4, 5,
+6, 7, 12, 13, 17, 18. ISSUE-02 note: its endtoend year-TVD AC is recorded
 not-met, root-caused to pre-verdict-store rep noise — re-run that gate on
-store-backed reps now that ISSUE-07 is done.
+store-backed reps now that ISSUE-07 is done. ISSUE-03 note: the shipped EB
+prior lifts the decoder above its ISSUE-02 record (mode-hit 0.905→0.942);
+downstream cohort curves DO carry the C5 caveat (2024 mass dip =
+imagery-clamp artifact, not a market signal).
 
 Slices 17–19 were added 2026-07-03 from the chip-geometry & resolution audit
 (PRD amendment block, D16–D18): dead YAML sections, first-cached-zoom
