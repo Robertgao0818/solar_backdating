@@ -13,7 +13,7 @@ REP="${1:?usage: run_endtoend_rep.sh <rep_index>}"
 cd /home/gaosh/projects/solar_backdating
 source scripts/activate_env.sh
 
-ROOT=/home/gaosh/zasolar_data/geid_temporal/llm_endtoend_20260623
+ROOT="${ROOT:-/home/gaosh/zasolar_data/geid_temporal/llm_endtoend_20260623}"
 REF=$ROOT/reference.csv
 WL=$ROOT/work_lists
 REPDIR=$ROOT/rep$REP
@@ -23,6 +23,13 @@ PROD_NR=/home/gaosh/zasolar_data/geid_temporal/jhb_full382_fpcut_scan_2026-06-02
 ANCHOR_WORKERS=${ANCHOR_WORKERS:-30}
 QPS=${QPS:-8}
 LIMIT="${LIMIT:-}"
+# L3-freeze: when FROZEN_CHIPS_DIR is set, all reps share one pre-warmed chips dir so
+# download_chip_with_zoom_ladder returns skipped_existing (no GEHI/network) for any date
+# the adaptive search picks within the prefetched full vintage stack. Empty = per-rep dir
+# (original behavior, GEHI re-fetch per rep).
+FROZEN_CHIPS_DIR="${FROZEN_CHIPS_DIR:-}"
+L0_CHIPS="$REPDIR/L0/chips"; L1_CHIPS="$REPDIR/L1/chips"
+if [ -n "$FROZEN_CHIPS_DIR" ]; then L0_CHIPS="$FROZEN_CHIPS_DIR"; L1_CHIPS="$FROZEN_CHIPS_DIR"; fi
 SCAN_COMMON=(--anchor-workers "$ANCHOR_WORKERS" --qps "$QPS"
             --routing-salt-mode target
             --cheap-round-types initial,bisection,walk_back,tail)
@@ -38,7 +45,7 @@ LIMARG=(); [ -n "$LIMIT" ] && LIMARG=(--limit-anchors "$LIMIT")
 python -u scripts/temporal/run_adaptive_scan.py \
   --anchors-csv "$WL/l0_anchors.csv" \
   --scan-states-dir "$REPDIR/L0/scan_states" \
-  --chips-dir "$REPDIR/L0/chips" \
+  --chips-dir "$L0_CHIPS" \
   --audit-dir "$REPDIR/L0/audit" \
   "${SCAN_COMMON[@]}" "${LIMARG[@]}" || { echo "L0 scan FAILED"; exit 1; }
 
@@ -64,7 +71,7 @@ if [ "$NL1" -gt 0 ]; then
   python -u scripts/temporal/run_adaptive_scan.py \
     --anchors-csv "$REPDIR/L1/norecent_pertarget/per_target_anchors.csv" \
     --scan-states-dir "$REPDIR/L1/scan_states" \
-    --chips-dir "$REPDIR/L1/chips" \
+    --chips-dir "$L1_CHIPS" \
     --audit-dir "$REPDIR/L1/audit" \
     "${SCAN_COMMON[@]}" || { echo "L1 scan FAILED"; exit 1; }
 

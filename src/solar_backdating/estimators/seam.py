@@ -18,6 +18,16 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Type-only: avoids a runtime import cycle. changepoint.py and emissions.py
+    # both import FROM seam.py at runtime; seam.py must not import them back
+    # (ISSUE-02). Safe because ``from __future__ import annotations`` (above)
+    # makes every annotation in this module a lazy string, never evaluated
+    # unless something calls ``typing.get_type_hints`` on it.
+    from solar_backdating.estimators.changepoint import CohortPrior
+    from solar_backdating.estimators.emissions import EmissionModel
 
 
 @dataclass(frozen=True)
@@ -44,9 +54,14 @@ class EstimatorConfig:
     """Tunables. Baselines ignore all of these except by construction."""
 
     epoch_gap_days: int = 16  # PAVA epoch-collapsing threshold; baselines IGNORE this
-    flip_rate: float = 0.1  # PAVA symmetric emission noise epsilon
+    flip_rate: float = 0.1  # PAVA symmetric emission noise epsilon; changepoint fallback too
     credible_mass: float = 0.90  # HPD nominal coverage
     prior_weight: float = 0.0  # PAVA: log-prior added per tau; 0.0 = flat prior
+
+    # --- ISSUE-02 (changepoint decoder) additions; PAVA/fpd/sustained ignore these ---
+    decoder_epoch_gap_days: int = 30  # changepoint epoch-collapsing threshold (PAVA keeps 16)
+    emissions: "EmissionModel | None" = None  # fitted 3-symbol confusion matrix; None = sym. noise
+    cohort_prior: "CohortPrior | None" = None  # ISSUE-03 empirical-Bayes hook; None = flat prior
 
 
 @dataclass(frozen=True)

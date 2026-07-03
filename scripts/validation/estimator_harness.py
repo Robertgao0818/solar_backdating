@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import json
 from collections import Counter
 from itertools import combinations
@@ -32,6 +33,7 @@ from solar_backdating.estimators import (
     available_estimators,
     get_estimator,
 )
+from solar_backdating.estimators.emissions import EmissionModel, fit_emissions_em
 from solar_backdating.eval.metrics import (
     METRIC_KEYS,
     hpd_contains_rate,
@@ -103,7 +105,7 @@ def _round3(v):
 
 
 def _write_summary(out_dir: Path, name: str, headline: dict, config: EstimatorConfig,
-                   weights_fallback: bool) -> None:
+                   weights_fallback: bool, emissions_source: str = "none") -> None:
     summary = {
         "estimator": name,
         "config": {
@@ -111,7 +113,14 @@ def _write_summary(out_dir: Path, name: str, headline: dict, config: EstimatorCo
             "flip_rate": config.flip_rate,
             "credible_mass": config.credible_mass,
             "prior_weight": config.prior_weight,
+            "decoder_epoch_gap_days": config.decoder_epoch_gap_days,
+            "cohort_prior_set": config.cohort_prior is not None,
         },
+        # Provenance for the ISSUE-02 decoder's emission matrix (fitted / loaded
+        # / none). Harmless no-op for fpd/sustained/pava, which ignore
+        # config.emissions entirely.
+        "emissions_source": emissions_source,
+        "emissions": config.emissions.to_json() if config.emissions is not None else None,
         "weights_source": "fallback_constant" if weights_fallback else "sample_manifest",
         "overall_unweighted": headline["overall_unweighted"],
         "overall_inventory_weighted": headline["overall_inventory_weighted"],
@@ -260,10 +269,23 @@ def main() -> int:
                     help="chip->stratum join table")
     ap.add_argument("--sample-manifest", type=Path, default=None,
                     help="sample_manifest.json for inventory_weight (fallback if absent)")
-    ap.add_argument("--estimators", nargs="+", default=["fpd", "sustained", "pava"])
+    ap.add_argument("--estimators", nargs="+",
+                    default=["fpd", "sustained", "pava", "changepoint"])
     ap.add_argument("--epoch-gap-days", type=int, default=16)
+    ap.add_argument(
+        "--decoder-epoch-gap-days",
+        type=int,
+        default=30,
+        help="changepoint decoder's epoch-collapse threshold (PAVA keeps --epoch-gap-days)",
+    )
     ap.add_argument("--flip-rate", type=float, default=0.1)
     ap.add_argument("--credible-mass", type=float, default=0.90)
+    ap.add_argument("--fit-emissions", action="store_true",
+                    help="fit the changepoint decoder's EmissionModel via EM over the whole "
+                         "loaded panel (unsupervised, no install dates used) and inject it "
+                         "into the EstimatorConfig used for this run")
+    ap.add_argument("--emissions-json", type=Path, default=None,
+                    help="load a pre-fitted EmissionModel JSON instead of --fit-emissions")
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     ap.add_argument("--targets", type=Path, default=None,
                     help="optional JSON overriding the PUBLISHED gate targets")
@@ -278,22 +300,46 @@ def main() -> int:
     unknown = [e for e in a.estimators if e not in available_estimators()]
     if unknown:
         ap.error(f"unknown estimators {unknown}; available: {available_estimators()}")
+    if a.emissions_json and a.fit_emissions:
+        ap.error("--emissions-json and --fit-emissions are mutually exclusive")
 
     config = EstimatorConfig(
         epoch_gap_days=a.epoch_gap_days,
         flip_rate=a.flip_rate,
         credible_mass=a.credible_mass,
+        decoder_epoch_gap_days=a.decoder_epoch_gap_days,
     )
     panel, chip_of = load_panel(a.long)
     strata = load_strata(a.sample_anchors)
     weights = load_inventory_weights(a.sample_manifest)
     weights_fallback = a.sample_manifest is None or not Path(a.sample_manifest).exists()
 
+    emissions_source = "none"
+    if a.emissions_json:
+        emissions_model = EmissionModel.from_json(json.loads(Path(a.emissions_json).read_text()))
+        config = dataclasses.replace(config, emissions=emissions_model)
+        emissions_source = "loaded"
+        print(f"[emissions] loaded {a.emissions_json} (strata={list(emissions_model.strata)})")
+    elif a.fit_emissions:
+        all_sequences = [obs for reps in panel.values() for obs in reps.values()]
+        emissions_model = fit_emissions_em(
+            all_sequences, gap_days=config.decoder_epoch_gap_days
+        )
+        config = dataclasses.replace(config, emissions=emissions_model)
+        emissions_source = "fitted"
+        (a.out_dir / "emissions_fitted.json").write_text(
+            json.dumps(emissions_model.to_json(), indent=2)
+        )
+        print(
+            f"[emissions] fitted EM over {len(all_sequences)} sequences "
+            f"(strata={list(emissions_model.strata)}) -> {a.out_dir}/emissions_fitted.json"
+        )
+
     results: dict[str, dict] = {}
     for name in a.estimators:
         per_unit, headline = run_estimator(name, panel, chip_of, strata, weights, config)
         results[name] = headline
-        _write_summary(a.out_dir, name, headline, config, weights_fallback)
+        _write_summary(a.out_dir, name, headline, config, weights_fallback, emissions_source)
         _write_per_unit(a.out_dir, name, per_unit)
         _write_report(a.out_dir, name, headline)
         unw = headline["overall_unweighted"]

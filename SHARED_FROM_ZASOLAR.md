@@ -22,9 +22,9 @@ through to main repo.
 | Main-repo path | Imported as | Used by |
 | --- | --- | --- |
 | `core/__init__.py` | `core` | (namespace) |
-| `core/region_registry.py` | `core.region_registry` | `scripts/temporal/build_gt_anchor_manifest.py` |
+| `core/region_registry.py` | `core.region_registry` | `scripts/temporal/build_gt_anchor_manifest.py`, `scripts/temporal/run_adaptive_scan.py` |
 | `core/annotation_loader.py` | `core.annotation_loader` (`AnnotationEntry`, `discover_annotations`, `load_annotation_gdf`) | `scripts/temporal/build_gt_anchor_manifest.py` |
-| `core/grid_utils.py` | `core.grid_utils` (transitively, via region_registry / future scripts) | (anticipated) |
+| `core/grid_utils.py` | `core.grid_utils` | reserved in the contract; **not currently imported** anywhere in this repo (verified 2026-07-03) |
 | `configs/datasets/regions.yaml` | read via `core.region_registry` | all scripts that resolve region/imagery layer paths |
 
 ## Configuration files read from main repo

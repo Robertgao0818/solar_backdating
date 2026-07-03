@@ -13,19 +13,31 @@ installation appeared by scanning historical satellite/imagery vintages
 census; this repo's job starts at "given anchor (lon, lat, polygon), when did
 it light up?"
 
-## Status (2026-05-05)
+## Status (2026-07-03)
 
-V1.4 sub-line pivot. Replaces the now-archived `geid_bbox` GEID
-free-detection prototype (see
-`/home/gaosh/projects/_archive/geid_bbox_legacy_2026-05-05/`).
+V1.4 sub-line. Replaces the now-archived `geid_bbox` GEID free-detection
+prototype (see `/home/gaosh/projects/_archive/geid_bbox_legacy_2026-05-05/`).
 
-Phase-0: anchor-presence scoring with Gemini visual review for QA. Active
-modules:
-- `scripts/temporal/` — anchor manifest, GEHI/legacy GEID downloader wrappers, presence scorer, install-date inference
-- `scripts/validation/` — legacy GEID vintage probe, Gemini single-image review
+Milestones:
+- **2026-06-04** — full JHB back-dating run complete: 92.7% of the FP-cut
+  inventory point-dated (95.1% labeled incl. lower bounds), delivered to the
+  economic layer.
+- **2026-06-23/30** — end-to-end reproducibility study: adaptive-search path
+  variance identified as the dominant instability source.
+- **2026-07-03** — **install-date optimization v2** program adopted: five
+  layered phases (P0 deterministic decoder → P1 provenance/verdict store →
+  P2 external accuracy channel → P3 student distillation → P4 fixed-grid
+  pipeline shape). **Plan-of-record:
+  [`docs/install_date_optimization_v2_prd.md`](docs/install_date_optimization_v2_prd.md),
+  execution: [`docs/replan_v2/TRACKER.md`](docs/replan_v2/TRACKER.md).**
 
-Current provider decision: GEHistoricalImagery Time Machine is the primary
-candidate for historical imagery. Vintage discovery uses bbox-complete
+Active modules:
+- `scripts/temporal/` — anchor manifest, GEHI downloader wrapper, presence scorer, adaptive scan, install-date inference
+- `scripts/validation/` — vintage probe, Gemini single-image review
+- `src/solar_backdating/` — library code + estimator seam (replan_v2 P0)
+
+Imagery provider: GEHistoricalImagery Time Machine is the **sole** download
+provider (since 2026-05-13). Vintage discovery uses bbox-complete
 availability at `z=19`, with `z=18` as the lower-zoom whole-picture fallback;
 higher zooms are optional download upgrades only when that exact vintage has
 complete chip coverage. See
@@ -33,6 +45,14 @@ complete chip coverage. See
 Gemini review calls are bounded: default date batches are at most 5 images, and
 multi-target matrix review is capped at 4 targets / 24 date-target cells before
 splitting.
+
+**Scorer backbone (v2 program Phase 3).** A frozen, self-hosted DINOv3-L-SAT
+distilled from Gemini's own per-vintage labels replaces the hosted Gemini
+presence scorer — motivated by reproducibility / no version-drift, gated on
+*fidelity to Gemini* (no independent install-date truth exists, so no accuracy
+claim). See
+[`docs/dinov3_sat_scorer_backbone_prd.md`](docs/dinov3_sat_scorer_backbone_prd.md)
+(inputs amended by the v2 PRD §D12).
 
 Chip-group matrix review entrypoint:
 
@@ -94,7 +114,12 @@ solar_backdating/
 │   └── validation/            # Vintage probe, Gemini review
 ├── src/solar_backdating/      # Library code (importable as solar_backdating)
 ├── configs/                   # YAML configs (anchor-presence, etc.)
-├── tests/temporal/            # Pytest fixtures + smoke tests
-├── docs/                      # Architecture, plans
-└── data/examples/             # Small committed schema fixtures
+├── schemas/                   # Stage-contract schemas (temporal_inventory.duckdb.sql)
+├── tests/
+│   ├── temporal/              # Pytest fixtures + smoke tests
+│   └── estimator/             # Estimator seam / PAVA / parity tests (replan_v2 P0)
+├── docs/                      # PRDs + plans; trackers in replan_v2/ and dinov3_scorer/
+├── results/                   # Small analysis artifacts (timenode heatmaps)
+├── data/examples/             # Small committed schema fixtures
+└── pyproject.toml             # setuptools build config
 ```

@@ -20,6 +20,7 @@ from solar_backdating.estimators.seam import (
 # Side-effect registrations (import AFTER seam so the registry exists).
 from solar_backdating.estimators import baselines as _baselines  # noqa: E402,F401
 from solar_backdating.estimators import pava as _pava  # noqa: E402,F401
+from solar_backdating.estimators import changepoint as _changepoint  # noqa: E402,F401
 
 __all__ = [
     "VintageObservation",

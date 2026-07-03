@@ -44,13 +44,14 @@ PYTHONPATH order is enforced by `scripts/activate_env.sh`:
    coupling boundary is small on purpose.
 2. Do not write to `~/zasolar_data/` paths shared with main repo
    (`tiles/`, `coco/`, `models/`, `annotations/`) — read-only.
-   This repo's outputs go to `~/zasolar_data/geid_temporal/` and
-   `~/zasolar_data/geid_vintage_probe/`.
+   This repo's outputs go to `~/zasolar_data/geid_temporal/` (primary)
+   and `~/zasolar_data/geid_raw/vintage_probe/` (vintage probe).
 3. New probe / temporal data products go to `~/zasolar_data/`, not into
    git. Only schema fixtures (`data/examples/*.example.csv`) are committed.
 4. `.env.gemini.local` and any API keys: never commit.
-5. GEHistoricalImagery (`GEHI`) is the primary candidate provider for new
-   historical imagery work. Probe vintages with bbox-complete availability at
+5. GEHistoricalImagery (`GEHI`) is the **sole** imagery download provider
+   (since 2026-05-13; remaining `geid_*` filenames are legacy naming, not a
+   live GEID download path). Probe vintages with bbox-complete availability at
    z=19, with z=18 as the lower-zoom whole-picture fallback. Treat z=20/z=21
    as optional download/review upgrades only after confirming the same vintage
    has complete chip coverage. GEHI CLI coordinates are `LAT,LONG`; anchor
@@ -63,12 +64,22 @@ PYTHONPATH order is enforced by `scripts/activate_env.sh`:
 
 ## Coordination with main repo
 
-- During the deprecation window (until 2026-05-31), copies of these scripts
-  also exist in `ZAsolar/scripts/temporal/` and `ZAsolar/scripts/validation/`
-  with deprecation headers. Bug fixes go here first; main repo's copies are
-  frozen.
-- After 2026-05-31, main repo deletes the temporal copies and ROADMAP marks
-  the pivot fully landed.
+- Main repo deleted its `scripts/temporal/` and `scripts/validation/`
+  copies on 2026-05-13 — this repo is the sole home of that code; the V1.4
+  pivot is fully landed.
+- Shared-module changes in main repo (`core.*`,
+  `configs/datasets/regions.yaml`) follow the sync protocol in
+  [`SHARED_FROM_ZASOLAR.md`](SHARED_FROM_ZASOLAR.md).
+
+## Key references
+
+- **Current plan-of-record:
+  [`docs/install_date_optimization_v2_prd.md`](docs/install_date_optimization_v2_prd.md)
+  + [`docs/replan_v2/TRACKER.md`](docs/replan_v2/TRACKER.md)** (v2 五阶段
+  program, 2026-07-03)
+- DINOv3 scorer PRD (v2 Phase 3):
+  [`docs/dinov3_sat_scorer_backbone_prd.md`](docs/dinov3_sat_scorer_backbone_prd.md)
+- Dependency contract: [`SHARED_FROM_ZASOLAR.md`](SHARED_FROM_ZASOLAR.md)
 
 ## Memory & cross-review
 
