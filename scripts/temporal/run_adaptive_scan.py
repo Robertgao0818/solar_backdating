@@ -152,7 +152,8 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="gemini",
         help="Registered PresenceScorer name used for the real (non-dry-run) scan path. "
-        "Default 'gemini'. Ignored when --dry-run is set (that forces the per-anchor "
+        "Default 'gemini'; 'dinov3_frozen' selects the self-hosted frozen DINOv3-L-SAT "
+        "backbone (ISSUE-03). Ignored when --dry-run is set (that forces the per-anchor "
         "'dry_run' stub scorer). See presence_scorer.available_scorers().",
     )
     parser.add_argument("--limit-anchors", type=int, help="Process only the first N anchors")

@@ -593,7 +593,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--resume", action="store_true", help="Skip anchors already present in --output.")
     p.add_argument("--flush-every", type=int, default=50, help="Atomic-write the output every N completed anchors.")
     p.add_argument("--scorer", default="gemini",
-                   help="Registered PresenceScorer to route scoring through (default gemini).")
+                   help="Registered PresenceScorer to route scoring through (default gemini; "
+                   "'dinov3_frozen' selects the self-hosted frozen DINOv3-L-SAT backbone, ISSUE-03).")
     p.add_argument("--overwrite-chips", action="store_true",
                    help="Re-download every 2023 Wayback chip, bypassing the skip-existing cache "
                    "(ISSUE-18 escape hatch). Default: off.")

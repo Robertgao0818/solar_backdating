@@ -29,13 +29,13 @@ slice proves the *mechanism*, not the answers, using a random/placeholder head.
 
 ## Acceptance criteria
 
-- [ ] DINOv3-L-SAT loads **frozen** (no backbone grad); anchor center-k×k token pooling implemented over the anchor-centered crop.
-- [ ] 3-class light-head architecture defined; `score(picks, ...)` returns one observation per pick, in order, with `pv_present ∈ {True,False,None}`, finite `pv_score`, valid `quality_flag`, `decision_source="dinov3_frozen"`.
-- [ ] **Backbone-parity test** on a tiny real chip fixture (shape/ordering, not accuracy).
-- [ ] **Determinism test**: same fixture scored twice → identical `pv_score` (unit-level proof of the reproducibility motivation).
-- [ ] **Downstream-invariance test**: canned DINOv3-mapped observations produce the same `scan_state.json` as the Gemini-mapped path for identical observation values.
-- [ ] A config/CLI flag selects the DINOv3 scorer behind the seam (Gemini remains default).
-- [ ] Encoder weights resolved from `~/zasolar_data/` (not committed); small-chip upscaling is a parameter, not hardcoded (its policy is validated in ISSUE-04's ablation, not frozen here).
+- [x] DINOv3-L-SAT loads **frozen** (no backbone grad); anchor center-k×k token pooling implemented over the anchor-centered crop.
+- [x] 3-class light-head architecture defined; `score(picks, ...)` returns one observation per pick, in order, with `pv_present ∈ {True,False,None}`, finite `pv_score`, valid `quality_flag`, `decision_source="dinov3_frozen"`.
+- [x] **Backbone-parity test** on a tiny real chip fixture (shape/ordering, not accuracy).
+- [x] **Determinism test**: same fixture scored twice → identical `pv_score` (unit-level proof of the reproducibility motivation).
+- [x] **Downstream-invariance test**: canned DINOv3-mapped observations produce the same `scan_state.json` as the Gemini-mapped path for identical observation values.
+- [x] A config/CLI flag selects the DINOv3 scorer behind the seam (Gemini remains default).
+- [x] Encoder weights resolved from `~/zasolar_data/` (not committed); small-chip upscaling is a parameter, not hardcoded (its policy is validated in ISSUE-04's ablation, not frozen here).
 
 ## Blocked by
 

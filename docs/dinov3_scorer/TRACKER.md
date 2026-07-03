@@ -24,7 +24,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 |---|-------|--------|-----------|-------|
 | 1 | PresenceScorer seam — **superseded 2026-07-03** by [replan_v2 ISSUE-05](../replan_v2/ISSUE-05-presence-scorer-seam.md) (wider scope: 4 call-sites) | ➡ | — | [ISSUE-01](ISSUE-01-presence-scorer-seam.md) |
 | 2 | Distillation training set (harvest + chip re-download + split) | ⬜ | — | [ISSUE-02](ISSUE-02-distillation-training-set.md) |
-| 3 | DINOv3-L-SAT frozen scorer scaffold + selection flag | ⬜ | [replan_v2 5](../replan_v2/ISSUE-05-presence-scorer-seam.md) ✅ | [ISSUE-03](ISSUE-03-dinov3-scorer-scaffold.md) |
+| 3 | DINOv3-L-SAT frozen scorer scaffold + selection flag | ✅ | [replan_v2 5](../replan_v2/ISSUE-05-presence-scorer-seam.md) ✅ | [ISSUE-03](ISSUE-03-dinov3-scorer-scaffold.md) |
 | 4 | Train light head + calibrate abstain band (RunPod; + co-teacher dual-scoring) | ⬜ | 2, 3 | [ISSUE-04](ISSUE-04-train-head-calibrate.md) |
 | 5 | DINOv2 ViT-S/14 falsification floor | ⬜ | 4 | [ISSUE-05](ISSUE-05-dinov2-floor.md) |
 | 6 | Fidelity gate (three numbers, both backbones; baseline = Phase-0 decoder under D8) | ⬜ | 4, 5, [replan_v2 2](../replan_v2/ISSUE-02-changepoint-posterior-decoder.md) | [ISSUE-06](ISSUE-06-fidelity-gate.md) |
@@ -124,3 +124,12 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
   compute, pre-ship licence review, gate re-based on the Phase-0 decoder
   under D8, co-teacher dual-scoring. Slice 3 unblocked; slice 6 gained
   replan_v2 2 (decoder) as a baseline dependency.
+- 2026-07-04 — Slice 3 done: scaffold landed
+  (`scripts/temporal/dinov3_scorer.py` — frozen timm
+  `vit_large_patch16_dinov3.sat493m`, center-k×k token pooling, fixed-seed
+  placeholder Linear head, weights cached under
+  `~/zasolar_data/models/dinov3_sat/`), registered as `--scorer dinov3_frozen`
+  behind the seam (Gemini default unchanged), 11 tests incl. real-weight
+  backbone parity, determinism, downstream byte-identical scan_state
+  invariance. All acceptance criteria checked off in ISSUE-03. Slice 4
+  (train head) now waits only on slice 2 (training set).

@@ -42,6 +42,7 @@ results/
 !data/examples/*.png
 !data/examples/*.jpg
 !docs/**/*.png
+!tests/temporal/fixtures/**/*.png
 !docs/**/*.jpg
 
 # Logs

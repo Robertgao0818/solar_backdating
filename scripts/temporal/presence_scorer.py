@@ -508,5 +508,19 @@ def _make_dry_run(*, label: str, install_date: date | None = None) -> DryRunPres
     return DryRunPresenceScorer(label=label, install_date=install_date)
 
 
+def _make_dinov3_frozen(**kwargs: Any) -> PresenceScorer:
+    """Construct the frozen DINOv3-L-SAT scorer (ISSUE-03).
+
+    The heavy module (torch / timm / PIL) is imported LAZILY here, inside the
+    factory body, so importing ``presence_scorer`` stays free of torch — the swap
+    is selectable behind the seam without paying the FM import cost until a caller
+    actually asks for ``dinov3_frozen``.
+    """
+    from scripts.temporal.dinov3_scorer import Dinov3PresenceScorer
+
+    return Dinov3PresenceScorer(**kwargs)
+
+
 register_scorer("gemini", _make_gemini)
 register_scorer("dry_run", _make_dry_run)
+register_scorer("dinov3_frozen", _make_dinov3_frozen)
