@@ -1,6 +1,6 @@
 # ISSUE-19: Chip-geometry policy at the Phase-3 re-render
 
-Status: ready-for-agent
+Status: done
 Phase: 3 — Student
 Blocked by: ISSUE-04, ISSUE-12
 
@@ -27,10 +27,10 @@ change re-keys the verdict store deliberately, never silently.
 
 ## Acceptance criteria
 
-- [ ] Written geometry decision referencing the tight-crop experiment's numbers (accuracy delta vs crop size)
-- [ ] Re-render path takes geometry as an explicit versioned parameter recorded in provenance
-- [ ] Verdict-store key implications of a geometry change documented (deliberate migration, not silent re-keying)
-- [ ] Legacy builder untouched; banked-rep comparability preserved (frozen 96 m remains the default until the decision says otherwise)
+- [x] Written geometry decision referencing the tight-crop experiment's numbers (accuracy delta vs crop size) — [`ISSUE-19-geometry-decision-2026-07-04.md`](ISSUE-19-geometry-decision-2026-07-04.md)
+- [x] Re-render path takes geometry as an explicit versioned parameter recorded in provenance — `--chip-geometry <version>` on `score_target_sequence.py` resolves the param triple via `scripts/temporal/chip_geometry.py` and records `geometry_version` in the scoring-provenance `context` blob
+- [x] Verdict-store key implications of a geometry change documented (deliberate migration, not silent re-keying) — decision memo "Cache / verdict-store consequence chain" + `chip_geometry.py` module docstring; regression-pinned (`geometry_version` absent from `build_verdict_key`, re-keys only via `chip_sha256`)
+- [x] Legacy builder untouched; banked-rep comparability preserved (frozen 96 m remains the default until the decision says otherwise) — `build_inventory_chip_groups.py` unchanged; `chip_geom_v1_banked96` stays the legacy default, `chip_geom_v2_tight12` is the Phase-3 re-render default
 
 ## Blocked by
 

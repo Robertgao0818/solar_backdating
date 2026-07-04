@@ -36,6 +36,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.temporal.chip_geometry import resolve_chip_geometry
 from scripts.temporal.gehi_common import ensure_single_target_review_png
 from scripts.temporal.geid_temporal_common import parse_iso_date, read_csv_rows, write_csv_rows
 from scripts.temporal.presence_scorer import validate_emission
@@ -579,6 +580,7 @@ def score_target_sequences(
     resume_long_rows: Mapping[tuple[str, str, str, str], Sequence[Mapping[str, object]]] | None = None,
     scoring_provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
     verdict_store: VerdictStore | None = None,
+    geometry_version: str | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if workers <= 0:
         raise ValueError("workers must be positive")
@@ -661,11 +663,18 @@ def score_target_sequences(
         limiter.wait()
         provenance_kwargs: dict[str, object] = {}
         if provenance_active:
-            provenance_kwargs["provenance_context"] = {
+            provenance_context: dict[str, object] = {
                 "anchor_id": key.anchor_id,
                 "chip_id": key.chip_id,
                 "target_label": key.target_label,
             }
+            # ISSUE-19: geometry_version is an unpromoted context key, so it lands
+            # in the scoring-provenance free-form `context` blob (no schema /
+            # RECORD_VERSION bump) and is NEVER a verdict-key component. Omitted
+            # when None so a legacy invocation's provenance is byte-identical.
+            if geometry_version is not None:
+                provenance_context["geometry_version"] = geometry_version
+            provenance_kwargs["provenance_context"] = provenance_context
         result = scorer(
             picks,
             config=config,
@@ -749,6 +758,82 @@ def _load_gemini_config_from_args(args: argparse.Namespace) -> GeminiClientConfi
     )
 
 
+def resolve_render_geometry(
+    *,
+    chip_geometry: str | None,
+    crop_context_multiplier: float | None,
+    min_crop_size_m: float | None,
+    min_output_px: int | None,
+    render_active: bool = True,
+) -> tuple[float, float, int, str | None]:
+    """Resolve the three crop-render params + optional ``geometry_version`` (ISSUE-19).
+
+    Returns ``(crop_context_multiplier, min_crop_size_m, min_output_px,
+    geometry_version)`` under three exclusive cases:
+
+    - ``--chip-geometry`` names a registry version whose param triple is used
+      verbatim and whose version string is returned for provenance recording.
+    - Passing ``--chip-geometry`` ALONGSIDE any of the three individual crop flags
+      is a hard error (loud ``SystemExit``, not a silent override — the
+      no-conflict rule).
+    - With neither, the legacy banked defaults (3.0 / 24.0 / 128) reproduce
+      today's render byte-for-byte and ``geometry_version`` stays ``None``
+      (unrecorded), so a legacy invocation is unchanged. Explicit individual crop
+      flags without ``--chip-geometry`` (the ISSUE-04 tight-crop experiment path)
+      are honored as-is, still with no ``geometry_version``.
+
+    ``render_active`` is ``False`` on the ``--review-png-manifest`` reuse path,
+    where PNGs are re-scored WITHOUT rendering. Declaring ``--chip-geometry``
+    there is rejected loudly: the crop geometry is fixed by whichever prior render
+    produced the manifest (and is unknowable from ``REVIEW_PNG_FIELDS``), so
+    recording a caller-typed ``geometry_version`` would stamp a value that does
+    not describe the scored pixels — the v1/v2 confound the decision memo forbids.
+    Fail closed rather than record a mismatch.
+    """
+    if chip_geometry is not None and not render_active:
+        raise SystemExit(
+            f"--chip-geometry {chip_geometry} cannot be combined with "
+            f"--review-png-manifest: the reuse path re-scores pre-rendered PNGs "
+            f"without rendering, so the crop geometry is fixed by whichever render "
+            f"produced the manifest and cannot be re-declared here. Pass "
+            f"--chip-geometry only on the --chip-targets-csv render path."
+        )
+    explicit = {
+        name: value
+        for name, value in (
+            ("--crop-context-multiplier", crop_context_multiplier),
+            ("--min-crop-size-m", min_crop_size_m),
+            ("--min-output-px", min_output_px),
+        )
+        if value is not None
+    }
+    if chip_geometry is not None:
+        if explicit:
+            conflicting = ", ".join(sorted(explicit))
+            raise SystemExit(
+                f"--chip-geometry {chip_geometry} conflicts with explicit crop "
+                f"flag(s) {conflicting}; pass a named geometry version OR the "
+                f"individual crop flags, not both."
+            )
+        try:
+            geom = resolve_chip_geometry(chip_geometry)
+        except KeyError as exc:
+            # KeyError.__str__ repr-quotes the message; unwrap for a clean CLI line.
+            raise SystemExit(str(exc.args[0]) if exc.args else str(exc)) from None
+        return (
+            geom.crop_context_multiplier,
+            geom.min_crop_size_m,
+            geom.min_output_px,
+            geom.geometry_version,
+        )
+    return (
+        3.0 if crop_context_multiplier is None else crop_context_multiplier,
+        24.0 if min_crop_size_m is None else min_crop_size_m,
+        128 if min_output_px is None else min_output_px,
+        None,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     input_group = parser.add_mutually_exclusive_group(required=True)
@@ -789,14 +874,45 @@ def parse_args() -> argparse.Namespace:
                         "scorer; identical re-runs replay cached window verdicts.")
     parser.add_argument("--no-verdict-store", action="store_true",
                         help="Disable the ISSUE-07 verdict store (every window is re-scored).")
-    parser.add_argument("--crop-context-multiplier", type=float, default=3.0)
-    parser.add_argument("--min-crop-size-m", type=float, default=24.0)
-    parser.add_argument("--min-output-px", type=int, default=128)
+    # ISSUE-19: chip geometry is a named, versioned, provenance-recorded render
+    # policy. Prefer --chip-geometry (resolves a param triple via
+    # chip_geometry.resolve_chip_geometry and records the version in provenance);
+    # the three raw flags below stay for the ad-hoc/experiment path. Their
+    # argparse defaults are None so an explicit value can be distinguished from an
+    # omission (resolve_render_geometry restores the banked 3.0/24.0/128 defaults
+    # when both --chip-geometry and the raw flags are omitted -> byte-identical to
+    # today). Passing --chip-geometry together with any raw flag is rejected.
+    parser.add_argument(
+        "--chip-geometry",
+        default=None,
+        help="Named chip-render geometry version (e.g. chip_geom_v2_tight12, the "
+        "Phase-3 re-render default). Resolves crop-context-multiplier/"
+        "min-crop-size-m/min-output-px from the registry and records the version "
+        "in scoring provenance. Mutually exclusive with the three raw crop flags.",
+    )
+    parser.add_argument("--crop-context-multiplier", type=float, default=None)
+    parser.add_argument("--min-crop-size-m", type=float, default=None)
+    parser.add_argument("--min-output-px", type=int, default=None)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    (
+        crop_context_multiplier,
+        min_crop_size_m,
+        min_output_px,
+        geometry_version,
+    ) = resolve_render_geometry(
+        chip_geometry=args.chip_geometry,
+        crop_context_multiplier=args.crop_context_multiplier,
+        min_crop_size_m=args.min_crop_size_m,
+        min_output_px=args.min_output_px,
+        # Reuse mode (--review-png-manifest) re-scores pre-rendered PNGs without
+        # rendering; --chip-geometry there is rejected so a caller-typed version
+        # can't be stamped onto provenance for pixels it did not produce.
+        render_active=not args.review_png_manifest,
+    )
     dates = parse_dates_arg(args.dates)
     if args.review_png_manifest:
         if not args.review_png_manifest.exists():
@@ -814,9 +930,9 @@ def main() -> int:
             targets_by_chip=targets_by_chip,
             artifacts_by_chip=artifacts_by_chip,
             dates=dates,
-            crop_context_multiplier=args.crop_context_multiplier,
-            min_crop_size_m=args.min_crop_size_m,
-            min_output_px=args.min_output_px,
+            crop_context_multiplier=crop_context_multiplier,
+            min_crop_size_m=min_crop_size_m,
+            min_output_px=min_output_px,
         )
         write_csv_rows(args.review_png_manifest_output, review_rows, REVIEW_PNG_FIELDS)
         review_pngs = [_review_png_from_row(row) for row in review_rows]
@@ -867,6 +983,7 @@ def main() -> int:
         resume_long_rows=resume_long_rows,
         scoring_provenance_writer=scoring_provenance_writer,
         verdict_store=verdict_store,
+        geometry_version=geometry_version,
     )
     if verdict_store is not None:
         stats = verdict_store.stats_snapshot()

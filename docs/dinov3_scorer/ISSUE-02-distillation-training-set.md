@@ -40,7 +40,20 @@ retained metadata (reuse the zoom-ladder download + anchor-centered crop
 geometry; **do not modify** the GEHI stage). Chip geometry at this re-render
 is a versioned, gated render parameter decided by the D4 tight-crop experiment
 ([replan_v2 ISSUE-19](../replan_v2/ISSUE-19-chip-geometry-policy.md)) — do not
-inherit it by accident from whichever builder ran. Stratify by sub-domain (CBD
+inherit it by accident from whichever builder ran. ISSUE-19 has landed: the
+re-render default is `chip_geom_v2_tight12` (the tight-crop arm), resolved from
+the `scripts/temporal/chip_geometry.py` registry via `--chip-geometry` and
+recorded in provenance; see the
+[decision memo](../replan_v2/ISSUE-19-geometry-decision-2026-07-04.md). Two
+obligations that memo assigns to THIS issue: (i) the harvested teacher labels
+were produced on v1 (coarse) renders while the chips re-render at v2 — the
+memo's "Distillation-label caveat" section requires an explicit written
+disposition here (accept-and-document / exclude-or-down-weight
+`gemini_failed`-shaped strata / re-score a calibration subset at v2); (ii)
+~12% of manifest targets exceed the 12 m window and render under the
+footprint-containment guard (`contain_crop_to_footprint`) — an unscored
+geometry band whose re-rendered chips must be QA spot-checked before
+training. Stratify by sub-domain (CBD
 aerial-mosaic vs non-CBD satellite) and label balance. Drop rows whose
 historical chip is no longer recoverable from GEHI and record the drop count.
 

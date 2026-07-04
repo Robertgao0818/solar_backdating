@@ -295,6 +295,218 @@ def test_pending_result_consistency_flag_in_documented_enum():
     assert res.consistency_flag in CONSISTENCY_ENUM
 
 
+# --- ISSUE-19: chip-geometry policy at the Phase-3 re-render -----------------
+
+
+def test_resolve_render_geometry_legacy_defaults_byte_identical() -> None:
+    """Neither --chip-geometry nor any explicit crop flag -> today's banked
+    defaults (3.0 / 24.0 / 128) and no geometry_version recorded, so a legacy
+    invocation renders and provenances byte-for-byte as before (AC-d)."""
+    from scripts.temporal.score_target_sequence import resolve_render_geometry
+
+    assert resolve_render_geometry(
+        chip_geometry=None,
+        crop_context_multiplier=None,
+        min_crop_size_m=None,
+        min_output_px=None,
+    ) == (3.0, 24.0, 128, None)
+    # Explicit crop flags without --chip-geometry stay honored (the ISSUE-04
+    # tight-crop experiment path), still with no geometry_version.
+    assert resolve_render_geometry(
+        chip_geometry=None,
+        crop_context_multiplier=0.5,
+        min_crop_size_m=12.0,
+        min_output_px=256,
+    ) == (0.5, 12.0, 256, None)
+
+
+def test_resolve_render_geometry_named_version_sets_params(tmp_path: Path) -> None:
+    """--chip-geometry resolves to the registry's param triple + version string,
+    and render_review_png_manifest hands exactly those params to the renderer
+    (AC-a)."""
+    import scripts.temporal.score_target_sequence as sts
+
+    mult, min_crop, min_px, version = sts.resolve_render_geometry(
+        chip_geometry="chip_geom_v2_tight12",
+        crop_context_multiplier=None,
+        min_crop_size_m=None,
+        min_output_px=None,
+    )
+    assert (mult, min_crop, min_px, version) == (0.5, 12.0, 256, "chip_geom_v2_tight12")
+
+    captured: dict[str, Any] = {}
+
+    def fake_render(image_path, marker, *, chip_size_m, crop_context_multiplier, min_crop_size_m, min_output_px):
+        captured.update(
+            crop_context_multiplier=crop_context_multiplier,
+            min_crop_size_m=min_crop_size_m,
+            min_output_px=min_output_px,
+        )
+        out = tmp_path / "rendered.png"
+        out.write_bytes(b"\x89PNG\r\n\x1a\n")
+        return out
+
+    import pytest as _pytest
+
+    monkeypatch = _pytest.MonkeyPatch()
+    monkeypatch.setattr(sts, "ensure_single_target_review_png", fake_render)
+    try:
+        src = tmp_path / "chip.tif"
+        src.write_bytes(b"fake")
+        target = ChipTarget(
+            chip_id="chip_001",
+            target_id="target_01",
+            target_label="T01",
+            target_index=1,
+            region_key="johannesburg",
+            grid_id="JNB0202",
+            offset_x_m=0.0,
+            offset_y_m=0.0,
+            search_radius_m=8.0,
+            chip_size_m=96.0,
+        )
+        artifact = ChipArtifact(
+            chip_id="chip_001",
+            capture_date="2018-03-30",
+            version="1",
+            path=src,
+            actual_zoom=20,
+            status="ok",
+        )
+        sts.render_review_png_manifest(
+            targets_by_chip={"chip_001": [target]},
+            artifacts_by_chip={"chip_001": [artifact]},
+            dates=["2018-03-30"],
+            crop_context_multiplier=mult,
+            min_crop_size_m=min_crop,
+            min_output_px=min_px,
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert captured == {
+        "crop_context_multiplier": 0.5,
+        "min_crop_size_m": 12.0,
+        "min_output_px": 256,
+    }
+
+
+def test_chip_geometry_conflicts_with_explicit_crop_flag() -> None:
+    """--chip-geometry alongside any individual crop flag is rejected loudly, not
+    silently overridden (AC-c, no-conflict rule)."""
+    from scripts.temporal.score_target_sequence import resolve_render_geometry
+
+    with pytest.raises(SystemExit, match="conflicts with explicit"):
+        resolve_render_geometry(
+            chip_geometry="chip_geom_v2_tight12",
+            crop_context_multiplier=0.5,
+            min_crop_size_m=None,
+            min_output_px=None,
+        )
+
+
+def test_resolve_render_geometry_unknown_version_exits() -> None:
+    from scripts.temporal.score_target_sequence import resolve_render_geometry
+
+    with pytest.raises(SystemExit, match="unknown chip geometry_version"):
+        resolve_render_geometry(
+            chip_geometry="chip_geom_nope",
+            crop_context_multiplier=None,
+            min_crop_size_m=None,
+            min_output_px=None,
+        )
+
+
+def test_chip_geometry_rejected_in_reuse_mode() -> None:
+    """--chip-geometry in the --review-png-manifest reuse mode is rejected loudly.
+
+    Reuse re-scores pre-rendered PNGs WITHOUT rendering, so the crop geometry is
+    fixed by whichever prior render produced the manifest and is unknowable from
+    ``REVIEW_PNG_FIELDS``. Declaring a geometry there would stamp a
+    ``geometry_version`` onto scoring provenance that does not describe the scored
+    pixels — the exact v1/v2 confound the decision memo forbids ("Emissions
+    estimated on chip_geom_v2_tight12 renders must not be applied to
+    chip_geom_v1_banked96 verdicts, and vice versa"). Fail closed, don't record a
+    mismatch."""
+    from scripts.temporal.score_target_sequence import resolve_render_geometry
+
+    with pytest.raises(SystemExit, match="review-png-manifest"):
+        resolve_render_geometry(
+            chip_geometry="chip_geom_v2_tight12",
+            crop_context_multiplier=None,
+            min_crop_size_m=None,
+            min_output_px=None,
+            render_active=False,
+        )
+    # Reuse mode WITHOUT --chip-geometry is unaffected: no render, no version, the
+    # legacy param triple is returned (never consulted downstream in reuse mode).
+    assert resolve_render_geometry(
+        chip_geometry=None,
+        crop_context_multiplier=None,
+        min_crop_size_m=None,
+        min_output_px=None,
+        render_active=False,
+    ) == (3.0, 24.0, 128, None)
+
+
+def test_geometry_version_recorded_in_provenance(tmp_path: Path, monkeypatch) -> None:
+    """When a geometry_version is threaded in, every scoring-provenance row carries
+    it in the free-form ``context`` blob (AC-b) — no dedicated column, no
+    RECORD_VERSION bump."""
+    from scripts.temporal import presence_scorer as ps
+
+    def fake_sequence(date_picks, *, config, audit_writer, max_tokens):
+        return _result([False, True])
+
+    class _FakeScorer:
+        name = "gemini"
+        sequence = staticmethod(fake_sequence)
+
+    monkeypatch.setattr(ps, "get_scorer", lambda name, **_kwargs: _FakeScorer())
+
+    rows: list[dict[str, Any]] = []
+
+    score_target_sequences(
+        review_pngs=_review_pngs(tmp_path, ["2018-03-30", "2019-07-30"]),
+        dates=["2018-03-30", "2019-07-30"],
+        config=_config(),
+        scoring_provenance_writer=lambda row: rows.append(dict(row)),
+        geometry_version="chip_geom_v2_tight12",
+    )
+
+    assert rows
+    assert all(row["context"].get("geometry_version") == "chip_geom_v2_tight12" for row in rows)
+
+
+def test_no_geometry_version_leaves_provenance_context_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Legacy path (no geometry_version): provenance context stays exactly
+    {anchor_id, chip_id, target_label} with no geometry key (AC-d)."""
+    from scripts.temporal import presence_scorer as ps
+
+    def fake_sequence(date_picks, *, config, audit_writer, max_tokens):
+        return _result([False, True])
+
+    class _FakeScorer:
+        name = "gemini"
+        sequence = staticmethod(fake_sequence)
+
+    monkeypatch.setattr(ps, "get_scorer", lambda name, **_kwargs: _FakeScorer())
+
+    rows: list[dict[str, Any]] = []
+
+    score_target_sequences(
+        review_pngs=_review_pngs(tmp_path, ["2018-03-30", "2019-07-30"]),
+        dates=["2018-03-30", "2019-07-30"],
+        config=_config(),
+        scoring_provenance_writer=lambda row: rows.append(dict(row)),
+    )
+
+    assert rows
+    assert all("geometry_version" not in row["context"] for row in rows)
+
+
 def test_unregistered_emission_rejected_at_ingest(tmp_path: Path) -> None:
     """Write-time vocab enforcement (AC5): a scorer emitting an unregistered
     quality_flag is rejected where its result enters the sequence write path."""
