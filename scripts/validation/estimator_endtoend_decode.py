@@ -478,7 +478,8 @@ def main() -> int:
         type=Path,
         default=DEFAULT_EMISSIONS_JSON,
         help="EM-fitted EmissionModel JSON. DEFAULT = canonical A4 emissions; "
-        "use --no-emissions for symmetric-noise (flat) emissions.",
+        "use --no-emissions for symmetric-noise (flat) emissions. Never opened for an "
+        "explicit non-changepoint --estimator (ignored there regardless of this flag).",
     )
     ap.add_argument(
         "--no-emissions",
@@ -490,7 +491,8 @@ def main() -> int:
         type=Path,
         default=DEFAULT_COHORT_PRIOR_JSON,
         help="ISSUE-03 CohortPrior JSON injected into the decoder. DEFAULT = canonical "
-        "A4 EB/Turnbull prior; use --no-cohort-prior for a flat prior.",
+        "A4 EB/Turnbull prior; use --no-cohort-prior for a flat prior. Never opened for "
+        "an explicit non-changepoint --estimator (ignored there regardless of this flag).",
     )
     ap.add_argument(
         "--no-cohort-prior",
@@ -518,6 +520,17 @@ def main() -> int:
     if a.no_emissions:
         a.emissions_json = None
     if a.no_cohort_prior:
+        a.cohort_prior_json = None
+
+    # Load-gate on the adopted estimator: an explicit non-changepoint --estimator
+    # must not touch the prior/emissions files at all (not even to open-then-ignore)
+    # so a baseline run has zero file-existence dependency on the canonical A4
+    # artifacts, same as before the default flip. This clears an explicitly-passed
+    # --cohort-prior-json/--emissions-json too, not just the defaults: both fields
+    # are equally inert for pava/fpd/sustained, so there is no numeric difference
+    # to preserve either way, and skipping unconditionally is the simpler rule.
+    if a.estimator != ADOPTED_ESTIMATOR:
+        a.emissions_json = None
         a.cohort_prior_json = None
 
     if a.estimator not in available_estimators():
