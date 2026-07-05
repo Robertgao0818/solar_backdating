@@ -521,6 +521,19 @@ def _make_dinov3_frozen(**kwargs: Any) -> PresenceScorer:
     return Dinov3PresenceScorer(**kwargs)
 
 
+def _make_dinov2_floor(**kwargs: Any) -> PresenceScorer:
+    """Construct the frozen DINOv2 ViT-S/14 falsification floor (ISSUE-05).
+
+    Same lazy-import-inside-factory pattern as ``_make_dinov3_frozen`` so importing
+    ``presence_scorer`` stays torch-free. Selectable via ``--scorer dinov2_floor``
+    at every existing call site with no CLI change (Gemini remains the default).
+    """
+    from scripts.temporal.dinov3_scorer import Dinov2PresenceScorer
+
+    return Dinov2PresenceScorer(**kwargs)
+
+
 register_scorer("gemini", _make_gemini)
 register_scorer("dry_run", _make_dry_run)
 register_scorer("dinov3_frozen", _make_dinov3_frozen)
+register_scorer("dinov2_floor", _make_dinov2_floor)

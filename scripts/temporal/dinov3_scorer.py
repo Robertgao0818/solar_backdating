@@ -74,6 +74,7 @@ this module only inside the factory body) — never pulls torch. Only the two ne
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,13 +89,20 @@ from scripts.temporal.presence_scorer import (
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from scripts.validation.gemini_solar_image_review import GeminiObservation
 
-# Additive registration of the two DINOv3 decision_source values so scan_state's
-# write-time vocabulary gate accepts them. quality_flags "usable" / "unusable" /
-# "missing_chip" are already seeded in presence_scorer.
+# Additive registration of the DINOv3 + DINOv2-floor decision_source values so
+# scan_state's write-time vocabulary gate accepts them. quality_flags "usable" /
+# "unusable" / "missing_chip" are already seeded in presence_scorer.
 DECISION_SOURCE_OK = "dinov3_frozen"
 DECISION_SOURCE_FAILED = "dinov3_failed"
 register_decision_source(DECISION_SOURCE_OK)
 register_decision_source(DECISION_SOURCE_FAILED)
+
+# ISSUE-05 DINOv2 falsification-floor decision_source values (distinct from the
+# DINOv3 pair so a floor verdict is always attributable to the cheap backbone).
+DECISION_SOURCE_DINOV2_OK = "dinov2_floor"
+DECISION_SOURCE_DINOV2_FAILED = "dinov2_failed"
+register_decision_source(DECISION_SOURCE_DINOV2_OK)
+register_decision_source(DECISION_SOURCE_DINOV2_FAILED)
 
 # Defaults (all overridable via the constructor — nothing here is frozen policy).
 DEFAULT_BACKBONE_MODEL_ID = "vit_large_patch16_dinov3.sat493m"
@@ -105,21 +113,52 @@ VALID_UPSCALE_POLICIES = frozenset({"bilinear", "bicubic"})
 DEFAULT_HEAD_SEED = 20260703
 DEFAULT_WEIGHTS_CACHE_DIR = Path("/home/gaosh/zasolar_data/models/dinov3_sat/hf_cache")
 _WEIGHTS_ENV_VAR = "SOLAR_DINOV3_WEIGHTS_DIR"
+DEFAULT_PATCH_SIZE = 16  # fallback when a backbone id embeds no patchNN token
+
+# ISSUE-05 DINOv2 ViT-S/14 floor defaults (22M, patch 14, embed_dim 384). Native
+# input 518 (a multiple of 14); a distinct weights cache so the 22M DINOv2 snapshot
+# never collides with the 303M DINOv3-L-SAT cache.
+DEFAULT_DINOV2_BACKBONE_MODEL_ID = "vit_small_patch14_dinov2.lvd142m"
+DEFAULT_DINOV2_INPUT_SIZE = 518
+DEFAULT_DINOV2_WEIGHTS_CACHE_DIR = Path("/home/gaosh/zasolar_data/models/dinov2_floor/hf_cache")
+_DINOV2_WEIGHTS_ENV_VAR = "SOLAR_DINOV2_WEIGHTS_DIR"
 
 # Head-bundle class order (contract v1): logit index 0/1/2. FIXED — matches the
-# scaffold's argmax mapping (present / absent / unusable).
+# scaffold's argmax mapping (present / absent / unusable). Backbone-agnostic.
 HEAD_CLASS_ORDER = ("present", "absent", "unusable")
 
+_PATCH_RE = re.compile(r"patch(\d+)")
 
-def _resolve_weights_cache_dir(explicit: str | os.PathLike[str] | None) -> Path:
-    """Weights cache dir: explicit arg > env override > default (all under
-    ``~/zasolar_data``, never the repo)."""
+
+def _infer_patch_size(backbone_model_id: str) -> int:
+    """Patch size parsed from the timm model id, torch-free (construction-time).
+
+    Both current backbone ids embed the patch size in their name
+    (``vit_large_patch16_dinov3.sat493m`` -> 16, ``vit_small_patch14_dinov2.lvd142m``
+    -> 14). Falls back to ``DEFAULT_PATCH_SIZE`` (16, DINOv3-L-SAT's) when a model id
+    carries no ``patchNN`` token, so an exotic id never crashes construction; the
+    build-time cross-check in ``_ensure_model`` catches a genuine disagreement
+    against the backbone timm actually loads.
+    """
+    m = _PATCH_RE.search(str(backbone_model_id))
+    return int(m.group(1)) if m else DEFAULT_PATCH_SIZE
+
+
+def _resolve_weights_cache_dir(
+    explicit: str | os.PathLike[str] | None,
+    *,
+    env_var: str = _WEIGHTS_ENV_VAR,
+    default: Path = DEFAULT_WEIGHTS_CACHE_DIR,
+) -> Path:
+    """Weights cache dir: explicit arg > env override > per-backbone default (all
+    under ``~/zasolar_data``, never the repo). ``env_var`` / ``default`` are
+    per-backbone (the DINOv2 floor gets its own env var + cache dir)."""
     if explicit is not None:
         return Path(explicit)
-    env = os.environ.get(_WEIGHTS_ENV_VAR)
+    env = os.environ.get(env_var)
     if env:
         return Path(env)
-    return DEFAULT_WEIGHTS_CACHE_DIR
+    return default
 
 
 # ---------------------------------------------------------------------------
@@ -206,10 +245,24 @@ class Dinov3PresenceScorer:
     """
 
     name = "dinov3_frozen"
+    # decision_source vocabulary the class stamps; a sibling backbone (the DINOv2
+    # floor) overrides these to its own pair, and _observe reads them off ``self``
+    # so every verdict is attributed to the backbone that actually produced it.
+    decision_source_ok = DECISION_SOURCE_OK
+    decision_source_failed = DECISION_SOURCE_FAILED
     failure_decision_sources = frozenset({DECISION_SOURCE_FAILED})
     # "ambiguous" (ISSUE-04) is emitted by the calibrated abstain band.
     quality_flags = frozenset({"usable", "ambiguous", "unusable", "missing_chip"})
     decision_sources = frozenset({DECISION_SOURCE_OK, DECISION_SOURCE_FAILED})
+
+    # Per-backbone construction defaults (overridable by ctor arg / bundle config).
+    # A sibling class swaps these to point the SAME machinery at another backbone.
+    default_backbone_model_id = DEFAULT_BACKBONE_MODEL_ID
+    default_input_size = DEFAULT_INPUT_SIZE
+    default_center_pool_k = DEFAULT_CENTER_POOL_K
+    default_upscale_policy = DEFAULT_UPSCALE_POLICY
+    weights_env_var = _WEIGHTS_ENV_VAR
+    default_weights_cache_dir = DEFAULT_WEIGHTS_CACHE_DIR
 
     def __init__(
         self,
@@ -260,15 +313,23 @@ class Dinov3PresenceScorer:
                 )
             return explicit
 
-        backbone_model_id = _resolve(backbone_model_id, "backbone_model_id", DEFAULT_BACKBONE_MODEL_ID)
-        input_size = _resolve(input_size, "input_size", DEFAULT_INPUT_SIZE)
-        center_pool_k = _resolve(center_pool_k, "center_pool_k", DEFAULT_CENTER_POOL_K)
-        upscale_policy = _resolve(upscale_policy, "upscale_policy", DEFAULT_UPSCALE_POLICY)
+        backbone_model_id = _resolve(backbone_model_id, "backbone_model_id", self.default_backbone_model_id)
+        input_size = _resolve(input_size, "input_size", self.default_input_size)
+        center_pool_k = _resolve(center_pool_k, "center_pool_k", self.default_center_pool_k)
+        upscale_policy = _resolve(upscale_policy, "upscale_policy", self.default_upscale_policy)
+
+        # Patch size is DERIVED from the resolved backbone id (torch-free), not a
+        # hardcoded 16 — so input_size validation tracks the actual backbone (16 for
+        # DINOv3-L-SAT, 14 for DINOv2 ViT-S/14). It is not an independent ctor/bundle
+        # input (the backbone id already carries that identity via the adopt-or-
+        # conflict guard above); _ensure_model cross-checks it against timm at build.
+        patch_size = _infer_patch_size(backbone_model_id)
 
         # Validation applies post-resolution (the resolved value is what runs).
-        if input_size <= 0 or input_size % 16 != 0:
+        if input_size <= 0 or input_size % patch_size != 0:
             raise ValueError(
-                f"input_size must be a positive multiple of the patch size (16), got {input_size}"
+                f"input_size must be a positive multiple of the patch size ({patch_size}) "
+                f"for backbone {backbone_model_id!r}, got {input_size}"
             )
         if center_pool_k <= 0:
             raise ValueError(f"center_pool_k must be positive, got {center_pool_k}")
@@ -279,11 +340,14 @@ class Dinov3PresenceScorer:
             )
 
         self.backbone_model_id = backbone_model_id
+        self.patch_size = int(patch_size)
         self.input_size = int(input_size)
         self.center_pool_k = int(center_pool_k)
         self.upscale_policy = str(upscale_policy)
         self.head_seed = int(head_seed)
-        self.weights_cache_dir = _resolve_weights_cache_dir(weights_cache_dir)
+        self.weights_cache_dir = _resolve_weights_cache_dir(
+            weights_cache_dir, env_var=self.weights_env_var, default=self.default_weights_cache_dir
+        )
         self.device = device
 
         # Calibration band from the bundle (torch-free). None => argmax mapping
@@ -322,6 +386,10 @@ class Dinov3PresenceScorer:
             "head": head_identity,
             "center_pool_k": self.center_pool_k,
             "input_size": self.input_size,
+            # Patch size is part of the anchor-conditioning geometry identity (it
+            # sets the token grid the centre pool reads), and it is what makes the
+            # backbone swap legible in the provenance hash (ISSUE-05).
+            "patch_size": self.patch_size,
             # Upscaling is a scoring-time policy that changes what the encoder
             # sees, so it is always part of the verdict identity (ISSUE-04).
             "upscale_policy": self.upscale_policy,
@@ -381,15 +449,35 @@ class Dinov3PresenceScorer:
         os.environ["HF_HUB_CACHE"] = str(self.weights_cache_dir)
         os.environ["HUGGINGFACE_HUB_CACHE"] = str(self.weights_cache_dir)
 
+        # dynamic_img_size=True lets the encoder interpolate position embeddings for
+        # an input_size other than its native training resolution. DINOv3-L-SAT
+        # already defaults this True (so passing it is byte-identical there); DINOv2
+        # ViT-S/14 defaults it False and hard-crashes at any non-518 input, so it is
+        # required for the floor to score at the head's pinned input size. It still
+        # correctly rejects non-patch-divisible sizes at forward time.
         encoder = timm.create_model(
             self.backbone_model_id,
             pretrained=True,
             num_classes=0,
             cache_dir=str(self.weights_cache_dir),
+            dynamic_img_size=True,
         )
         encoder.requires_grad_(False)
         encoder.eval()
         encoder.to(self.device)
+
+        # Cross-check the id-derived patch size against the backbone timm actually
+        # built (timm exposes patch_embed.patch_size). A mismatch means the id regex
+        # and the real architecture disagree — fail loudly rather than pool the wrong
+        # token grid. Tolerant of encoders that don't expose it (test stubs).
+        actual_ps = getattr(getattr(encoder, "patch_embed", None), "patch_size", None)
+        if actual_ps is not None:
+            aps = actual_ps[0] if isinstance(actual_ps, (tuple, list)) else int(actual_ps)
+            if int(aps) != self.patch_size:
+                raise ValueError(
+                    f"patch-size mismatch for {self.backbone_model_id!r}: id-derived "
+                    f"{self.patch_size} != backbone patch_embed.patch_size {aps}"
+                )
 
         data_cfg = timm.data.resolve_model_data_config(encoder)
         mean = torch.tensor(data_cfg["mean"], dtype=torch.float32).view(3, 1, 1)
@@ -523,12 +611,14 @@ class Dinov3PresenceScorer:
         ``missing_chip``) so the batch survives. A readable chip is forwarded
         through the frozen encoder + placeholder head and mapped to a class.
         """
+        ds_ok = self.decision_source_ok
+        ds_failed = self.decision_source_failed
         if not chip_path or not os.path.exists(chip_path):
             return _ChipVerdict(
                 pv_present=None,
                 pv_score=None,
                 quality_flag="missing_chip",
-                decision_source=DECISION_SOURCE_FAILED,
+                decision_source=ds_failed,
                 error=f"chip not found: {chip_path!r}",
             )
         try:
@@ -538,7 +628,7 @@ class Dinov3PresenceScorer:
                 pv_present=None,
                 pv_score=None,
                 quality_flag="missing_chip",
-                decision_source=DECISION_SOURCE_FAILED,
+                decision_source=ds_failed,
                 error=f"unreadable chip {chip_path!r}: {type(exc).__name__}: {exc}",
             )
         present_prob = float(probs[0])
@@ -549,19 +639,19 @@ class Dinov3PresenceScorer:
             # on P(present), NOT from the LLM self-report. pv_score = P(present)
             # in every branch (contract v1).
             if cls == 2:
-                return _ChipVerdict(None, present_prob, "unusable", DECISION_SOURCE_OK)
+                return _ChipVerdict(None, present_prob, "unusable", ds_ok)
             if present_prob > self._calib_hi:
-                return _ChipVerdict(True, present_prob, "usable", DECISION_SOURCE_OK)
+                return _ChipVerdict(True, present_prob, "usable", ds_ok)
             if present_prob < self._calib_lo:
-                return _ChipVerdict(False, present_prob, "usable", DECISION_SOURCE_OK)
-            return _ChipVerdict(None, present_prob, "ambiguous", DECISION_SOURCE_OK)
+                return _ChipVerdict(False, present_prob, "usable", ds_ok)
+            return _ChipVerdict(None, present_prob, "ambiguous", ds_ok)
         # Legacy / placeholder mapping (no calibration band): plain argmax, exactly
         # as ISSUE-03 — byte-identical for the placeholder head and legacy ckpts.
         if cls == 0:
-            return _ChipVerdict(True, present_prob, "usable", DECISION_SOURCE_OK)
+            return _ChipVerdict(True, present_prob, "usable", ds_ok)
         if cls == 1:
-            return _ChipVerdict(False, present_prob, "usable", DECISION_SOURCE_OK)
-        return _ChipVerdict(None, present_prob, "unusable", DECISION_SOURCE_OK)
+            return _ChipVerdict(False, present_prob, "usable", ds_ok)
+        return _ChipVerdict(None, present_prob, "unusable", ds_ok)
 
     # -- seam entrypoint ------------------------------------------------------
 
@@ -630,3 +720,47 @@ class Dinov3PresenceScorer:
                 )
             )
         return observations
+
+
+class Dinov2PresenceScorer(Dinov3PresenceScorer):
+    """DINOv2 ViT-S/14 falsification floor (ISSUE-05 — PRD §D2/Q2).
+
+    The **mandatory cheap floor** that makes the DINOv3-L-SAT bet falsifiable: a
+    22M, natural-image-pretrained ViT-S/14 (timm ``vit_small_patch14_dinov2.lvd142m``,
+    patch 14, embed_dim 384) behind the SAME ``PresenceScorer`` seam, frozen backbone
+    + light head, anchor-conditioned identically. If this floor matches L-SAT on the
+    ISSUE-06 gate's three numbers, the SAT/L choice is wrong.
+
+    It is a *thin* subclass, not a fork: every scoring mechanism — anchor-conditioned
+    centre pooling (``_center_pool``), device-safe chip loading (``_load_chip_tensor``),
+    the calibrated/argmax verdict funnel (``_observe`` / ``score`` / ``batch``), the
+    training-time ``embed_chips`` surface, the head-bundle contract v1, the class_order
+    guard, and the sha256 integrity gate — is inherited verbatim from
+    ``Dinov3PresenceScorer``. Only what genuinely differs is overridden here:
+
+    * the backbone identity + its patch-14 geometry defaults (``input_size`` 518 is
+      DINOv2's native, a multiple of 14; the base's patch-size derivation +
+      ``dynamic_img_size=True`` build make patch 14 just work),
+    * a distinct weights cache (env ``SOLAR_DINOV2_WEIGHTS_DIR`` / a ``dinov2_floor``
+      dir) so the 22M snapshot never collides with the 303M L-SAT cache, and
+    * the ``dinov2_floor`` / ``dinov2_failed`` decision_source vocabulary, so a floor
+      verdict is always attributable to the cheap backbone (``_observe`` reads the
+      pair off ``self``).
+
+    Selectable via the same ``--scorer`` seam (``--scorer dinov2_floor``); Gemini
+    stays the default everywhere. The trained head + calibration band are pinned under
+    ``~/zasolar_data/`` exactly like the L-SAT head (a later ops slice runs the GPU
+    training on the same ISSUE-02 splits + ISSUE-04 recipe).
+    """
+
+    name = "dinov2_floor"
+    decision_source_ok = DECISION_SOURCE_DINOV2_OK
+    decision_source_failed = DECISION_SOURCE_DINOV2_FAILED
+    failure_decision_sources = frozenset({DECISION_SOURCE_DINOV2_FAILED})
+    # quality_flags are backbone-agnostic — inherited from the base unchanged.
+    decision_sources = frozenset({DECISION_SOURCE_DINOV2_OK, DECISION_SOURCE_DINOV2_FAILED})
+
+    default_backbone_model_id = DEFAULT_DINOV2_BACKBONE_MODEL_ID
+    default_input_size = DEFAULT_DINOV2_INPUT_SIZE
+    weights_env_var = _DINOV2_WEIGHTS_ENV_VAR
+    default_weights_cache_dir = DEFAULT_DINOV2_WEIGHTS_CACHE_DIR

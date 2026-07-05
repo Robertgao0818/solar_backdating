@@ -243,6 +243,17 @@ def _load_calibration(head_json_path: os.PathLike[str] | str) -> tuple[float, fl
     return float(cal["lo"]), float(cal["hi"])
 
 
+def _load_backbone_model_id(head_json_path: os.PathLike[str] | str) -> str | None:
+    """Read ``config.backbone_model_id`` from a head sidecar (report-title provenance).
+
+    ``None`` is a normal case (a bundle from before ISSUE-05 stamped this key, or an
+    explicit ``backbone_model_id=None`` at extract-time) — the caller resolves it to
+    the historical DINOv3-L-SAT default, same rule the scorer itself uses.
+    """
+    sidecar = json.loads(Path(head_json_path).read_text(encoding="utf-8"))
+    return sidecar.get("config", {}).get("backbone_model_id")
+
+
 # --------------------------------------------------------------------------- #
 # head-bundle writer (contract v1)
 # --------------------------------------------------------------------------- #
@@ -376,17 +387,30 @@ def assert_marker_free_provenance(feature_rows: Sequence[Mapping[str, object]]) 
 
 
 def _default_scorer_factory(
-    *, input_size: int, center_pool_k: int, upscale_policy: str, device: str
+    *,
+    input_size: int,
+    center_pool_k: int,
+    upscale_policy: str,
+    device: str,
+    backbone_model_id: str | None = None,
+    weights_cache_dir: str | os.PathLike[str] | None = None,
 ) -> Any:
     """Build the frozen ``Dinov3PresenceScorer`` (Writer B owns ``embed_chips`` /
     ``upscale_policy``). Imported lazily so this module stays import-independent of
-    B's in-flight additions and torch-free at import time."""
+    B's in-flight additions and torch-free at import time.
+
+    ``backbone_model_id=None`` resolves to the scorer's DINOv3-L-SAT module default
+    (byte-identical to the historical extraction); pass
+    ``vit_small_patch14_dinov2.lvd142m`` (+ a distinct ``weights_cache_dir``) to
+    extract features for the ISSUE-05 DINOv2 floor through the SAME class."""
     from scripts.temporal.dinov3_scorer import Dinov3PresenceScorer
 
     return Dinov3PresenceScorer(
+        backbone_model_id=backbone_model_id,
         input_size=input_size,
         center_pool_k=center_pool_k,
         upscale_policy=upscale_policy,
+        weights_cache_dir=weights_cache_dir,
         device=device,
     )
 
@@ -399,15 +423,20 @@ def embed_feature_rows(
     upscale_policy: str,
     device: str,
     batch_size: int,
+    backbone_model_id: str | None = None,
+    weights_cache_dir: str | os.PathLike[str] | None = None,
     scorer_factory: Callable[..., Any] = _default_scorer_factory,
 ) -> tuple[Any, dict[str, Any]]:
     """Embed every rendered chip through the frozen encoder (one pass).
 
     Uses ``scorer.embed_chips`` — the EXACT scoring-time preprocessing — so train
     and serve stay consistent. ``scorer_factory`` is injected (stubbed in tests)
-    so unit tests never construct the real backbone. Returns
+    so unit tests never construct the real backbone. ``backbone_model_id`` /
+    ``weights_cache_dir`` select the encoder (default None -> the DINOv3-L-SAT
+    default; the DINOv2 floor passes the ViT-S/14 id). Returns
     ``(features[N,D] float32, timing_meta)`` where ``timing_meta`` carries
-    throughput, peak VRAM (cuda only), and the backbone id.
+    throughput, peak VRAM (cuda only), and the backbone id + patch size the scorer
+    actually resolved (authoritative provenance, ISSUE-05).
     """
     import numpy as np
 
@@ -417,6 +446,8 @@ def embed_feature_rows(
         center_pool_k=center_pool_k,
         upscale_policy=upscale_policy,
         device=device,
+        backbone_model_id=backbone_model_id,
+        weights_cache_dir=weights_cache_dir,
     )
     if device == "cuda":
         import torch
@@ -439,6 +470,7 @@ def embed_feature_rows(
         "throughput_chips_per_s": throughput,
         "peak_vram_bytes": peak_vram,
         "backbone_model_id": getattr(scorer, "backbone_model_id", None),
+        "patch_size": getattr(scorer, "patch_size", None),
     }
     return features, meta
 
@@ -474,8 +506,14 @@ def build_extract_meta(
     skip_counts: Mapping[str, int],
     throughput: object,
     peak_vram: object,
+    patch_size: object = None,
 ) -> dict[str, Any]:
-    """The ``<out>.meta.json`` sidecar for an extracted feature cache."""
+    """The ``<out>.meta.json`` sidecar for an extracted feature cache.
+
+    ``backbone_model_id`` + ``patch_size`` are the backbone-identity provenance the
+    train step copies into the head-bundle config (ISSUE-05): the head is a linear
+    map on THAT backbone's embeddings at THAT patch geometry.
+    """
     label_counts = Counter(str(r.get("label_3class", "")) for r in feature_rows)
     split_counts = Counter(str(r.get("split", "")) for r in feature_rows)
     return {
@@ -484,6 +522,7 @@ def build_extract_meta(
         "center_pool_k": center_pool_k,
         "upscale_policy": upscale_policy,
         "backbone_model_id": backbone_model_id,
+        "patch_size": patch_size,
         "provenance_csvs": list(provenance_csvs),
         "row_counts": {
             "total": len(feature_rows),
@@ -683,6 +722,7 @@ def train_head(
     cfg.setdefault("input_size", None)
     cfg.setdefault("center_pool_k", None)
     cfg.setdefault("upscale_policy", None)
+    cfg.setdefault("patch_size", None)
     cfg.setdefault("chip_render_variant", None)
     prov = dict(provenance or {})
     prov.setdefault("trained_by", "train_dinov3_head.train")
@@ -1034,8 +1074,30 @@ def _records_from_npz(
     return records
 
 
+def _evaluate_report_title(backbone_model_id: str | None) -> str:
+    """Report title derived from the bundle's backbone (ISSUE-06 misattribution fix).
+
+    A hardcoded ``"DINOv3 head ... (ISSUE-04)"`` title on the shared writer used to
+    leak onto DINOv2-floor bundle reports too (numbers/config in the body were
+    always correct — only the heading lied). ``backbone_model_id=None`` (an
+    un-stamped bundle) resolves to the historical DINOv3-L-SAT default, the same
+    rule the scorer itself uses for a ``None`` id.
+    """
+    from scripts.temporal.dinov3_scorer import DEFAULT_BACKBONE_MODEL_ID
+
+    bid = backbone_model_id or DEFAULT_BACKBONE_MODEL_ID
+    if "dinov2" in bid.lower():
+        return f"# DINOv2 floor head ({bid}) — held-out report-half evaluation"
+    return f"# DINOv3 head ({bid}) — held-out report-half evaluation (ISSUE-04)"
+
+
 def write_evaluate_outputs(
-    out_dir: os.PathLike[str] | str, metrics: Mapping[str, Any], lo: float, hi: float
+    out_dir: os.PathLike[str] | str,
+    metrics: Mapping[str, Any],
+    lo: float,
+    hi: float,
+    *,
+    backbone_model_id: str | None = None,
 ) -> None:
     """Write ``evaluate_metrics.csv`` + ``evaluate_report.md``."""
     out_dir = Path(out_dir)
@@ -1072,7 +1134,7 @@ def write_evaluate_outputs(
 
     ov = metrics["overall"]
     lines = [
-        "# DINOv3 head — held-out report-half evaluation (ISSUE-04)",
+        _evaluate_report_title(backbone_model_id),
         "",
         f"Calibrated band: lo={lo:g}, hi={hi:g}. Report half is disjoint from the "
         "calibration half (both from the ISSUE-02 held-out split).",
@@ -1110,14 +1172,16 @@ def run_evaluate(
 
     npz = _load_npz(features_path)
     weight, bias = _load_head_arrays(head_path)
-    lo, hi = _load_calibration(_json_for_pt(head_path))
+    head_json_path = _json_for_pt(head_path)
+    lo, hi = _load_calibration(head_json_path)
+    backbone_model_id = _load_backbone_model_id(head_json_path)
     split = np.asarray(npz["split"]).astype(str)
     anchors = np.asarray(npz["anchor_id"]).astype(str)
     _calib_set, report_set = _split_heldout_halves(set(anchors[split == "heldout"]))
     mask = (split == "heldout") & np.array([a in report_set for a in anchors])
     records = _records_from_npz(npz, mask, weight, bias, lo, hi)
     metrics = compute_evaluation(records)
-    write_evaluate_outputs(out_dir, metrics, lo, hi)
+    write_evaluate_outputs(out_dir, metrics, lo, hi, backbone_model_id=backbone_model_id)
     return metrics
 
 
@@ -1225,6 +1289,8 @@ def _cmd_extract_features(args: argparse.Namespace) -> None:
         upscale_policy=args.upscale_policy,
         device=args.device,
         batch_size=args.batch_size,
+        backbone_model_id=getattr(args, "backbone_model_id", None),
+        weights_cache_dir=getattr(args, "weights_cache_dir", None),
     )
     npz_path = write_features_npz(args.out, feature_rows, features)
     meta = build_extract_meta(
@@ -1233,6 +1299,7 @@ def _cmd_extract_features(args: argparse.Namespace) -> None:
         center_pool_k=args.center_pool_k,
         upscale_policy=args.upscale_policy,
         backbone_model_id=timing["backbone_model_id"],
+        patch_size=timing.get("patch_size"),
         provenance_csvs=[str(p) for p in args.provenance],
         feature_rows=feature_rows,
         skip_counts=skip_counts,
@@ -1260,6 +1327,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
             "input_size": meta.get("input_size"),
             "center_pool_k": meta.get("center_pool_k"),
             "upscale_policy": meta.get("upscale_policy"),
+            "patch_size": meta.get("patch_size"),
             "chip_render_variant": meta.get("variant_label"),
         }
     else:
@@ -1329,6 +1397,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     e.add_argument("--provenance", required=True, action="append", help="repeatable")
     e.add_argument("--out", required=True, type=Path)
     e.add_argument("--variant-label", required=True)
+    e.add_argument(
+        "--backbone-model-id",
+        default=None,
+        help="timm backbone id (default: the DINOv3-L-SAT scorer default, "
+        "byte-identical to the historical extraction). Pass "
+        "'vit_small_patch14_dinov2.lvd142m' for the ISSUE-05 DINOv2 floor "
+        "(patch size is derived from the id; use a matching --input-size).",
+    )
+    e.add_argument(
+        "--weights-cache-dir",
+        type=Path,
+        default=None,
+        help="HF weights cache dir (default: the scorer's per-backbone default under "
+        "~/zasolar_data). Pass a distinct dir for the DINOv2 floor so its 22M "
+        "snapshot never collides with the 303M DINOv3-L-SAT cache.",
+    )
     e.add_argument("--input-size", type=int, default=DEFAULT_INPUT_SIZE)
     e.add_argument("--center-pool-k", type=int, default=DEFAULT_CENTER_POOL_K)
     e.add_argument("--upscale-policy", choices=("bilinear", "bicubic"), default=DEFAULT_UPSCALE_POLICY)

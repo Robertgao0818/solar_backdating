@@ -84,7 +84,7 @@ def _make_npz(
     }
 
 
-def _engineered_head_bundle(path: Path, weight, bias, calibration=None):
+def _engineered_head_bundle(path: Path, weight, bias, calibration=None, backbone_model_id="bb"):
     import torch
     from torch import nn
 
@@ -96,7 +96,7 @@ def _engineered_head_bundle(path: Path, weight, bias, calibration=None):
         path,
         lin.state_dict(),
         config={
-            "backbone_model_id": "bb",
+            "backbone_model_id": backbone_model_id,
             "input_size": 256,
             "center_pool_k": 3,
             "upscale_policy": "bilinear",
@@ -701,6 +701,51 @@ def test_run_evaluate_and_co_teacher_write_files(tmp_path: Path) -> None:
     assert len(strata) >= 1
 
 
+def test_evaluate_report_title_reflects_backbone_id() -> None:
+    """ISSUE-06 fix: the title is derived from the bundle's backbone, not the
+    hardcoded 'DINOv3 head ... (ISSUE-04)' string — a DINOv2-floor bundle report
+    must say DINOv2, never inherit the DINOv3/ISSUE-04 heading over its body."""
+    dinov2_title = th._evaluate_report_title("vit_small_patch14_dinov2.lvd142m")
+    assert dinov2_title.startswith("# DINOv2 floor head (vit_small_patch14_dinov2.lvd142m)")
+    assert "ISSUE-04" not in dinov2_title
+
+    dinov3_title = th._evaluate_report_title("vit_large_patch16_dinov3.sat493m")
+    assert dinov3_title.startswith("# DINOv3 head (vit_large_patch16_dinov3.sat493m)")
+    assert "ISSUE-04" in dinov3_title
+
+    # None (un-stamped bundle) resolves to the historical DINOv3-L-SAT default.
+    none_title = th._evaluate_report_title(None)
+    assert none_title.startswith("# DINOv3 head (")
+    assert "ISSUE-04" in none_title
+
+
+def test_run_evaluate_titles_report_from_bundle_backbone(tmp_path: Path) -> None:
+    """End-to-end: ``run_evaluate`` reads ``config.backbone_model_id`` off the head
+    sidecar (no extra CLI arg) and writes it into the report title."""
+    import numpy as np
+
+    weight, bias = _sigmoid_head()
+    rows = [(f"HP{i}", "present") for i in range(3)] + [(f"HA{i}", "absent") for i in range(3)]
+    feats = [_feat_for_p(0.9)] * 3 + [_feat_for_p(0.1)] * 3
+    npz = _make_npz(rows, features=np.array(feats, dtype=np.float32))
+    feats_path = th.write_features_npz(
+        tmp_path / "feats.npz",
+        [{c: str(npz[c][i]) for c in th.FEATURE_STRING_COLS} for i in range(len(rows))],
+        npz["features"],
+    )
+    head_pt = tmp_path / "head.pt"
+    _engineered_head_bundle(
+        head_pt, weight, bias,
+        calibration={"lo": 0.3, "hi": 0.7, "rule": "test", "calib_anchors": 3,
+                     "decided_agreement": 1.0, "abstain_rate": 0.0},
+        backbone_model_id="vit_small_patch14_dinov2.lvd142m",
+    )
+
+    th.run_evaluate(feats_path, head_pt, tmp_path / "eval")
+    title = (tmp_path / "eval" / "evaluate_report.md").read_text(encoding="utf-8").splitlines()[0]
+    assert title == "# DINOv2 floor head (vit_small_patch14_dinov2.lvd142m) — held-out report-half evaluation"
+
+
 # ---------------------------------------------------------------------------
 # 5. co-teacher — per-stratum disagreement counts + empty-decided safety
 # ---------------------------------------------------------------------------
@@ -761,3 +806,159 @@ def test_load_head_bundle_integration_with_writer_b(tmp_path: Path) -> None:
         assert fp is not None
     except (AttributeError, TypeError, KeyError):
         pytest.xfail("writer B in flight: sidecar-config adoption not yet wired")
+
+
+# ---------------------------------------------------------------------------
+# ISSUE-05 — backbone/geometry selectable at extract-features; patch size stamped
+# ---------------------------------------------------------------------------
+def test_extract_features_parser_accepts_backbone_and_weights_cache(tmp_path: Path) -> None:
+    args = th.parse_args(
+        [
+            "extract-features",
+            "--manifest", "m.csv",
+            "--provenance", "p.csv",
+            "--out", "o.npz",
+            "--variant-label", "dinov2_floor_arm",
+            "--backbone-model-id", "vit_small_patch14_dinov2.lvd142m",
+            "--input-size", "518",
+            "--center-pool-k", "6",
+            "--weights-cache-dir", str(tmp_path / "hf_cache"),
+        ]
+    )
+    assert args.backbone_model_id == "vit_small_patch14_dinov2.lvd142m"
+    assert args.input_size == 518
+    assert str(args.weights_cache_dir) == str(tmp_path / "hf_cache")
+
+
+def test_extract_features_backbone_id_defaults_to_none() -> None:
+    # Default None -> the scorer resolves the DINOv3-L-SAT module default, so the
+    # existing DINOv3 extraction stays byte-identical.
+    args = th.parse_args(
+        ["extract-features", "--manifest", "m", "--provenance", "p", "--out", "o", "--variant-label", "v"]
+    )
+    assert args.backbone_model_id is None
+    assert args.weights_cache_dir is None
+
+
+def test_embed_feature_rows_threads_backbone_and_records_patch_size() -> None:
+    import numpy as np
+
+    class _FakeScorer:
+        def __init__(self, **kw):
+            self.kw = kw
+            self.backbone_model_id = kw.get("backbone_model_id") or "default-bb"
+            self.patch_size = 14 if "patch14" in str(self.backbone_model_id) else 16
+
+        def embed_chips(self, chip_paths, batch_size=32):
+            return np.zeros((len(chip_paths), 4), dtype=np.float32)
+
+    captured = {}
+
+    def factory(**kw):
+        captured.update(kw)
+        return _FakeScorer(**kw)
+
+    feats, meta = th.embed_feature_rows(
+        [{"png_path": "/a/one.png"}],
+        input_size=518,
+        center_pool_k=6,
+        upscale_policy="bilinear",
+        device="cpu",
+        batch_size=4,
+        backbone_model_id="vit_small_patch14_dinov2.lvd142m",
+        weights_cache_dir="/tmp/dinov2_cache",
+        scorer_factory=factory,
+    )
+    assert captured["backbone_model_id"] == "vit_small_patch14_dinov2.lvd142m"
+    assert captured["weights_cache_dir"] == "/tmp/dinov2_cache"
+    assert meta["backbone_model_id"] == "vit_small_patch14_dinov2.lvd142m"
+    assert meta["patch_size"] == 14
+
+
+def test_cmd_extract_features_stamps_backbone_patch_input_in_meta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """extract-features provenance meta records backbone id + patch size + input size
+    (the backbone id + patch size come from the constructed scorer, not the args)."""
+    import csv as _csv
+    import json as _json
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    manifest = tmp_path / "label_manifest.csv"
+    with manifest.open("w", newline="", encoding="utf-8") as fh:
+        w = _csv.DictWriter(
+            fh,
+            fieldnames=[
+                "anchor_id", "capture_date", "version", "label_3class",
+                "split", "sub_domain", "actual_zoom", "terminal_status",
+            ],
+        )
+        w.writeheader()
+        w.writerow({
+            "anchor_id": "a", "capture_date": "2020-06-15", "version": "100",
+            "label_3class": "present", "split": "train", "sub_domain": "cbd",
+            "actual_zoom": "20", "terminal_status": "done",
+        })
+
+    png = tmp_path / "a.target-A-abc.nomarker.png"  # marker-free
+    png.write_bytes(b"PNG")
+    prov = tmp_path / "student_chip_render_provenance.csv"
+    with prov.open("w", newline="", encoding="utf-8") as fh:
+        w = _csv.DictWriter(fh, fieldnames=["anchor_id", "capture_date", "version", "png_path"])
+        w.writeheader()
+        w.writerow({"anchor_id": "a", "capture_date": "2020-06-15", "version": "100", "png_path": str(png)})
+
+    def _fake_embed(feature_rows, **kw):
+        return (
+            np.zeros((len(feature_rows), 4), dtype=np.float32),
+            {
+                "backbone_model_id": kw.get("backbone_model_id"),
+                "patch_size": 14,
+                "throughput_chips_per_s": 1.0,
+                "peak_vram_bytes": None,
+            },
+        )
+
+    monkeypatch.setattr(th, "embed_feature_rows", _fake_embed)
+    args = SimpleNamespace(
+        manifest=manifest, provenance=[str(prov)], out=tmp_path / "f.npz",
+        variant_label="dinov2_floor_arm",
+        backbone_model_id="vit_small_patch14_dinov2.lvd142m",
+        input_size=518, center_pool_k=6, upscale_policy="bilinear",
+        device="cpu", batch_size=32, weights_cache_dir=None,
+        allow_marked_ablation=False,
+    )
+    th._cmd_extract_features(args)
+    meta = _json.loads((tmp_path / "f.npz.meta.json").read_text(encoding="utf-8"))
+    assert meta["backbone_model_id"] == "vit_small_patch14_dinov2.lvd142m"
+    assert meta["patch_size"] == 14
+    assert meta["input_size"] == 518
+
+
+def test_cmd_train_carries_patch_size_into_bundle_config(tmp_path: Path) -> None:
+    """The head-bundle config records patch_size (provenance), read from the
+    feature-cache meta the extract step stamped."""
+    import json as _json
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    np.savez(tmp_path / "f.npz", **_mixed_train_npz())
+    (tmp_path / "f.npz.meta.json").write_text(
+        _json.dumps({
+            "backbone_model_id": "vit_small_patch14_dinov2.lvd142m",
+            "input_size": 518, "center_pool_k": 6, "upscale_policy": "bilinear",
+            "patch_size": 14, "variant_label": "dinov2_floor_arm", "marker_ablation": False,
+        }),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        features=tmp_path / "f.npz", out=tmp_path / "head.pt", seed=1, lr=th.DEFAULT_LR,
+        weight_decay=th.DEFAULT_WEIGHT_DECAY, batch_size=8, max_epochs=5, patience=3,
+    )
+    th._cmd_train(args)
+    sidecar = _json.loads((tmp_path / "head.json").read_text())
+    assert sidecar["config"]["patch_size"] == 14
+    assert sidecar["config"]["backbone_model_id"] == "vit_small_patch14_dinov2.lvd142m"

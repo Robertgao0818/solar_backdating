@@ -603,11 +603,18 @@ def test_bundle_config_adopts_backbone_model_id(tmp_path) -> None:
     """A bundle recording a non-default backbone is adopted when the ctor leaves
     backbone_model_id unset — the head is scored on the backbone it was trained on,
     and the fingerprint reports THAT backbone (not the module default). Symmetric
-    with the geometry keys, per the head-bundle contract v1 config."""
-    cfg = {**_BUNDLE_CONFIG, "backbone_model_id": "vit_small_patch14_dinov2.other"}
+    with the geometry keys, per the head-bundle contract v1 config. The adopted
+    backbone also drives the patch-size derivation, so its geometry (input 518, a
+    multiple of 14) must be patch-consistent — a DINOv2-shaped adoption case."""
+    cfg = {
+        **_BUNDLE_CONFIG,
+        "backbone_model_id": "vit_small_patch14_dinov2.other",
+        "input_size": 518,
+    }
     pt = _write_bundle(tmp_path, calibration=_CALIB, config=cfg)
     scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
     assert scorer.backbone_model_id == "vit_small_patch14_dinov2.other"
+    assert scorer.patch_size == 14  # derived from the adopted backbone id
     fp = scorer.prompt_config_fingerprint("batch", None)
     assert fp["backbone_model_id"] == "vit_small_patch14_dinov2.other"
 
@@ -890,3 +897,120 @@ def test_load_chip_tensor_normalizes_on_model_device(tmp_path, monkeypatch) -> N
     out = scorer._load_chip_tensor(str(png))  # old order: RuntimeError here
     assert out.device.type == "meta"
     assert tuple(out.shape) == (1, 3, 16, 16)
+
+
+# ===========================================================================
+# ISSUE-05 — patch-size generalization (shared machinery for the DINOv2 floor)
+# ===========================================================================
+#
+# The scorer must DERIVE the encoder's patch size from the backbone id (both timm
+# ids embed it: vit_large_patch16_* -> 16, vit_small_patch14_* -> 14) and validate
+# input_size against THAT, not a hardcoded 16. The DINOv3 path (patch 16) must stay
+# byte-identical; the SAME base class pointed at the DINOv2 id (patch 14) must newly
+# accept multiples of 14 and reject non-multiples. All construction-time / torch-free
+# except the two tests explicitly gated on torch.
+
+_DINOV2_ID = "vit_small_patch14_dinov2.lvd142m"
+
+
+def test_infer_patch_size_from_backbone_id() -> None:
+    from scripts.temporal.dinov3_scorer import _infer_patch_size
+
+    assert _infer_patch_size("vit_large_patch16_dinov3.sat493m") == 16
+    assert _infer_patch_size(_DINOV2_ID) == 14
+    # No patchNN token -> falls back to 16 (DINOv3-L-SAT's), never crashes.
+    assert _infer_patch_size("some_backbone_without_a_patch_token") == 16
+
+
+def test_input_size_validation_patch16_is_byte_identical() -> None:
+    # DINOv3 path unchanged: multiples of 16 accepted, non-multiples / <=0 rejected.
+    assert Dinov3PresenceScorer(device="cpu", input_size=256).input_size == 256
+    assert Dinov3PresenceScorer(device="cpu", input_size=512).input_size == 512
+    with pytest.raises(ValueError, match="16"):
+        Dinov3PresenceScorer(device="cpu", input_size=252)  # 252 % 16 != 0
+    with pytest.raises(ValueError, match="multiple of the patch size"):
+        Dinov3PresenceScorer(device="cpu", input_size=0)
+
+
+def test_default_backbone_derives_patch16() -> None:
+    assert Dinov3PresenceScorer(device="cpu").patch_size == 16
+
+
+def test_input_size_validation_tracks_patch14_for_dinov2_backbone() -> None:
+    # The SAME base class, pointed at the DINOv2 backbone id, derives patch 14 and
+    # validates against it — proving the generalization lives in shared machinery.
+    scorer = Dinov3PresenceScorer(device="cpu", backbone_model_id=_DINOV2_ID, input_size=518)
+    assert scorer.patch_size == 14
+    assert scorer.input_size == 518
+    with pytest.raises(ValueError, match="14"):
+        Dinov3PresenceScorer(device="cpu", backbone_model_id=_DINOV2_ID, input_size=256)
+
+
+def test_fingerprint_records_patch_size() -> None:
+    fp16 = Dinov3PresenceScorer(device="cpu").prompt_config_fingerprint("batch", None)
+    assert fp16["patch_size"] == 16
+    fp14 = Dinov3PresenceScorer(
+        device="cpu", backbone_model_id=_DINOV2_ID, input_size=518
+    ).prompt_config_fingerprint("batch", None)
+    assert fp14["patch_size"] == 14
+
+
+@requires_torch
+def test_center_pool_math_at_patch14_grid_and_embed_dim_384() -> None:
+    """center-pool k×k math is correct on a 37×37 patch-token grid (DINOv2 @ input
+    518) with embed_dim 384 — the shared _center_pool derives the grid from the token
+    count, so patch 14 needs no code change beyond re-tuning k as a value."""
+    import numpy as np
+    import torch
+
+    grid, k, channels = 37, 6, 384
+    scorer = Dinov3PresenceScorer(
+        device="cpu", backbone_model_id=_DINOV2_ID, input_size=518, center_pool_k=k
+    )
+    # token (r, c) carries the scalar (r*grid + c) broadcast across all 384 channels.
+    vals = torch.arange(grid * grid, dtype=torch.float32).reshape(grid, grid)
+    tokens = vals.reshape(1, grid * grid, 1).expand(1, grid * grid, channels).contiguous()
+    pooled = scorer._center_pool(tokens)  # [1, 384]
+    assert tuple(pooled.shape) == (1, channels)
+    start = (grid - k) // 2  # 15
+    expected = float(vals[start : start + k, start : start + k].mean())
+    assert np.allclose(pooled.numpy(), expected)
+
+
+@requires_torch
+def test_ensure_model_passes_dynamic_img_size_true(tmp_path, monkeypatch) -> None:
+    """The landmine: DINOv2 defaults dynamic_img_size=False and hard-crashes at any
+    non-native input; DINOv3-L-SAT already defaults True. Passing it explicitly is
+    byte-identical for DINOv3 and unblocks DINOv2 at the head's pinned input size.
+    Weight-free: timm.create_model is stubbed so nothing downloads."""
+    import timm
+
+    captured: dict = {}
+
+    class _FakeEnc:
+        num_features = 8
+
+        def requires_grad_(self, _flag):
+            return self
+
+        def eval(self):
+            return self
+
+        def to(self, _device):
+            return self
+
+    def fake_create_model(model_id, **kw):
+        captured["model_id"] = model_id
+        captured.update(kw)
+        return _FakeEnc()
+
+    monkeypatch.setattr(timm, "create_model", fake_create_model)
+    monkeypatch.setattr(
+        timm.data,
+        "resolve_model_data_config",
+        lambda enc: {"mean": (0.5, 0.5, 0.5), "std": (0.5, 0.5, 0.5)},
+    )
+    scorer = Dinov3PresenceScorer(device="cpu", weights_cache_dir=tmp_path)
+    scorer._ensure_model()
+    assert captured["dynamic_img_size"] is True
+    assert captured["model_id"] == "vit_large_patch16_dinov3.sat493m"

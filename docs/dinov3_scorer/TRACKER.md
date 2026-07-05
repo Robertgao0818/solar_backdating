@@ -26,7 +26,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | 2 | Distillation training set (harvest + chip re-download + split) | ✅ | — | [ISSUE-02](ISSUE-02-distillation-training-set.md) |
 | 3 | DINOv3-L-SAT frozen scorer scaffold + selection flag | ✅ | [replan_v2 5](../replan_v2/ISSUE-05-presence-scorer-seam.md) ✅ | [ISSUE-03](ISSUE-03-dinov3-scorer-scaffold.md) |
 | 4 | Train light head + calibrate abstain band (RunPod; + co-teacher dual-scoring) | ✅ | 2, 3 | [ISSUE-04](ISSUE-04-train-head-calibrate.md) |
-| 5 | DINOv2 ViT-S/14 falsification floor | ⬜ | 4 | [ISSUE-05](ISSUE-05-dinov2-floor.md) |
+| 5 | DINOv2 ViT-S/14 falsification floor | ✅ | 4 | [ISSUE-05](ISSUE-05-dinov2-floor.md) |
 | 6 | Fidelity gate (three numbers, both backbones; baseline = Phase-0 decoder under D8) | ⬜ | 4, 5, [replan_v2 2](../replan_v2/ISSUE-02-changepoint-posterior-decoder.md) | [ISSUE-06](ISSUE-06-fidelity-gate.md) |
 | 7 | Feature-flag rollout + ops profile | ⬜ | 6 | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
 | 8 | Bonus: deterministic run-to-run experiment (not gated) | ⬜ | 4 | [ISSUE-08](ISSUE-08-determinism-experiment.md) |
@@ -148,6 +148,30 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
   recorded in ISSUE-04 execution notes. `score()` now emits the calibrated band
   (local GPU seam smoke green; 76 slice-4 tests pass). **Slices 5 (DINOv2 floor)
   and 8 (determinism bonus) unblocked — Wave C may start.**
+- 2026-07-05 — Slice 5 done: DINOv2 ViT-S/14 falsification floor stood up
+  entirely on the **local RTX 4070 8GB** (no pod — 22M-param backbone, peak
+  VRAM ~0.37 GB), same seam, same ISSUE-02 splits, same ISSUE-04 recipe.
+  Implemented as `Dinov2PresenceScorer`, a thin subclass of
+  `Dinov3PresenceScorer` in `dinov3_scorer.py` (file-scope forbade a new
+  module); patch size (14 vs 16) derived torch-free from the timm backbone id;
+  `dynamic_img_size=True` added (byte-identical for DINOv3, required for
+  DINOv2's non-518 default); registered additively as `dinov2_floor`/
+  `dinov2_failed`, selectable via the existing `--scorer` flag with zero
+  CLI-surface change (Gemini stays default). Winner **`nomarker_bilinear518_k6`**
+  (same shape as slice 4's winner), band **lo=0.35/hi=0.41**, pinned at
+  `~/zasolar_data/models/dinov2_floor/head_v1_20260705/` (sha256-verified).
+  Honest **held-out report-half agreement = 0.7968 @ 0.8776 coverage, n=858**
+  (calib-half 0.9495 is in-sample, not cited as headline) — cf. DINOv3-L-SAT's
+  0.797 @ 0.885 (ISSUE-04); this slice does not judge the comparison, that's
+  ISSUE-06's job. Seam smoke on real weights (GPU) green; 90/90 targeted tests
+  pass (`test_dinov3_scorer.py` + `test_train_dinov3_head.py` +
+  `test_dinov2_floor.py`). Cosmetic anomaly fixed pre-commit: the shared
+  evaluate-report writer used to hardcode a "DINOv3 head ... (ISSUE-04)" title
+  even when scoring the DINOv2 bundle (numbers/config in the body were always
+  correct); the title now derives from `config.backbone_model_id`, and the
+  pinned report was regenerated (verified byte-identical apart from the title).
+  **Slice 6 (fidelity gate) still waits on `replan_v2` ISSUE-02 (Phase-0
+  decoder baseline); slice 4 + 5 sides of its dependency are now both ✅.**
 - 2026-07-04 — Slice 3 done: scaffold landed
   (`scripts/temporal/dinov3_scorer.py` — frozen timm
   `vit_large_patch16_dinov3.sat493m`, center-k×k token pooling, fixed-seed
