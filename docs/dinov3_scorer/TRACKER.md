@@ -23,7 +23,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | # | Slice | Status | Blocked by | Issue |
 |---|-------|--------|-----------|-------|
 | 1 | PresenceScorer seam — **superseded 2026-07-03** by [replan_v2 ISSUE-05](../replan_v2/ISSUE-05-presence-scorer-seam.md) (wider scope: 4 call-sites) | ➡ | — | [ISSUE-01](ISSUE-01-presence-scorer-seam.md) |
-| 2 | Distillation training set (harvest + chip re-download + split) | ⬜ | — | [ISSUE-02](ISSUE-02-distillation-training-set.md) |
+| 2 | Distillation training set (harvest + chip re-download + split) | ✅ | — | [ISSUE-02](ISSUE-02-distillation-training-set.md) |
 | 3 | DINOv3-L-SAT frozen scorer scaffold + selection flag | ✅ | [replan_v2 5](../replan_v2/ISSUE-05-presence-scorer-seam.md) ✅ | [ISSUE-03](ISSUE-03-dinov3-scorer-scaffold.md) |
 | 4 | Train light head + calibrate abstain band (RunPod; + co-teacher dual-scoring) | ⬜ | 2, 3 | [ISSUE-04](ISSUE-04-train-head-calibrate.md) |
 | 5 | DINOv2 ViT-S/14 falsification floor | ⬜ | 4 | [ISSUE-05](ISSUE-05-dinov2-floor.md) |
@@ -124,6 +124,15 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
   compute, pre-ship licence review, gate re-based on the Phase-0 decoder
   under D8, co-teacher dual-scoring. Slice 3 unblocked; slice 6 gained
   replan_v2 2 (decoder) as a baseline dependency.
+- 2026-07-05 — Slice 2 done: `build_distillation_set.py` (harvest +
+  render-chips, 27 tests). 23,147 anchors / 298,239 post-dedup rounds across
+  all four corpora (D12's 250,502 was an inconsistent subset — reconciled in
+  the artifact README); 27.6% `done_ambiguous_*` retained as unusable;
+  anchor-disjoint split 18,499/4,648; 800-anchor stratified subset re-rendered
+  at `chip_geom_v2_tight12` (8,165 rounds, 763 unrecoverable drops recorded),
+  idempotency + containment-band QA verified on real artifacts. Artifacts:
+  `~/zasolar_data/geid_temporal/dinov3_distill_20260705/`. **Slice 4 (train
+  head) is now unblocked** (2 ✅ + 3 ✅ — Wave B may start).
 - 2026-07-04 — Slice 3 done: scaffold landed
   (`scripts/temporal/dinov3_scorer.py` — frozen timm
   `vit_large_patch16_dinov3.sat493m`, center-k×k token pooling, fixed-seed

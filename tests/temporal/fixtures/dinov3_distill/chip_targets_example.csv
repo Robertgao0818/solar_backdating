@@ -1,0 +1,3 @@
+anchor_id,chip_id,region_key,grid_id,target_label,target_index,centroid_lon,centroid_lat,source_width_m,source_height_m,target_offset_x_m,target_offset_y_m,search_radius_m,chip_size_m,chip_lon_min,chip_lat_min,chip_lon_max,chip_lat_max
+example_distill_t00000001,example_distill_c0000001,johannesburg,JNB0133,A,0,28.05,-26.2,8.0,8.0,0.0,0.0,5.0,96.0,28.049,-26.201,28.051,-26.199
+example_distill_t00000009,example_distill_c0000001,johannesburg,JNB0999,B,1,28.06,-26.21,10.0,6.0,3.0,-2.0,6.0,96.0,28.049,-26.201,28.051,-26.199

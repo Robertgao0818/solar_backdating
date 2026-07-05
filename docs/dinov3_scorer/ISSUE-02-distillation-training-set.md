@@ -121,18 +121,54 @@ a claim about **student inputs only** — not the training labels.
 
 ## Acceptance criteria
 
-- [ ] A label manifest harvested from the retained scan states with at least: `anchor_id, region, grid_id, capture_date, version, actual_zoom, pv_present, confidence, quality_flag, terminal_status, label_3class (present/absent/unusable), split, sub_domain`.
-- [ ] Harvest sizing re-derived from the on-disk corpus and recorded (manifest header or sibling README): 23,147 unique anchors / 250,502 rounds expected; any deviation explained. No 26,820-based numbers anywhere.
-- [ ] Label rules applied: present/absent only from usable + high-confidence; ambiguous/unusable → unusable; the 27.6% `done_ambiguous_*` anchors excluded or down-weighted (documented per-stratum choice), strata sized from the post-exclusion pool.
-- [ ] Chip re-render reads anchor coordinates from `chip_targets.csv` (hard dependency — fails loudly with a clear message if the manifest is missing).
-- [ ] A stratified ~500–1000-anchor chip subset re-downloaded via GEHI, idempotently (re-running does not re-fetch existing chips); GEHI stage code unchanged.
-- [ ] Chip geometry recorded as an explicit render parameter (per replan_v2 ISSUE-19), not silently inherited.
-- [ ] Manifest records `label_render_geometry` (= `chip_geom_v1_banked96`, the label-source geometry) as a column **distinct from** the re-render `render_geometry` (= `chip_geom_v2_tight12`), making the teacher/student geometry mismatch explicit (Distillation-label caveat, disposition 1+2).
-- [ ] The caveat disposition is documented in the sibling README, including that option (2) **composes with** — does not duplicate — the 27.6 % `done_ambiguous_*` exclusion, and that direct measurement (option 3) is deferred to ISSUE-04 co-teacher dual-scoring.
-- [ ] Train / held-out split is anchor-disjoint — verified by an assertion/test.
-- [ ] Strata counts and the unrecoverable-chip drop count are documented (manifest header or sibling README).
-- [ ] Manifest keeps `sub_domain` / `actual_zoom` / `terminal_status` for ISSUE-04's co-teacher disagreement stratification.
-- [ ] All artifacts under `~/zasolar_data/` and gitignored; only a tiny example fixture (a few rows + chips) committed.
+- [x] A label manifest harvested from the retained scan states with at least: `anchor_id, region, grid_id, capture_date, version, actual_zoom, pv_present, confidence, quality_flag, terminal_status, label_3class (present/absent/unusable), split, sub_domain`.
+- [x] Harvest sizing re-derived from the on-disk corpus and recorded (manifest header or sibling README): 23,147 unique anchors / 250,502 rounds expected; any deviation explained. No 26,820-based numbers anywhere.
+- [x] Label rules applied: present/absent only from usable + high-confidence; ambiguous/unusable → unusable; the 27.6% `done_ambiguous_*` anchors excluded or down-weighted (documented per-stratum choice), strata sized from the post-exclusion pool.
+- [x] Chip re-render reads anchor coordinates from `chip_targets.csv` (hard dependency — fails loudly with a clear message if the manifest is missing).
+- [x] A stratified ~500–1000-anchor chip subset re-downloaded via GEHI, idempotently (re-running does not re-fetch existing chips); GEHI stage code unchanged.
+- [x] Chip geometry recorded as an explicit render parameter (per replan_v2 ISSUE-19), not silently inherited.
+- [x] Manifest records `label_render_geometry` (= `chip_geom_v1_banked96`, the label-source geometry) as a column **distinct from** the re-render `render_geometry` (= `chip_geom_v2_tight12`), making the teacher/student geometry mismatch explicit (Distillation-label caveat, disposition 1+2).
+- [x] The caveat disposition is documented in the sibling README, including that option (2) **composes with** — does not duplicate — the 27.6 % `done_ambiguous_*` exclusion, and that direct measurement (option 3) is deferred to ISSUE-04 co-teacher dual-scoring.
+- [x] Train / held-out split is anchor-disjoint — verified by an assertion/test.
+- [x] Strata counts and the unrecoverable-chip drop count are documented (manifest header or sibling README).
+- [x] Manifest keeps `sub_domain` / `actual_zoom` / `terminal_status` for ISSUE-04's co-teacher disagreement stratification.
+- [x] All artifacts under `~/zasolar_data/` and gitignored; only a tiny example fixture (a few rows + chips) committed.
+
+## Execution record — 2026-07-05 (DONE)
+
+Built by `scripts/temporal/build_distillation_set.py` (`harvest` + `render-chips`),
+27 unit tests. Artifacts: `~/zasolar_data/geid_temporal/dinov3_distill_20260705/`
+(label_manifest.csv 298,239 rows × 15 cols, harvest_meta.json,
+chip_subset_anchors.json, chips/, chip_render_provenance.csv,
+chip_render_drops.json, README.md, QA_SPOTCHECK_2026-07-05.md).
+
+- **Sizing (re-derived, authoritative):** 23,147 unique anchors (== D12 ref) /
+  298,239 post-dedup rounds across all four corpora. D12's 250,502 kept as a
+  labelled EXPECTED reference — it excluded wayback+census rounds (inconsistent
+  subset); README documents the reconcile. census2023 contributed 38,007 label
+  rows / 11,412 anchors (7 malformed dropped, 0 interval-join misses),
+  label-only (`version=""`).
+- **Labels:** HIGH_CONF=0.90 (new recorded parameter); absent 133,846 /
+  present 67,379 / unusable rest; `done_ambiguous_*` = 6,399/23,147 = 27.6%
+  exactly, retained as `unusable`, excluded from present/absent supervision.
+- **Split:** train 18,499 / heldout 4,648 anchors, intersection 0
+  (independently re-verified on the real manifest).
+- **Re-render:** 800-anchor stratified subset, `chip_geom_v2_tight12`;
+  8,165 rounds rendered, 763 dropped `all_zooms_failed` (recorded), 0 join
+  misses. Idempotency proven on real artifacts: full re-run exits 0 with
+  identical counts, tif mtime snapshot byte-identical (0 re-fetches), 0 PNG
+  rewrites.
+- **Containment-band QA (ISSUE-19 obligation):** PASS — 10/10 band chips
+  (12.2–40.6 m) show the guard widening the crop without clipping. 3 sampled
+  chips are washed out by old-vintage haze (hits a 3.5 m control equally →
+  source-imagery artifact, orthogonal to geometry); all carry confident v1
+  labels = the documented disposition-1 residual. See
+  `QA_SPOTCHECK_2026-07-05.md` (incl. an ISSUE-04 pointer: stratify co-teacher
+  disagreement by old-vintage/z19).
+- **Fix history:** pre-existing WIP had the CLI wired to `harvest_corpus`
+  (census2023 + dedup + reconcile unreachable), silent missing-corpus skip, and
+  a never-backfilled README placeholder after render — all fixed this session
+  (audit → adversarial verify → fix workflow); tests 21 → 27.
 
 ## Blocked by
 

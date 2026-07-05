@@ -1,0 +1,9 @@
+anchor_id,region,grid_id,capture_date,version,actual_zoom,pv_present,confidence,quality_flag,terminal_status,label_3class,split,sub_domain
+example_distill_c0000001,johannesburg,JNB0999,2017-01-01,80,20,0,0.98,usable,done_appears,absent,heldout,non_cbd_satellite
+example_distill_c0000001,johannesburg,JNB0999,2022-01-01,110,20,1,0.95,usable,done_appears,present,heldout,non_cbd_satellite
+example_distill_t00000001,johannesburg,JNB0133,2021-01-01,100,20,1,0.95,usable,done_appears,present,heldout,cbd_aerial_mosaic
+example_distill_t00000001,johannesburg,JNB0133,2018-01-01,90,20,0,0.9,usable,done_appears,absent,heldout,cbd_aerial_mosaic
+example_distill_t00000002,johannesburg,JNB0999,2020-06-15,100,20,1,0.95,usable,done_ambiguous_nonmonotonic,unusable,heldout,non_cbd_satellite
+example_distill_t00000002,johannesburg,JNB0999,2019-01-01,100,20,0,0.9,usable,done_ambiguous_nonmonotonic,unusable,heldout,non_cbd_satellite
+example_distill_t00000003,johannesburg,JNB0133,2020-01-01,100,20,1,0.8,usable,done_appears,unusable,train,cbd_aerial_mosaic
+example_distill_t00000003,johannesburg,JNB0133,2021-01-01,100,20,,0.95,usable,done_appears,unusable,train,cbd_aerial_mosaic
