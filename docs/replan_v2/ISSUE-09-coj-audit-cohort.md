@@ -1,6 +1,6 @@
 # ISSUE-09: CoJ audit at cohort scale + contradiction dataset
 
-Status: in-progress — code landed + reviewed, full cohort run LIVE since 2026-07-04 09:45
+Status: done — full 16,166-unit cohort run complete 2026-07-05 11:52 NZST
 Phase: 2 — Accuracy channel
 Blocked by: ISSUE-08
 
@@ -54,3 +54,16 @@ headline output.
 ## Blocked by
 
 - ISSUE-08 (pilot go/no-go + margin rule)
+
+## Completion note (2026-07-05)
+
+Full 16,166-unit cohort run complete 2026-07-05 11:52 NZST, resumed
+idempotently after a Windows reboot killed the chain mid-score at 02:26.
+Coverage 12,190/12,190 dated anchors = 100%, zero fetch failures; gate_nc
+PASS (1/300 false-present). gate_a fails in exactly one cell
+(`c_cal_present_pre2019@2015`, 49/55 = 0.891 vs bar 0.95) — all six
+disagreements human-adjudicated 2026-07-05, splitting 3/3 between
+backdating_early (incl. a heater_swap failure mode) and audit_miss_2015;
+see `gate_a_2015_human_adjudication.{csv,md}`. The 8,407-bit
+`human_queue.csv` is ready for ISSUE-10. Artifacts:
+`~/zasolar_data/geid_temporal/coj_audit_cohort_20260704/`.

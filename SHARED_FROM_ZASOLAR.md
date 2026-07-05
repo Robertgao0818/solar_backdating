@@ -22,9 +22,11 @@ through to main repo.
 | Main-repo path | Imported as | Used by |
 | --- | --- | --- |
 | `core/__init__.py` | `core` | (namespace) |
-| `core/region_registry.py` | `core.region_registry` | `scripts/temporal/build_gt_anchor_manifest.py`, `scripts/temporal/run_adaptive_scan.py` |
+| `core/region_registry.py` | `core.region_registry` | `scripts/temporal/build_gt_anchor_manifest.py`, `scripts/temporal/run_adaptive_scan.py`, `scripts/audit/coj_audit_cohort.py` (`get_task_grid_path`; verified 2026-07-05) |
 | `core/annotation_loader.py` | `core.annotation_loader` (`AnnotationEntry`, `discover_annotations`, `load_annotation_gdf`) | `scripts/temporal/build_gt_anchor_manifest.py` |
-| `core/grid_utils.py` | `core.grid_utils` | reserved in the contract; **not currently imported** anywhere in this repo (verified 2026-07-03) |
+| `core/grid_utils.py` | `core.grid_utils` (`get_metric_crs`) | `scripts/audit/coj_cohort_build.py` (CoJ cohort negative-control grid, ISSUE-09; verified 2026-07-05) |
+| `core/models/maskrcnn.py` | `core.models.maskrcnn` (`build_solar_maskrcnn`) | `scripts/audit/score_coj_chips.py` (CoJ audit detector scoring, ISSUE-08/09; verified 2026-07-05) |
+| `core/inference/tile_dataset.py` | `core.inference.tile_dataset` (`SlidingWindowDataset`, `list_collate`) | `scripts/audit/score_coj_chips.py` (CoJ audit detector scoring, ISSUE-08/09; verified 2026-07-05) |
 | `configs/datasets/regions.yaml` | read via `core.region_registry` | all scripts that resolve region/imagery layer paths |
 
 ## Configuration files read from main repo
@@ -41,7 +43,10 @@ through to main repo.
 - Anything under `data/annotations/` — main repo's annotation data is
   read via `core.annotation_loader` only
 - Anything under `checkpoints/`, `data/coco*/`, `data/cls_*/` — main repo's
-  training artifacts are not relevant here
+  training artifacts are not relevant here. **One declared exception**
+  (pilot caveat 3, 2026-07-05): `scripts/audit/score_coj_chips.py` reads
+  `checkpoints/exp_unified_reviewall_A/best_model.pth` directly as its
+  default detector checkpoint (a file-path read, not an import)
 
 ## Sync protocol
 

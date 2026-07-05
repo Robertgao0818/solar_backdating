@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 Phase: 2 — Accuracy channel
-Blocked by: none (sampler consumes ISSUE-09 flags when available)
+Blocked by: none — ISSUE-09 contradiction flags are now AVAILABLE (`cohort_audit_anchors.csv`, 2026-07-05); the sampler consumes them. Start here: [`ISSUE-10-handoff-2026-07-05.md`](ISSUE-10-handoff-2026-07-05.md).
 
 ## Parent
 
