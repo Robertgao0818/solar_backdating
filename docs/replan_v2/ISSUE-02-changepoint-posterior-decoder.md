@@ -96,13 +96,38 @@ must strictly generalize the incumbent.
 - [x] HPD calibration proxy ≈ nominal (rep-i's 90% interval contains rep-j's MAP ~90%)
   *(0.914 vs 0.90 nominal.)*
 - [ ] Year-histogram TVD within the established 0.037–0.063 band
-  *(NOT MET: rep-to-rep [0.081/0.059/0.079]. Root-caused as upstream scan/scorer
-  rep-nondeterminism, not decoder behavior: provider/chip assignment differs
-  across reps (45/79 dated-year shifts) + raw LLM verdict flips on
-  usable-flagged frames; pava fails the same gate at the same magnitude with no
-  emission model at all. This is exactly the noise class the ISSUE-06/07
-  verdict store eliminates (reps share cached verdicts) — re-run this gate
-  after ISSUE-07 lands.)*
+  *(NOT MET under hard-MAP, then SUPERSEDED — retired-with-cause as a gate by
+  D19. Box stays unchecked because the criterion as literally written is not
+  passed; it is not outstanding work. Disposition chain: (1) the ISSUE-07
+  verdict store landed and the sanctioned store-backed re-run was executed
+  2026-07-04 (`~/zasolar_data/geid_temporal/llm_endtoend_storebacked_20260704/`,
+  fresh-per-rep stores, records=0 verified) — the hard-MAP band was STILL not
+  met: flat [0.079/0.040/0.076] mean 0.065; EB prior WORSE [0.092/0.047/0.085]
+  mean 0.075 (sharper posterior ⇒ more argmax-sensitive). Both hypothesised
+  remediations (verdict store; stronger prior) refuted, and the production/
+  delivery reference channel itself breached the band at 0.068 on 1/3 pairs —
+  so the pre-store "re-run after ISSUE-07" note is now DISCHARGED, not pending.
+  (2) DECISION-A (2026-07-04) adjudicated NO-GO cohort-wide under the hard-MAP
+  caliber; sustained retained
+  ([DECISION-A-estimator-adoption-2026-07-04.md](DECISION-A-estimator-adoption-2026-07-04.md)).
+  (3) Owner signed PRD-AMENDMENT-P1 Option A on 2026-07-05: the operative cohort
+  reproducibility gate moves to the survival/fractional channel (PRD D19), which
+  PASSES and beats the incumbent (official store-backed AC5 issue03_gates.json:
+  survival rep-to-rep [0.039/0.045/0.067] mean 0.050 vs point-date
+  [0.092/0.047/0.085] mean 0.075, beats_point_date: true), and the hard-MAP year
+  histogram is demoted to a derived diagnostic, retired-with-cause. Production
+  default is now the decoder + EB prior (ISSUE-22, done)
+  ([PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md](PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md)).
+  (4) Condition-subsequent DISCHARGED (2026-07-05, b543c52): the P3 band
+  re-derivation (ISSUE-21) completed — rep4/rep5 store-backed, 10 pairwise
+  survival-channel TVDs, re-derived band **[0.0243, 0.0787]** frozen per the
+  pre-registered mean±2sd formula; the Option-A rollback trigger PASSES (no
+  revert) and the interim A5 0.067 disclosure is retired (DECISION-A second
+  addendum). Original root cause
+  stands: instability is hard-MAP argmax collapse over upstream scan/scorer
+  rep-nondeterminism, not decoder behaviour — pava fails the same band at the
+  same magnitude with no emission model. NOT sanitised to "passed": the hard-MAP
+  gate failed and was retired; a different, relative gate passes.)*
 - [x] Beats the PAVA floor on the same harness (else the floor falsifies the added machinery)
   *(0.905 > 0.889 same-run extended; note ISSUE-01's banked pava 0.875 was a
   stale artifact — HEAD pava = 0.893 banked / 0.889 extended.)*
