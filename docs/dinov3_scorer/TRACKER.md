@@ -27,7 +27,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | 3 | DINOv3-L-SAT frozen scorer scaffold + selection flag | ✅ | [replan_v2 5](../replan_v2/ISSUE-05-presence-scorer-seam.md) ✅ | [ISSUE-03](ISSUE-03-dinov3-scorer-scaffold.md) |
 | 4 | Train light head + calibrate abstain band (RunPod; + co-teacher dual-scoring) | ✅ | 2, 3 | [ISSUE-04](ISSUE-04-train-head-calibrate.md) |
 | 5 | DINOv2 ViT-S/14 falsification floor | ✅ | 4 | [ISSUE-05](ISSUE-05-dinov2-floor.md) |
-| 6 | Fidelity gate (three numbers, both backbones; baseline = Phase-0 decoder under D8) | ⬜ | 4, 5, [replan_v2 2](../replan_v2/ISSUE-02-changepoint-posterior-decoder.md) | [ISSUE-06](ISSUE-06-fidelity-gate.md) |
+| 6 | Fidelity gate (three numbers, both backbones; baseline = Phase-0 decoder under D8) — **READY 2026-07-05** (all blockers ✅); prep: [ISSUE-06-prep-2026-07-05](ISSUE-06-prep-2026-07-05.md) | ⬜ | 4 ✅, 5 ✅, [replan_v2 2](../replan_v2/ISSUE-02-changepoint-posterior-decoder.md) ✅ | [ISSUE-06](ISSUE-06-fidelity-gate.md) |
 | 7 | Feature-flag rollout + ops profile | ⬜ | 6 | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
 | 8 | Bonus: deterministic run-to-run experiment (not gated) | ⬜ | 4 | [ISSUE-08](ISSUE-08-determinism-experiment.md) |
 
@@ -181,3 +181,26 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
   backbone parity, determinism, downstream byte-identical scan_state
   invariance. All acceptance criteria checked off in ISSUE-03. Slice 4
   (train head) now waits only on slice 2 (training set).
+- 2026-07-05 (correction to the slice-5 entry above) — the line "Slice 6 …
+  still waits on `replan_v2` ISSUE-02 (Phase-0 decoder baseline)" is **stale as
+  written**. `replan_v2` ISSUE-02 (changepoint posterior decoder) is
+  `Status: done` (2026-07-03) and has since been **adopted as the production
+  default** via DECISION-A (2026-07-04) → PRD-AMENDMENT-P1 Option A (signed
+  2026-07-05) → ISSUE-22/D19 (commits `cbf4f4e` + `00fdcd7`). So **all three
+  slice-6 blockers are now satisfied**: slice 4 ✅, slice 5 ✅ (committed
+  `0d1aad4`), `replan_v2` ISSUE-02 ✅. **Slice 6 (fidelity gate) is READY to
+  start** — see the readiness map + file-level execution design in
+  [`ISSUE-06-prep-2026-07-05.md`](ISSUE-06-prep-2026-07-05.md). Honesty carried
+  into the gate verdict (do not sanitize): the gate-#2 baseline decoder's own
+  record is hard-MAP year-TVD **NO-GO** (store-backed re-run flat
+  `[0.079/0.040/0.076]`; EB prior worse) → **Option-A caliber flip** to the
+  survival/fractional channel (passes, beats point-date) → ISSUE-21 band
+  re-derivation as **condition-subsequent**. Slice 6 does **not** wait on
+  ISSUE-21 (different caliber/channel; decoder already pinned;
+  decoder-choice-invariant by construction) and needs **no new API budget** (the
+  teacher rep↔rep ceiling re-decodes banked verdicts on CPU; the student
+  re-scores banked chips on the local GPU). Note also (superseding the prep
+  recon's snapshot): the ISSUE-21 rep4/rep5 re-band run has **completed**
+  (both `EXITCODE=0`); the slice-6 executor must still treat
+  `llm_endtoend_storebacked_20260704/` as owned by the concurrent ISSUE-21
+  session and write gate outputs to a fresh dir.

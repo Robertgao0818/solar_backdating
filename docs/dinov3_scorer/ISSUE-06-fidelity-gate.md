@@ -1,6 +1,8 @@
 # ISSUE-06 — Fidelity gate (three numbers, both backbones)
 
 > Tracer slice 6 of 8 · [TRACKER](TRACKER.md)
+>
+> **Ready to start (2026-07-05):** all three blockers ✅. Readiness map + file-level execution design (inputs inventory, tools-vs-gap, budget, non-dependency on ISSUE-21, pre-registered tie-break): [`ISSUE-06-prep-2026-07-05.md`](ISSUE-06-prep-2026-07-05.md). Nothing below is done yet.
 
 ## Parent
 
