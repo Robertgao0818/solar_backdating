@@ -14,5 +14,4 @@ latest_absent
 earliest_present
 CoJ 2019
 Wayback 2023-05-01
-dispute t00034036
 SHIFT verdict(s) missing corrected bracket

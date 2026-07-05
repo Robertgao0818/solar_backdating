@@ -20,6 +20,16 @@ Inputs:
   the chip-group crosswalk needed to resolve them to owning c-anchors. Both
   are required together to run dispute force-include; if only one is given,
   dispute force-include is skipped with a warning (never a crash).
+* `--oversample-grid-ids FILE` (+ `--oversample-factor F`, default 1.0)  WI-2
+  villa-suspect grid oversample knob (docs/replan_v2/ISSUE-11-prep-design-
+  2026-07-05.md "WI-2"). Optional, newline-delimited `grid_id` file; when
+  omitted the sampler is byte-identical to the no-flag run. When present, an
+  anchor whose `grid_id` is in the file gets an `_os` axis suffix appended to
+  its stratum key, and `allocate_quota` multiplies that sub-stratum's
+  effective mass by `F` -- a seeded stratum-split reweight, not weighted
+  within-stratum sampling. A file matching zero anchors warns to stderr and
+  is a no-op (no crash). Forced dispute rows are never oversampled (they sit
+  outside the quota).
 
 Outputs (under `goldset_schema.goldset_root(tag)`, unless `--dry-run`):
 * `sample_assignments.csv` -- one row per (anchor, annotator) via
@@ -75,6 +85,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tag", required=True, help="Gold-set batch tag; output root = goldset_schema.goldset_root(tag).")
     parser.add_argument("--data-root", type=Path, default=None, help="Override the base dir under which goldset_root(tag) resolves (tests).")
     parser.add_argument("--dry-run", action="store_true", help="Print the stratum table + dispute collapse; write nothing.")
+    parser.add_argument(
+        "--oversample-grid-ids", type=Path, default=None,
+        help="Optional newline-delimited grid_id file (e.g. villa-suspect suburbs). "
+             "Default off -> sampler is byte-identical to the no-flag run.",
+    )
+    parser.add_argument(
+        "--oversample-factor", type=float, default=1.0,
+        help="Effective-mass multiplier (>=1.0) applied to the oversample-grid sub-stratum "
+             "when --oversample-grid-ids is set. Default 1.0 (no-op).",
+    )
     return parser.parse_args()
 
 
@@ -82,10 +102,19 @@ def parse_args() -> argparse.Namespace:
 # Join: intervals x cohort contradiction -> AnchorRecord with stratum key
 
 
-def _make_stratum(status: str, confidence: str, any_contradiction: str) -> str:
+def _make_stratum(status: str, confidence: str, any_contradiction: str, *, is_oversample: bool = False) -> str:
     if any_contradiction == "":
-        return f"{status}_x_{confidence}"
-    return f"{status}_x_{confidence}_x_{any_contradiction}"
+        base = f"{status}_x_{confidence}"
+    else:
+        base = f"{status}_x_{confidence}_x_{any_contradiction}"
+    # WI-2 villa-suspect oversample knob: an `_os` axis suffix splits an anchor's
+    # stratum into a distinct sub-stratum keyed on the *same* base -- never
+    # applied unless oversample is active (`is_oversample` only ever True when
+    # --oversample-grid-ids matched this anchor's grid_id), so the key is
+    # unchanged when the knob is off (AC-2.3 byte-identical no-op).
+    if is_oversample:
+        return f"{base}_os"
+    return base
 
 
 def read_contradiction_flags(path: Path | None) -> dict[str, str]:
@@ -105,7 +134,26 @@ def read_contradiction_flags(path: Path | None) -> dict[str, str]:
     return out
 
 
-def build_anchor_records(intervals_csv: Path, contradiction_by_anchor: dict[str, str]) -> list[AnchorRecord]:
+def read_oversample_grid_ids(path: Path | None) -> frozenset[str]:
+    """Newline-delimited grid_id file (villa-suspect suburbs) -> a set. Blank
+    lines and `#`-comments ignored. `None` (flag omitted) -> empty set, which
+    callers treat as "oversample off" (AC-2.3 no-op)."""
+    if path is None:
+        return frozenset()
+    ids: set[str] = set()
+    for line in Path(path).read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            ids.add(line)
+    return frozenset(ids)
+
+
+def build_anchor_records(
+    intervals_csv: Path,
+    contradiction_by_anchor: dict[str, str],
+    oversample_grid_ids: frozenset[str] | None = None,
+) -> list[AnchorRecord]:
+    oversample_grid_ids = oversample_grid_ids or frozenset()
     records: list[AnchorRecord] = []
     for row in read_csv_rows(intervals_csv):
         anchor_id = (row.get("anchor_id") or "").strip()
@@ -114,10 +162,12 @@ def build_anchor_records(intervals_csv: Path, contradiction_by_anchor: dict[str,
         status = (row.get("status") or "").strip()
         confidence = (row.get("confidence") or "").strip()
         any_contradiction = contradiction_by_anchor.get(anchor_id, "")
+        grid_id = (row.get("grid_id") or "").strip()
+        is_oversample = bool(oversample_grid_ids) and grid_id in oversample_grid_ids
         records.append(
             AnchorRecord(
                 anchor_id=anchor_id,
-                grid_id=(row.get("grid_id") or "").strip(),
+                grid_id=grid_id,
                 terminal_status=status,
                 confidence=confidence,
                 any_contradiction=any_contradiction,
@@ -126,7 +176,7 @@ def build_anchor_records(intervals_csv: Path, contradiction_by_anchor: dict[str,
                 latest_absent_date=(row.get("latest_absent_date") or "").strip(),
                 earliest_present_date=(row.get("earliest_present_date") or "").strip(),
                 scan_state_path=(row.get("scan_state_path") or "").strip(),
-                stratum=_make_stratum(status, confidence, any_contradiction),
+                stratum=_make_stratum(status, confidence, any_contradiction, is_oversample=is_oversample),
             )
         )
     return sorted(records, key=lambda r: r.anchor_id)
@@ -168,9 +218,16 @@ def resolve_disputes(
 # Proportional-with-largest-remainder allocation + seeded draw
 
 
-def allocate_quota(records: list[AnchorRecord], n: int) -> dict[str, int]:
-    """stratum -> draw count. Proportional to stratum size, largest-remainder
-    top-up so counts sum to exactly `n` (capped at total eligible population)."""
+def allocate_quota(records: list[AnchorRecord], n: int, oversample_factor: float = 1.0) -> dict[str, int]:
+    """stratum -> draw count. Proportional to stratum *mass*, largest-remainder
+    top-up so counts sum to exactly `n` (capped at total eligible population).
+
+    WI-2 villa-suspect oversample: a stratum's mass is `oversample_factor *
+    len(rows)` when its key carries the `_os` axis suffix (see `_make_stratum`),
+    `len(rows)` otherwise. When no stratum carries `_os` (oversample off, or an
+    oversample file matching zero anchors), every mass reduces to plain
+    `len(rows)` and this is byte-identical to the pre-WI-2 arithmetic
+    regardless of `oversample_factor`'s value (AC-2.3 no-op)."""
     by_stratum: dict[str, list[AnchorRecord]] = {}
     for r in records:
         by_stratum.setdefault(r.stratum, []).append(r)
@@ -179,7 +236,14 @@ def allocate_quota(records: list[AnchorRecord], n: int) -> dict[str, int]:
         return {}
     n = min(n, total)
 
-    raw = {s: n * len(rows) / total for s, rows in by_stratum.items()}
+    def _mass(stratum: str, rows: list[AnchorRecord]) -> float:
+        if oversample_factor != 1.0 and stratum.endswith("_os"):
+            return oversample_factor * len(rows)
+        return float(len(rows))
+
+    masses = {s: _mass(s, rows) for s, rows in by_stratum.items()}
+    total_mass = sum(masses.values())
+    raw = {s: n * masses[s] / total_mass for s in by_stratum}
     counts = {s: int(q) for s, q in raw.items()}
     for s in counts:
         counts[s] = min(counts[s], len(by_stratum[s]))
@@ -328,17 +392,27 @@ def main() -> None:
     args = parse_args()
     if not (10 <= args.n <= 500):
         raise SystemExit(f"--n must be in [10, 500], got {args.n}")
+    if args.oversample_factor < 1.0:
+        raise SystemExit(f"--oversample-factor must be >= 1.0, got {args.oversample_factor}")
 
     contradiction_by_anchor = read_contradiction_flags(args.cohort_audit_csv)
-    records = build_anchor_records(args.intervals_csv, contradiction_by_anchor)
+    oversample_grid_ids = read_oversample_grid_ids(args.oversample_grid_ids)
+    records = build_anchor_records(args.intervals_csv, contradiction_by_anchor, oversample_grid_ids)
     if not records:
         raise SystemExit(f"No anchors found in {args.intervals_csv}")
     records_by_id = {r.anchor_id: r for r in records}
 
+    if oversample_grid_ids and not any(r.stratum.endswith("_os") for r in records):
+        print(
+            f"[WARN] --oversample-grid-ids {args.oversample_grid_ids} matched zero anchors "
+            "in the population; oversample knob is a no-op for this run",
+            file=sys.stderr,
+        )
+
     anchor_to_targets, report_rows = resolve_disputes(args.disputes_csv, args.chipgroups_csv, records_by_id)
 
     eligible = [r for r in records if r.anchor_id not in anchor_to_targets]
-    quota_counts = allocate_quota(eligible, args.n)
+    quota_counts = allocate_quota(eligible, args.n, oversample_factor=args.oversample_factor)
     quota = draw_quota(eligible, quota_counts, args.seed)
 
     if args.dry_run:

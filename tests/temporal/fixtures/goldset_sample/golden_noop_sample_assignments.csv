@@ -1,0 +1,17 @@
+anchor_id,grid_id,stratum,terminal_status,confidence,any_contradiction,pipeline_interval_start,pipeline_interval_end,latest_absent_date,earliest_present_date,scan_state_path,annotator_id,is_overlap,is_dispute_forced,dispute_target_ids,sampler_seed,sample_batch_id
+c0001,JNB0002,done_appears_x_high_x_False,done_appears,high,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0001.json,A,False,False,,42,golden_noop
+c0002,JNB0003,done_appears_x_medium_x_False,done_appears,medium,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0002.json,B,False,False,,42,golden_noop
+c0007,JNB0003,done_appears_x_high_x_False,done_appears,high,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0007.json,A,False,False,,42,golden_noop
+c0014,JNB0005,done_appears_x_medium_x_False,done_appears,medium,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0014.json,B,False,False,,42,golden_noop
+c0018,JNB0004,done_appears_x_low_x_False,done_appears,low,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0018.json,A,False,False,,42,golden_noop
+c0027,JNB0003,done_ambiguous_no_recent_anchor_x_low_x_False,done_ambiguous_no_recent_anchor,low,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0027.json,B,False,False,,42,golden_noop
+c0029,JNB0005,done_ambiguous_no_recent_anchor_x_medium_x_False,done_ambiguous_no_recent_anchor,medium,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0029.json,A,False,False,,42,golden_noop
+c0034,JNB0005,done_already_present_before_geid_history_x_high,done_already_present_before_geid_history,high,,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0034.json,B,False,False,,42,golden_noop
+c0038,JNB0004,done_already_present_before_geid_history_x_medium,done_already_present_before_geid_history,medium,,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0038.json,A,True,False,,42,golden_noop
+c0038,JNB0004,done_already_present_before_geid_history_x_medium,done_already_present_before_geid_history,medium,,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0038.json,B,True,False,,42,golden_noop
+c0039,JNB0005,done_already_present_before_geid_history_x_low,done_already_present_before_geid_history,low,,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0039.json,A,True,False,,42,golden_noop
+c0039,JNB0005,done_already_present_before_geid_history_x_low,done_already_present_before_geid_history,low,,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0039.json,B,True,False,,42,golden_noop
+c0003,JNB0004,done_appears_x_low_x_False,done_appears,low,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0003.json,A,True,True,t1001;t1002,42,golden_noop
+c0003,JNB0004,done_appears_x_low_x_False,done_appears,low,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0003.json,B,True,True,t1001;t1002,42,golden_noop
+c0010,JNB0001,done_appears_x_high_x_False,done_appears,high,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0010.json,A,True,True,t1003,42,golden_noop
+c0010,JNB0001,done_appears_x_high_x_False,done_appears,high,False,2020-01-01,2020-04-01,2020-01-01,2020-04-01,/fake/scan_states/c0010.json,B,True,True,t1003,42,golden_noop

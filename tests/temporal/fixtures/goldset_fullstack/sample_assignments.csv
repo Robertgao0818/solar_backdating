@@ -1,0 +1,5 @@
+anchor_id,grid_id,stratum,terminal_status,confidence,any_contradiction,pipeline_interval_start,pipeline_interval_end,latest_absent_date,earliest_present_date,scan_state_path,annotator_id,is_overlap,is_dispute_forced,dispute_target_ids,sampler_seed,sample_batch_id
+fs_c0000542,JNB01,done_ambiguous_no_recent_anchor_x_low,done_ambiguous_no_recent_anchor,low,,,,,,,A,True,True,t00000001;t00000002;t00000003;t00000004,20260705,batch_fs
+fs_c0000542,JNB01,done_ambiguous_no_recent_anchor_x_low,done_ambiguous_no_recent_anchor,low,,,,,,,B,True,True,t00000001;t00000002;t00000003;t00000004,20260705,batch_fs
+fs_c0009873,JNB01,done_ambiguous_no_recent_anchor_x_low,done_ambiguous_no_recent_anchor,low,,,,,,,A,True,True,t00000099,20260705,batch_fs
+fs_c0009873,JNB01,done_ambiguous_no_recent_anchor_x_low,done_ambiguous_no_recent_anchor,low,,,,,,,B,True,True,t00000099,20260705,batch_fs

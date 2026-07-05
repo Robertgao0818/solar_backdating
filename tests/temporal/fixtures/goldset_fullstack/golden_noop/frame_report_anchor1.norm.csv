@@ -1,0 +1,10 @@
+anchor_id,source,role,capture_date,version,requested_zoom_ladder,achieved_zoom,status,chip_path,error
+goldset_c0000001,scan_tm,latest_absent,2018-03-30,296,"19,18",19,ok,<CHIPS>/goldset_c0000001/scan_2018-03-30_v296.tif,
+goldset_c0000001,scan_tm,earliest_present,2019-06-01,300,"19,18",19,ok,<CHIPS>/goldset_c0000001/scan_2019-06-01_v300.tif,
+goldset_c0000001,scan_tm,flank_before,2016-01-10,100,"19,18",19,ok,<CHIPS>/goldset_c0000001/scan_2016-01-10_v100.tif,
+goldset_c0000001,scan_tm,flank_before,2017-05-20,200,"19,18",19,ok,<CHIPS>/goldset_c0000001/scan_2017-05-20_v200.tif,
+goldset_c0000001,scan_tm,flank_after,2020-08-15,310,"19,18",19,ok,<CHIPS>/goldset_c0000001/scan_2020-08-15_v310.tif,
+goldset_c0000001,scan_tm,flank_after,2021-11-02,320,"19,18",19,ok,<CHIPS>/goldset_c0000001/scan_2021-11-02_v320.tif,
+goldset_c0000001,coj_2015,reference,,,,,source_missing,,no CoJ 2015 chip at None
+goldset_c0000001,coj_2019,reference,,,,,source_missing,,no CoJ 2019 chip at None
+goldset_c0000001,coj_2023,reference,,,,,source_missing,,no CoJ 2023 chip at None

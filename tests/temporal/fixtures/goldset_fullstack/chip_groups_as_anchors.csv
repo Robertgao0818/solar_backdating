@@ -1,0 +1,3 @@
+anchor_id,chip_id,region_key,grid_id,centroid_lon,centroid_lat,chip_lon_min,chip_lat_min,chip_lon_max,chip_lat_max,n_targets,target_anchor_ids
+fs_c0000542,chip_542,johannesburg,JNB01,28.03000,-26.21000,28.02980,-26.21018,28.03020,-26.20982,4,fs_c0000542_t00000001;fs_c0000542_t00000002;fs_c0000542_t00000003;fs_c0000542_t00000004
+fs_c0009873,chip_873,johannesburg,JNB01,28.04000,-26.22000,28.03980,-26.22018,28.04020,-26.21982,1,fs_c0009873_t00000099

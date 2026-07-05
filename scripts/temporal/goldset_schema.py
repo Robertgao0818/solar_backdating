@@ -40,13 +40,43 @@ SCHEMA_VERSION = 1
 #: axis from scorer `decision_source`; never overloaded onto that registry.
 VERDICTS: tuple[str, ...] = ("CONFIRM", "SHIFT", "UNDATABLE")
 
+#: Why a SHIFT verdict moved the pipeline bracket. SHIFT-only field (CONFIRM /
+#: UNDATABLE carry ""). Open/extensible vocabulary — append, never repurpose
+#: (mirrors FRAME_SOURCES / VERDICTS discipline). `date_correction` is the generic
+#: default (bracket wrong, no special mechanism); `heater_swap` = date anchored on a
+#: pre-existing pool/solar-water heater and pulled early; `imagery_cadence` = wrong
+#: cadence-censored bound (off-by-one vintage); `search_giveup_recovered` = production
+#: gave up / degenerate scan_state and a full-stack frame reveals a datable jump;
+#: `other` = catch-all, use `notes`.
+SHIFT_REASONS: tuple[str, ...] = (
+    "date_correction",
+    "heater_swap",
+    "imagery_cadence",
+    "search_giveup_recovered",
+    "other",
+)
+
+#: Dwelling type recorded per adjudicated anchor (soft-required only on
+#: `heater_swap` SHIFTs — the villa-hypothesis test consumes exactly those). ""
+#: = unset. Append, never repurpose.
+DWELLING_CONTEXTS: tuple[str, ...] = ("detached_villa", "townhouse", "other")
+
 #: Annotator slots for the 20% double-annotation overlap.
 ANNOTATORS: tuple[str, ...] = ("A", "B")
 
 #: Provenance of each frame drawn on the strip. `scan_tm` = the anchor's own
 #: adaptive-scan Vexcel/TM chip (latest-absent / earliest-present / flank);
-#: `coj_YYYY` = municipal true-date aerial; `wayback` = in-window Wayback capture.
-FRAME_SOURCES: tuple[str, ...] = ("scan_tm", "coj_2015", "coj_2019", "coj_2023", "wayback")
+#: `coj_YYYY` = municipal true-date aerial; `wayback` = in-window Wayback capture;
+#: `fullstack` = a dispute anchor's full-stack-arm claimed-window frame (present-side
+#: evidence the production scan never surfaced — ISSUE-11 dispute extension, additive).
+FRAME_SOURCES: tuple[str, ...] = (
+    "scan_tm",
+    "coj_2015",
+    "coj_2019",
+    "coj_2023",
+    "wayback",
+    "fullstack",
+)
 
 #: Role a frame plays in the jump-window layout.
 FRAME_ROLES: tuple[str, ...] = (
@@ -55,6 +85,7 @@ FRAME_ROLES: tuple[str, ...] = (
     "flank_before",
     "flank_after",
     "reference",  # CoJ / Wayback overlay, not part of the pipeline bracket
+    "fullstack_window",  # full-stack-arm claimed-window frame (WP-A disk provenance)
 )
 
 # ---------------------------------------------------------------------------
@@ -113,6 +144,11 @@ class VerdictRecord:
     pipeline_interval_end: str
     corrected_interval_start: str = ""  # SHIFT only, else ""
     corrected_interval_end: str = ""    # SHIFT only, else ""
+    #: SHIFT-only codebook fields (CONFIRM / UNDATABLE carry ""). `shift_reason`
+    #: is one of SHIFT_REASONS; `dwelling_context` one of DWELLING_CONTEXTS.
+    #: Both additive/defaulted — every pre-codebook manifest loads with "".
+    shift_reason: str = ""
+    dwelling_context: str = ""
     annotator_id: str = ""
     is_overlap: bool = False
     is_dispute_forced: bool = False
@@ -135,6 +171,16 @@ class VerdictRecord:
             raise ValueError(f"verdict must be one of {VERDICTS}, got {self.verdict!r}")
         if self.annotator_id and self.annotator_id not in ANNOTATORS:
             raise ValueError(f"annotator_id must be one of {ANNOTATORS}, got {self.annotator_id!r}")
+        # Soft validation: "" always allowed (CONFIRM/UNDATABLE + every already-exported
+        # manifest), a non-empty value must be in the additive vocabulary tuple.
+        if self.shift_reason and self.shift_reason not in SHIFT_REASONS:
+            raise ValueError(
+                f"shift_reason must be one of {SHIFT_REASONS} or '', got {self.shift_reason!r}"
+            )
+        if self.dwelling_context and self.dwelling_context not in DWELLING_CONTEXTS:
+            raise ValueError(
+                f"dwelling_context must be one of {DWELLING_CONTEXTS} or '', got {self.dwelling_context!r}"
+            )
 
 
 # ---------------------------------------------------------------------------

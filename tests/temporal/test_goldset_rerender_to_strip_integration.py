@@ -28,6 +28,8 @@ from typing import Any
 import pytest
 
 from scripts.temporal.build_goldset_strip_html import (
+    FULLSTACK_ROW_LABEL,
+    SCALE_CAVEAT_TEXT,
     UNDATABLE_BANNER_TEXT,
     build_group_html,
     collect_undatable_anchors,
@@ -155,6 +157,183 @@ def _annotator_rows(assignments: Path, annot: str) -> list[dict[str, str]]:
     from scripts.temporal.goldset_schema import read_sample_assignments
 
     return [r for r in read_sample_assignments(assignments) if r["annotator_id"] == annot]
+
+
+# ---------------------------------------------------------------------------
+# dispute full-stack extension (ISSUE-11 prep, WI-3) — WP-C fsarm -> WP-A second row
+
+DISPUTE_ANCHOR = "goldset_c0000003"
+DISPUTE_TARGET = "goldset_c0000003_t00099001"
+DISPUTE_SHORT = "t00099001"
+_STRIP_HASH_RE = re.compile(
+    r"data-anchor-id='goldset_c0000003'[^>]*data-strip-hash='([0-9a-f]+)'"
+)
+
+
+def _write_dispute_assignments(path: Path, anchor_id: str, short_tid: str) -> None:
+    rows = []
+    for annot in ("A", "B"):
+        rows.append({
+            "anchor_id": anchor_id, "annotator_id": annot, "is_overlap": "True",
+            "is_dispute_forced": "True", "dispute_target_ids": short_tid,
+            "sample_batch_id": "batch_disp", "sampler_seed": "1", "scan_state_path": "",
+        })
+    write_sample_assignments(rows, path)
+
+
+def _write_chipgroups(path: Path, anchor_id: str, target_id: str) -> None:
+    import csv
+
+    fields = [
+        "anchor_id", "chip_id", "region_key", "grid_id", "centroid_lon", "centroid_lat",
+        "chip_lon_min", "chip_lat_min", "chip_lon_max", "chip_lat_max", "n_targets",
+        "target_anchor_ids",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        w.writeheader()
+        w.writerow({
+            "anchor_id": anchor_id, "chip_id": "chip_3", "region_key": "johannesburg",
+            "grid_id": "JNB01", "centroid_lon": "28.02000", "centroid_lat": "-26.19000",
+            "chip_lon_min": "28.01980", "chip_lat_min": "-26.19018",
+            "chip_lon_max": "28.02020", "chip_lat_max": "-26.18982",
+            "n_targets": "1", "target_anchor_ids": target_id,
+        })
+
+
+def _write_fullstack_inputs(
+    tmp_path: Path, c_anchor: str, target_id: str, *, modal_date: str, dates: list[str]
+) -> tuple[Path, Path]:
+    """Create frozen tifs + artifacts_fullstack.csv + per_unit_fullstack.csv (clean modal).
+
+    Every ``dates`` entry becomes a real PIL-openable frozen ``.tif`` on disk (so WP-C
+    copies, never re-fetches); ``per_unit`` carries 10 identical FPD reps at ``modal_date``.
+    """
+    import csv
+
+    from PIL import Image
+
+    frozen = tmp_path / "frozen" / c_anchor
+    frozen.mkdir(parents=True, exist_ok=True)
+    art = tmp_path / "artifacts_fullstack.csv"
+    with art.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=[
+            "chip_id", "capture_date", "version", "path", "actual_zoom", "status"])
+        w.writeheader()
+        for i, d in enumerate(dates):
+            p = frozen / f"{c_anchor}_{d.replace('-', '')}_v{100 + i}.tif"
+            Image.new("RGB", (16, 16), (20, 110, 180)).save(p, format="TIFF")
+            w.writerow({"chip_id": c_anchor, "capture_date": d, "version": 100 + i,
+                        "path": str(p), "actual_zoom": 18, "status": "ok"})
+    units = tmp_path / "per_unit_fullstack.csv"
+    reps = "|".join(f"FPD|{modal_date}" for _ in range(10))
+    with units.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["unit", "chip_id", "fpd_reps"])
+        w.writeheader()
+        w.writerow({"unit": f"('{c_anchor}', '{target_id}', 'T01')",
+                    "chip_id": c_anchor, "fpd_reps": reps})
+    return art, units
+
+
+def test_ac3_7_wpc_fullstack_seam_into_wpa_strip(tmp_path: Path) -> None:
+    """AC-3.7: WP-C fsarm copy -> WP-A distinct full-stack row; strip_content_hash differs
+    from the same anchor rendered without full-stack chips (provenance lock covers them)."""
+    pytest.importorskip("PIL")
+    scan_dir = tmp_path / "scan_states"
+    # production gave up: degenerate scan_state (empty window).
+    save_scan_state(_state(DISPUTE_ANCHOR, [], status="done_ambiguous_no_recent_anchor"),
+                    state_path_for(DISPUTE_ANCHOR, scan_dir))
+    assignments = tmp_path / "sample_assignments.csv"
+    _write_dispute_assignments(assignments, DISPUTE_ANCHOR, DISPUTE_SHORT)
+    chipgroups = tmp_path / "chipgroups.csv"
+    _write_chipgroups(chipgroups, DISPUTE_ANCHOR, DISPUTE_TARGET)
+    dates = ["2019-01-01", "2020-01-01", "2021-01-01", "2022-06-01", "2023-01-01"]
+    art, units = _write_fullstack_inputs(
+        tmp_path, DISPUTE_ANCHOR, DISPUTE_TARGET, modal_date="2021-01-01", dates=dates)
+    root = tmp_path / "out"
+
+    # WP-C: frozen copy only — the injected runner must NEVER fire (no GEHI network).
+    calls: list[int] = []
+
+    def _norunner(cmd_args, *, executable, timeout):
+        calls.append(1)
+        return GehiRunResult(args=tuple(str(a) for a in cmd_args), returncode=1, stdout="", stderr="x")
+
+    rows = rerender_from_assignments(
+        assignments, scan_states_dir=scan_dir, chipgroups_csv=chipgroups, root=root,
+        coj_chips_dir=None, fullstack_artifacts_csv=art, fullstack_units_csv=units,
+        fullstack_flank=1, runner=_norunner,
+    )
+    assert calls == []
+    fs_rows = [r for r in rows if r["source"] == "fullstack"]
+    assert fs_rows and all(r["status"] == "fullstack_copied" for r in fs_rows)
+    assert not [r for r in rows if r["source"] == "scan_tm"]  # empty production window
+    flat_dir = rerender_chips_dir(root) / DISPUTE_ANCHOR
+    assert sorted(p.name for p in flat_dir.glob("fsarm_*.png"))
+
+    # WP-A: distinct full-stack row (label + caveat + own container) with FPD caption.
+    html_fs = build_group_html(
+        _annotator_rows(assignments, "A"),
+        scan_states_dir=scan_dir, rerender_dir=root / "rerender", thumbnail_size=48,
+    )
+    assert FULLSTACK_ROW_LABEL in html_fs
+    assert SCALE_CAVEAT_TEXT in html_fs
+    assert "class='chip-strip fullstack'" in html_fs
+    assert "FPD=2021-01-01" in html_fs
+    assert UNDATABLE_BANNER_TEXT not in html_fs  # rescued by the full-stack row
+    assert PLACEHOLDER_PIXEL not in html_fs
+    assert '"source":"fullstack"' in html_fs
+    fs_hash = _STRIP_HASH_RE.search(html_fs).group(1)
+
+    # Same anchor, NO full-stack chips -> no second row + a DIFFERENT strip_content_hash.
+    root2 = tmp_path / "out2"
+    rerender_from_assignments(
+        assignments, scan_states_dir=scan_dir, chipgroups_csv=chipgroups, root=root2,
+        coj_chips_dir=None, runner=_make_image_runner(),  # no fullstack flags
+    )
+    html_no = build_group_html(
+        _annotator_rows(assignments, "A"),
+        scan_states_dir=scan_dir, rerender_dir=root2 / "rerender", thumbnail_size=48,
+    )
+    assert "class='chip-strip fullstack'" not in html_no
+    no_hash = _STRIP_HASH_RE.search(html_no).group(1)
+    assert fs_hash != no_hash
+
+
+def test_dispute_anchor_no_fullstack_evidence_gets_banner(tmp_path: Path) -> None:
+    """A dispute anchor absent from the frozen inventory stays UNDATABLE (banner + report
+    with the ``_no_fullstack`` reason)."""
+    pytest.importorskip("PIL")
+    scan_dir = tmp_path / "scan_states"
+    save_scan_state(_state(DISPUTE_ANCHOR, [], status="done_ambiguous_no_recent_anchor"),
+                    state_path_for(DISPUTE_ANCHOR, scan_dir))
+    assignments = tmp_path / "sample_assignments.csv"
+    _write_dispute_assignments(assignments, DISPUTE_ANCHOR, DISPUTE_SHORT)
+    chipgroups = tmp_path / "chipgroups.csv"
+    _write_chipgroups(chipgroups, DISPUTE_ANCHOR, DISPUTE_TARGET)
+    # frozen inventory covers a DIFFERENT c-anchor -> this dispute recovers nothing.
+    art, units = _write_fullstack_inputs(
+        tmp_path, "goldset_c9999999", "goldset_c9999999_t00000000",
+        modal_date="2021-01-01", dates=["2020-01-01", "2021-01-01", "2022-01-01"])
+    root = tmp_path / "out"
+
+    rows = rerender_from_assignments(
+        assignments, scan_states_dir=scan_dir, chipgroups_csv=chipgroups, root=root,
+        coj_chips_dir=None, fullstack_artifacts_csv=art, fullstack_units_csv=units,
+        runner=_make_image_runner(),
+    )
+    assert not [r for r in rows if r["source"] == "fullstack"]  # nothing recovered
+    flat_dir = rerender_chips_dir(root) / DISPUTE_ANCHOR
+    assert not (list(flat_dir.glob("fsarm_*")) if flat_dir.is_dir() else [])
+
+    rows_a = _annotator_rows(assignments, "A")
+    html_text = build_group_html(
+        rows_a, scan_states_dir=scan_dir, rerender_dir=root / "rerender", thumbnail_size=48,
+    )
+    assert UNDATABLE_BANNER_TEXT in html_text  # no frames from EITHER arm
+    undatable = collect_undatable_anchors(rows_a, scan_dir, root / "rerender")
+    assert [r["anchor_id"] for r in undatable] == [DISPUTE_ANCHOR]
+    assert undatable[0]["reason"] == "no_usable_dated_rounds_no_fullstack"
 
 
 # ---------------------------------------------------------------------------

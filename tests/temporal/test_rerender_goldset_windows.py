@@ -25,8 +25,10 @@ from typing import Any
 import pytest
 
 from scripts.temporal.gehi_common import GehiRunResult
+from scripts.temporal.geid_temporal_common import read_csv_rows, write_csv_rows
 from scripts.temporal.goldset_schema import (
     SAMPLE_ASSIGNMENT_FIELDS,
+    read_sample_assignments,
     rerender_chips_dir,
     rerender_report_path,
     write_sample_assignments,
@@ -48,6 +50,7 @@ from scripts.temporal.scan_state import (
 
 FIXTURES = Path(__file__).parent / "fixtures" / "goldset_rerender"
 CHIPGROUPS_CSV = FIXTURES / "chip_groups_as_anchors.csv"
+FS_FIX = Path(__file__).parent / "fixtures" / "goldset_fullstack"
 
 ANCHOR_1 = "goldset_c0000001"
 ANCHOR_2 = "goldset_c0000002"
@@ -345,3 +348,232 @@ def test_main_cli_offline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     rows = mod.read_csv_rows(report)
     # only CoJ reference rows, all source_missing (no --coj-chips-dir)
     assert rows and all(r["status"] == "source_missing" for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# WI-3 WP-C: dispute anchors' full-stack recovered-window frames
+# (docs/replan_v2/ISSUE-11-prep-design-2026-07-05.md §WI-3, ISSUE-11 prep handoff §4
+# step 4). Fixtures: `fixtures/goldset_fullstack/` — chip `fs_c0000542` owns 4 dispute
+# targets (t00000001/t00000002 share modal FPD 2015-01-30 -> dedup fixture for AC-3.1;
+# t00000003 is a modal tie 2018-01-30/2020-01-30; t00000004 is all-UNDATED -> AC-3.6);
+# chip `fs_c0009873` has no full-stack coverage at all (banner-only, not this file's
+# concern — covered by test_goldset_fullstack_frames.py AC-3.4).
+
+ANCHOR_FS_DISPUTE = "fs_c0000542"
+
+
+def _resolved_artifacts_csv(tmp_path: Path, frozen_root: Path, *, alive: bool) -> Path:
+    """Copy the fixture `artifacts_fullstack.csv`, resolving its `{FROZEN}` placeholder
+    to `frozen_root`. `alive=True` also writes a small dead-simple file at every
+    resolved path (exercises the frozen-tif COPY path, no GEHI); `alive=False` leaves
+    every path pointing at a file that does not exist (dead frozen path -> AC-3.5's
+    GEHI fallback).
+    """
+    rows = read_csv_rows(FS_FIX / "artifacts_fullstack.csv")
+    out_rows = []
+    for row in rows:
+        resolved = row["path"].replace("{FROZEN}", str(frozen_root))
+        if alive:
+            p = Path(resolved)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(f"FROZEN {row['chip_id']} {row['capture_date']}".encode())
+        out_rows.append({**row, "path": resolved})
+    out_csv = tmp_path / f"artifacts_fullstack_{'alive' if alive else 'dead'}.csv"
+    write_csv_rows(out_csv, out_rows, ("chip_id", "capture_date", "version", "path", "actual_zoom", "status"))
+    return out_csv
+
+
+def _write_dispute_assignment(path: Path, anchor_id: str, target_ids: list[str], *, grid_id: str = "JNB01") -> None:
+    """Minimal is_dispute_forced assignment (A + B rows) for one anchor/target set."""
+    rows = []
+    for annot in ("A", "B"):
+        rows.append({
+            "anchor_id": anchor_id, "grid_id": grid_id, "stratum": "s", "terminal_status": "x",
+            "confidence": "low", "any_contradiction": "", "pipeline_interval_start": "",
+            "pipeline_interval_end": "", "latest_absent_date": "", "earliest_present_date": "",
+            "scan_state_path": "", "annotator_id": annot, "is_overlap": "True",
+            "is_dispute_forced": "True", "dispute_target_ids": ";".join(target_ids),
+            "sampler_seed": "1", "sample_batch_id": "batch_fs",
+        })
+    write_sample_assignments(rows, path)
+
+
+def test_ac3_1_fullstack_copy_and_dedup(tmp_path: Path) -> None:
+    """AC-3.1: a modal-FPD date shared by two targets (t00000001, t00000002 both claim
+    2015-01-30) is copied exactly ONCE into an `fsarm_` chip, and no GEHI runner call
+    happens because every frozen tif is alive on disk.
+    """
+    artifacts_csv = _resolved_artifacts_csv(tmp_path, tmp_path / "frozen", alive=True)
+    scan_dir = tmp_path / "scan_states"  # empty -> scan_state_missing (harmless, no runner call)
+    root = tmp_path / "out"
+
+    runner = _make_runner(succeed=True)
+    rows = rerender_from_assignments(
+        FS_FIX / "sample_assignments.csv",
+        scan_states_dir=scan_dir,
+        chipgroups_csv=FS_FIX / "chip_groups_as_anchors.csv",
+        root=root,
+        fullstack_artifacts_csv=artifacts_csv,
+        fullstack_units_csv=FS_FIX / "per_unit_fullstack.csv",
+        runner=runner,
+    )
+    assert runner.calls == []  # every frozen tif alive on disk -> zero GEHI invocations
+
+    fs_rows = [r for r in rows if r["source"] == "fullstack" and r["anchor_id"] == ANCHOR_FS_DISPUTE]
+    assert fs_rows
+
+    # the shared modal date claimed by both t00000001 and t00000002 appears exactly
+    # once in the frame report (deduped), recovered via the frozen-tif copy path.
+    shared = [r for r in fs_rows if r["capture_date"] == "2015-01-30"]
+    assert len(shared) == 1
+    assert shared[0]["status"] == "fullstack_copied"
+
+    chip_dir = rerender_chips_dir(root) / ANCHOR_FS_DISPUTE
+    shared_chip_files = list(chip_dir.glob("fsarm_2015-01-30_v*"))
+    assert len(shared_chip_files) == 1  # ONE file materialized, not one per owning target
+
+    # the caption sidecar records both owning targets for the deduped frame.
+    sidecar = read_csv_rows(root / "rerender" / "fullstack_frames.csv")
+    shared_sidecar = [r for r in sidecar if r["capture_date"] == "2015-01-30"]
+    assert len(shared_sidecar) == 1
+    assert set(shared_sidecar[0]["owning_target_ids"].split(";")) == {"t00000001", "t00000002"}
+    assert shared_sidecar[0]["is_modal_fpd_frame"] == "True"
+
+
+def test_ac3_5_gehi_fallback_for_missing_frozen_tif(tmp_path: Path) -> None:
+    """AC-3.5: a dead frozen-tif path (nothing on disk) falls back to the injected
+    `download_chip_with_zoom_ladder` runner — success -> `gehi_fallback_ok` + an
+    `fsarm_` chip; every zoom rung failing -> `fullstack_source_missing`, no chip.
+    """
+    dead_root = tmp_path / "dead_frozen"  # never created -> every frozen path is dead
+    artifacts_csv = _resolved_artifacts_csv(tmp_path, dead_root, alive=False)
+    scan_dir = tmp_path / "scan_states"  # empty -> scan_state_missing (harmless)
+
+    # restrict to a single target (t00000001, modal 2015-01-30) with flank=0 so
+    # exactly ONE full-stack frame is in play.
+    assignments = tmp_path / "sample_assignments.csv"
+    _write_dispute_assignment(assignments, ANCHOR_FS_DISPUTE, ["t00000001"])
+
+    ok_runner = _make_runner(succeed=True)
+    root_ok = tmp_path / "out_ok"
+    rows_ok = rerender_from_assignments(
+        assignments,
+        scan_states_dir=scan_dir,
+        chipgroups_csv=FS_FIX / "chip_groups_as_anchors.csv",
+        root=root_ok,
+        fullstack_artifacts_csv=artifacts_csv,
+        fullstack_units_csv=FS_FIX / "per_unit_fullstack.csv",
+        fullstack_flank=0,
+        runner=ok_runner,
+    )
+    fs_rows_ok = [r for r in rows_ok if r["source"] == "fullstack"]
+    assert len(fs_rows_ok) == 1
+    assert fs_rows_ok[0]["status"] == "gehi_fallback_ok"
+    assert fs_rows_ok[0]["chip_path"]
+    assert ok_runner.calls  # GEHI WAS invoked for the dead frozen path
+    chip_files = list((rerender_chips_dir(root_ok) / ANCHOR_FS_DISPUTE).glob("fsarm_2015-01-30_v*"))
+    assert len(chip_files) == 1
+
+    fail_runner = _make_runner(succeed=False)  # every zoom rung fails
+    root_fail = tmp_path / "out_fail"
+    rows_fail = rerender_from_assignments(
+        assignments,
+        scan_states_dir=scan_dir,
+        chipgroups_csv=FS_FIX / "chip_groups_as_anchors.csv",
+        root=root_fail,
+        fullstack_artifacts_csv=artifacts_csv,
+        fullstack_units_csv=FS_FIX / "per_unit_fullstack.csv",
+        fullstack_flank=0,
+        runner=fail_runner,
+    )
+    fs_rows_fail = [r for r in rows_fail if r["source"] == "fullstack"]
+    assert len(fs_rows_fail) == 1
+    assert fs_rows_fail[0]["status"] == "fullstack_source_missing"
+    assert fs_rows_fail[0]["chip_path"] == ""
+    assert not list((rerender_chips_dir(root_fail) / ANCHOR_FS_DISPUTE).glob("fsarm_*"))
+
+
+def test_ac3_6_all_undated_target_yields_no_window(tmp_path: Path) -> None:
+    """AC-3.6: an owned dispute target whose `fpd_reps` are all UNDATED
+    (t00000004-shaped) contributes no frames and emits exactly one
+    `fullstack_no_window` report row; the batch does not crash.
+    """
+    artifacts_csv = _resolved_artifacts_csv(tmp_path, tmp_path / "frozen", alive=True)
+    scan_dir = tmp_path / "scan_states"  # empty -> scan_state_missing (harmless)
+
+    assignments = tmp_path / "sample_assignments.csv"
+    _write_dispute_assignment(assignments, ANCHOR_FS_DISPUTE, ["t00000004"])  # all-UNDATED
+
+    root = tmp_path / "out"
+    runner = _make_runner(succeed=True)
+    rows = rerender_from_assignments(  # must not crash
+        assignments,
+        scan_states_dir=scan_dir,
+        chipgroups_csv=FS_FIX / "chip_groups_as_anchors.csv",
+        root=root,
+        fullstack_artifacts_csv=artifacts_csv,
+        fullstack_units_csv=FS_FIX / "per_unit_fullstack.csv",
+        runner=runner,
+    )
+
+    fs_rows = [r for r in rows if r["source"] == "fullstack"]
+    assert len(fs_rows) == 1
+    assert fs_rows[0]["status"] == "fullstack_no_window"
+    assert fs_rows[0]["chip_path"] == ""
+    assert "t00000004" in fs_rows[0]["error"]
+    assert runner.calls == []  # no window resolved -> nothing to fetch
+
+    assert not list((rerender_chips_dir(root) / ANCHOR_FS_DISPUTE).glob("fsarm_*"))
+    sidecar = read_csv_rows(root / "rerender" / "fullstack_frames.csv")
+    assert sidecar == []  # no on-disk chip -> no caption row
+
+
+def _normalize_chip_root(rows: list[dict[str, str]], chips_root: Path) -> list[dict[str, str]]:
+    root_str = str(chips_root)
+    out = []
+    for r in rows:
+        r = dict(r)
+        if r.get("chip_path"):
+            r["chip_path"] = r["chip_path"].replace(root_str, "<CHIPS>")
+        out.append(r)
+    return out
+
+
+def test_ac3_8_no_fullstack_flags_matches_pre_change_golden(tmp_path: Path) -> None:
+    """AC-3.8: omitting the `--fullstack-*` flags is a byte-identical no-op —
+    `frame_report.csv` and the chips dir match the pre-WI-3 tool's golden output on
+    the ISSUE-10 fixture (`fixtures/goldset_fullstack/golden_noop/
+    frame_report_anchor1.norm.csv`, captured from the same `_default_results()`
+    fixture this file's other tests use, before the fullstack extension existed —
+    confirmed additive-only against `git show HEAD:scripts/temporal/
+    rerender_goldset_windows.py`, ISSUE-11 prep handoff §2/§4 step 4).
+    """
+    scan_dir = tmp_path / "scan_states"
+    save_scan_state(_state(ANCHOR_1, _default_results()), state_path_for(ANCHOR_1, scan_dir))
+    assignments = tmp_path / "sample_assignments.csv"
+    _write_assignments(assignments, [ANCHOR_1])
+    root = tmp_path / "out"
+
+    runner = _make_runner(succeed=True)
+    rows = rerender_from_assignments(
+        assignments, scan_states_dir=scan_dir, chipgroups_csv=CHIPGROUPS_CSV,
+        root=root, coj_chips_dir=None, runner=runner,
+        # fullstack_artifacts_csv / fullstack_units_csv omitted -> byte-identical no-op
+    )
+
+    # no sidecar file at all when the flags are omitted, and no fullstack rows sneak in
+    assert not (root / "rerender" / "fullstack_frames.csv").exists()
+    assert all(r["source"] != "fullstack" for r in rows)
+
+    chips_root = rerender_chips_dir(root)
+    got = _normalize_chip_root(read_csv_rows(rerender_report_path(root)), chips_root)
+    golden = read_csv_rows(FS_FIX / "golden_noop" / "frame_report_anchor1.norm.csv")
+    assert got == golden
+
+    # chips dir: same flat-file set as the golden's non-empty chip_paths (excludes the
+    # nested z<zoom>/ raw-download subdir the zoom-ladder helper leaves behind — that
+    # subdir is pre-existing GEHI-download plumbing, unrelated to WI-3), no fsarm_ files.
+    actual_files = sorted(p.name for p in (chips_root / ANCHOR_1).iterdir() if p.is_file())
+    expected_files = sorted({Path(r["chip_path"]).name for r in golden if r["chip_path"]})
+    assert actual_files == expected_files
+    assert not any(name.startswith("fsarm_") for name in actual_files)

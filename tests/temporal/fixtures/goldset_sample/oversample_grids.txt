@@ -1,0 +1,6 @@
+# WI-2 villa-suspect grid oversample fixture.
+# JNB0001 matches c0005, c0010, c0015, c0020, c0025, c0030, c0035, c0040 in
+# intervals.csv, spread across every terminal_status/confidence combo. c0010
+# is also a forced-dispute anchor (t1003) -- exercises "forced rows are never
+# oversampled" since c0010 sits outside the stratified quota regardless.
+JNB0001

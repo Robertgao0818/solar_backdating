@@ -55,7 +55,10 @@ from scripts.temporal.build_phase0_qa_html import (
     _resolve_review_png,
     thumbnail_data_url,
 )
+from scripts.temporal.geid_temporal_common import read_csv_rows
 from scripts.temporal.goldset_schema import (
+    DWELLING_CONTEXTS,
+    SHIFT_REASONS,
     FrameIdentity,
     VerdictRecord,
     frame_content_hash,
@@ -111,20 +114,26 @@ def select_scan_frames(state: ScanState) -> list[tuple[str, RoundResult]]:
     return out
 
 
-def anchor_is_undatable(state: ScanState | None) -> bool:
-    """True when an anchor has NO usable jump-window scan frame to adjudicate.
+def anchor_is_undatable(state: ScanState | None, chip_dir: Path | None = None) -> bool:
+    """True when an anchor has NO frame at all to adjudicate — production OR full-stack.
 
-    A degenerate scan_state (no usable dated rounds -> neither ``latest_absent``
-    nor ``earliest_present`` bound) yields an empty jump window, so the human has
-    nothing to CONFIRM/SHIFT — the anchor is an UNDATABLE candidate. Reference-only
-    (CoJ / Wayback) frames do NOT make an anchor datable: there is no pipeline
-    bracket for them to adjudicate. Kept separate from per-frame imagery drops
-    (those are recorded in WP-C's ``frame_report.csv``); this flags the structural
-    "no dated rounds" case so ISSUE-11's completeness accounting can see it.
+    An anchor is UNDATABLE **iff** the production ``select_scan_frames`` window is
+    empty **and** the dispute full-stack arm recovered no ``fsarm_`` chip on disk
+    (WI-3 rescue). A degenerate scan_state (no usable dated rounds -> neither
+    ``latest_absent`` nor ``earliest_present`` bound) yields an empty production
+    window, but if the frozen full-stack inventory covered the anchor its ``fsarm_``
+    second row still gives the human present-side evidence to date — so ``c0000542``
+    (degenerate production scan_state, present in the inventory) is datable while
+    ``c0009873`` (degenerate AND absent from the inventory) stays UNDATABLE.
+
+    Reference-only (CoJ / Wayback) frames do NOT make an anchor datable: there is no
+    pipeline bracket for them to adjudicate. ``chip_dir`` is the anchor's flat
+    re-render dir; pass ``None`` (default) to skip the full-stack check entirely,
+    preserving the original production-only semantics.
     """
-    if state is None:
-        return True
-    return not select_scan_frames(state)
+    if state is not None and select_scan_frames(state):
+        return False
+    return not _fsarm_chips_on_disk(chip_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -150,11 +159,14 @@ def resolve_scan_chip(chip_dir: Path | None, capture_date: str, version: int | N
         exact = _pick(list(chip_dir.glob(f"scan_{capture_date}_v{version}.*")))
         if exact is not None:
             return exact
-    # Fallback: any scan-ish file carrying the capture_date.
+    # Fallback: any scan-ish file carrying the capture_date. ``fsarm_`` is the
+    # dispute full-stack-arm namespace (WI-3) and is rendered on its own second row,
+    # so it must never be mis-picked here as a production scan frame (AC-3.2). No
+    # ``fullstack_`` entry — that legacy prefix does not exist; ``fsarm_`` is the only one.
     loose = [
         p
         for p in chip_dir.glob(f"*{capture_date}*")
-        if not p.name.startswith(("coj_", "wayback_", "vexcel"))
+        if not p.name.startswith(("coj_", "wayback_", "vexcel", "fsarm_"))
     ]
     return _pick(loose)
 
@@ -177,6 +189,53 @@ def _sha256_file(path: Path | None) -> str:
     h = hashlib.sha256()
     h.update(path.read_bytes())
     return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Full-stack recovered-window discovery (WI-3, dispute anchors only)
+#
+# WP-C copies each dispute anchor's frozen full-stack artifacts into distinct
+# ``fsarm_<date>_v<ver>.png`` chips (a namespace WP-A's ``resolve_scan_chip``
+# excludes) and writes a caption sidecar ``fullstack_frames.csv`` next to
+# ``frame_report.csv`` under ``rerender/``. WP-A globs the ``fsarm_`` chips for its
+# distinct second row and joins the sidecar (by ``chip_filename``) for the per-target
+# ``FPD=<date>`` captions + the modal-frame marker.
+
+#: Filename of WP-C's caption sidecar (sibling of ``frame_report.csv``); see
+#: ``rerender_goldset_windows.FULLSTACK_FRAMES_SIDECAR_FIELDS`` for the columns.
+FULLSTACK_SIDECAR_NAME = "fullstack_frames.csv"
+
+
+def _fsarm_chips_on_disk(chip_dir: Path | None) -> list[Path]:
+    """Materialized full-stack (``fsarm_``) chips in an anchor's flat re-render dir.
+
+    Sorted by filename (``fsarm_<ISO-date>_v<ver>.<ext>`` sorts chronologically). An
+    empty list means the anchor has no recovered full-stack window — the presence
+    signal ``anchor_is_undatable`` and ``build_anchor_frames`` gate the second row on.
+    """
+    if chip_dir is None:
+        return []
+    return sorted(
+        p for p in chip_dir.glob("fsarm_*") if p.suffix.lower() in _CHIP_SUFFIXES
+    )
+
+
+def load_fullstack_sidecar(rerender_dir: Path | None) -> dict[str, list[dict[str, str]]]:
+    """Read WP-C's ``fullstack_frames.csv`` into ``anchor_id -> [caption rows]``.
+
+    Returns ``{}`` when no re-render dir / sidecar exists (byte-identical no-op for the
+    non-dispute path — the ISSUE-10 fixtures have no sidecar). Rows preserve WP-C's
+    write order (already sorted by ``(capture_date, version)``).
+    """
+    if rerender_dir is None:
+        return {}
+    path = Path(rerender_dir) / FULLSTACK_SIDECAR_NAME
+    if not path.exists():
+        return {}
+    out: dict[str, list[dict[str, str]]] = {}
+    for row in read_csv_rows(path):
+        out.setdefault((row.get("anchor_id") or "").strip(), []).append(row)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -206,16 +265,95 @@ def _reference_frames(chip_dir: Path | None) -> list[tuple[str, str, str]]:
     return out
 
 
+def _fullstack_caption(row: dict[str, str]) -> str:
+    """Per-frame caption for the full-stack second row from a sidecar row.
+
+    Shape: ``fsarm · <capture_date> · z<zoom> · <tid> FPD=<fpd>[, <tid2> FPD=<fpd2>…]``
+    with a trailing ``◀ claimed FPD`` marker on the modal-FPD frame(s). ``claimed_fpds``
+    is aligned to ``owning_target_ids`` (both ``;``-joined by WP-C); a tie renders the
+    two dates joined by ``/`` (a single ``;`` token), so the split stays aligned.
+    """
+    capture_date = (row.get("capture_date") or "").strip()
+    zoom = (row.get("actual_zoom") or "").strip()
+    owning = [t for t in (row.get("owning_target_ids") or "").split(";") if t]
+    claimed = (row.get("claimed_fpds") or "").split(";")
+    parts = [
+        f"{tid} FPD={claimed[i] if i < len(claimed) else ''}"
+        for i, tid in enumerate(owning)
+    ]
+    caption = f"fsarm · {capture_date}" + (f" · z{zoom}" if zoom else "")
+    if parts:
+        caption += " · " + ", ".join(parts)
+    if (row.get("is_modal_fpd_frame") or "").strip() == "True":
+        caption += " ◀ claimed FPD"
+    return caption
+
+
+def _fullstack_frames(
+    chip_dir: Path | None,
+    sidecar_rows: list[dict[str, str]],
+    thumbnail_size: int,
+) -> tuple[list[FrameIdentity], list[tuple[FrameIdentity, str, str]], bool]:
+    """Assemble the dispute full-stack second row from on-disk ``fsarm_`` chips.
+
+    Returns ``(frames, display, off_roof)``. ``frames`` are provenance-locked
+    ``FrameIdentity(source="fullstack", role="fullstack_window", …)`` records folded
+    into ``frame_content_hash`` (so ``strip_content_hash`` proves the human saw the
+    recovered window); ``display`` is ``[(frame, data_url, caption), …]``; ``off_roof``
+    is True when any joined sidecar row carries an off-roof-marker geometry flag
+    (dormant plumbing — WP-C emits ``""`` today). Empty when no ``fsarm_`` chip exists.
+    """
+    chips = _fsarm_chips_on_disk(chip_dir)
+    if not chips:
+        return [], [], False
+    by_name = {(r.get("chip_filename") or "").strip(): r for r in sidecar_rows}
+    frames: list[FrameIdentity] = []
+    display: list[tuple[FrameIdentity, str, str]] = []
+    off_roof = False
+    for chip in chips:
+        row = by_name.get(chip.name, {})
+        capture_date = (row.get("capture_date") or "").strip()
+        ver_raw = (row.get("version") or "").strip()
+        version = int(ver_raw) if ver_raw.lstrip("-").isdigit() else None
+        if (row.get("off_roof_marker") or "").strip():
+            off_roof = True
+        png = _resolve_review_png(str(chip))
+        data_url = thumbnail_data_url(png, thumbnail_size)
+        fi = FrameIdentity(
+            source="fullstack",
+            role="fullstack_window",
+            capture_date=capture_date,
+            version=version,
+            chip_path=str(chip),
+            chip_sha256=_sha256_file(chip),
+        )
+        frames.append(fi)
+        display.append((fi, data_url, _fullstack_caption(row)))
+    return frames, display, off_roof
+
+
 def build_anchor_frames(
     state: ScanState | None,
     chip_dir: Path | None,
     thumbnail_size: int,
-) -> tuple[list[FrameIdentity], list[tuple[FrameIdentity, str, str]]]:
+    *,
+    sidecar_rows: list[dict[str, str]] | None = None,
+) -> tuple[
+    list[FrameIdentity],
+    list[tuple[FrameIdentity, str, str]],
+    list[tuple[FrameIdentity, str, str]],
+    bool,
+]:
     """Assemble a jump-window strip for one anchor.
 
-    Returns ``(frames, display)`` where ``frames`` are the provenance-locked
-    ``FrameIdentity`` records (feed ``frame_content_hash``) and ``display`` is
-    ``[(frame, data_url, caption), ...]`` in render order.
+    Returns ``(frames, display, fullstack_display, off_roof)``. ``frames`` are the
+    provenance-locked ``FrameIdentity`` records (feed ``frame_content_hash``) — the
+    production scan + reference frames **and** the dispute full-stack frames, so the
+    strip hash covers everything the human saw. ``display`` is the production/reference
+    row ``[(frame, data_url, caption), …]``; ``fullstack_display`` is the (possibly
+    empty) full-stack second row; ``off_roof`` flags the off-roof-marker geometry note.
+    ``sidecar_rows`` is this anchor's ``fullstack_frames.csv`` rows (empty/None -> no
+    second row — the byte-identical no-op for non-dispute anchors).
     """
     frames: list[FrameIdentity] = []
     display: list[tuple[FrameIdentity, str, str]] = []
@@ -261,7 +399,12 @@ def build_anchor_frames(
             caption += " · DROPPED"
         display.append((fi, data_url, caption))
 
-    return frames, display
+    fs_frames, fullstack_display, off_roof = _fullstack_frames(
+        chip_dir, sidecar_rows or [], thumbnail_size
+    )
+    frames.extend(fs_frames)
+
+    return frames, display, fullstack_display, off_roof
 
 
 # ---------------------------------------------------------------------------
@@ -276,22 +419,101 @@ def _bool(value: str) -> bool:
 #: ``anchor_is_undatable``); grepped by the dry-run verification.
 UNDATABLE_BANNER_TEXT = "NO USABLE FRAMES — UNDATABLE candidate"
 
+#: Row label for the dispute full-stack second row (WI-3). Exact text is the design
+#: doc §WI-3 display decision; grepped verbatim by AC-3.3 / AC-3.7.
+FULLSTACK_ROW_LABEL = (
+    "FULL-STACK ARM — recovered jump-window (production scan gave up on this anchor)"
+)
+
+#: Cross-source scale-caveat banner shown once per anchor whenever a full-stack row is
+#: rendered (handoff §4: the strip must not imply cross-source apparent-scale
+#: comparability). Exact text is the design doc §WI-3; grepped verbatim by AC-3.3 / AC-3.7.
+SCALE_CAVEAT_TEXT = (
+    "⚠ SCALE NOT COMPARABLE ACROSS SOURCES — CoJ municipal aerial, GEHI / full-stack "
+    "satellite, and Vexcel frames differ in GSD and in apparent house size (undiagnosed, "
+    "handoff §4). Judge PV present/absent within each frame; do NOT compare panel size or "
+    "area across rows."
+)
+
 #: confirm() dialog fragment shown at export time when a SHIFT verdict has an
 #: empty corrected bracket (ISSUE-11 needs the corrected interval for every
 #: SHIFT record). Embedded verbatim into the client JS below; grepped by the
 #: structural test so the guard can't silently regress.
 SHIFT_MISSING_BRACKET_CONFIRM_TEXT = "SHIFT verdict(s) missing corrected bracket"
 
+#: confirm() dialog fragment shown at export time when a `heater_swap` SHIFT
+#: verdict has an empty `dwelling_context` (the villa-hypothesis test consumes
+#: dwelling on exactly the heater_swap cases). Soft-required only — the guard is
+#: cancellable, mirroring the empty-bracket guard. Grepped by the structural test.
+HEATER_SWAP_MISSING_DWELLING_CONFIRM_TEXT = "heater_swap SHIFT verdict(s) missing dwelling_context"
+
+
+def _select_options_html(values: tuple[str, ...] | list[str], default: str) -> str:
+    """Render `<option>`s for a codebook `<select>`; `default` gets `selected`.
+
+    An empty value renders the placeholder glyph ``—`` (used for the unset
+    dwelling_context option) so the annotator sees an explicit "not chosen" slot.
+    """
+    out: list[str] = []
+    for v in values:
+        sel = " selected" if v == default else ""
+        label = v if v else "—"
+        out.append(f"<option value='{html.escape(v)}'{sel}>{html.escape(label)}</option>")
+    return "".join(out)
+
+
+def _chip_figures_html(display) -> str:
+    """Render a row of ``<figure class='chip'>`` cells from ``[(frame, url, caption)]``."""
+    chips = []
+    for _fi, data_url, caption in display:
+        chips.append(
+            "<figure class='chip'>"
+            f"<img src='{data_url}' alt='{html.escape(caption)}' />"
+            f"<figcaption>{html.escape(caption)}</figcaption>"
+            "</figure>"
+        )
+    return "".join(chips)
+
+
+def _fullstack_row_html(fullstack_display, off_roof_marker: bool = False) -> str:
+    """The dispute full-stack second row (WI-3) — presence-gated, visually distinct.
+
+    Empty string when there are no recovered full-stack frames (the non-dispute path),
+    so a strip with no ``fsarm_`` chip is byte-identical to today. When present, renders
+    the row label + the cross-source scale-caveat banner + a **separate**
+    ``<div class='chip-strip fullstack'>`` (its own container because ``.chip-strip`` has
+    no ``flex-wrap``). ``off_roof_marker`` appends the geometry-verify note to the label.
+    """
+    if not fullstack_display:
+        return ""
+    label = FULLSTACK_ROW_LABEL
+    if off_roof_marker:
+        label += " · off-roof marker — verify geometry"
+    return (
+        f"<div class='fullstack-label'>{html.escape(label)}</div>"
+        f"<div class='scale-caveat'>{html.escape(SCALE_CAVEAT_TEXT)}</div>"
+        f"<div class='chip-strip fullstack'>{_chip_figures_html(fullstack_display)}</div>"
+    )
+
 
 def render_anchor_section(
-    row: dict[str, str], display, frames, strip_hash: str, *, undatable: bool = False
+    row: dict[str, str],
+    display,
+    frames,
+    strip_hash: str,
+    *,
+    undatable: bool = False,
+    fullstack_display=None,
+    off_roof_marker: bool = False,
 ) -> str:
     anchor_id = row.get("anchor_id", "")
-    forced = _bool(row.get("is_dispute_forced", ""))
     overlap = _bool(row.get("is_overlap", ""))
     pip_start = row.get("pipeline_interval_start", "")
     pip_end = row.get("pipeline_interval_end", "")
 
+    # NOTE: no visible dispute badge (owner-bias policy, handoff §0.3) — the annotator
+    # must not see which anchors are forced disputes. ``dispute_target_ids`` still rides
+    # in the JS CONTEXT / exported manifest for ISSUE-11's post-hoc dispute attribution.
     badges = [
         f"<span class='badge'>{html.escape(row.get('stratum', ''))}</span>",
         f"<span class='badge status'>{html.escape(row.get('terminal_status', ''))}</span>",
@@ -301,20 +523,10 @@ def render_anchor_section(
         badges.append("<span class='badge contra'>contradiction</span>")
     if overlap:
         badges.append("<span class='badge overlap'>overlap</span>")
-    if forced:
-        tids = html.escape(row.get("dispute_target_ids", ""))
-        badges.append(f"<span class='badge dispute'>dispute {tids}</span>")
     if undatable:
         badges.append("<span class='badge undatable'>UNDATABLE</span>")
 
-    chips = []
-    for _fi, data_url, caption in display:
-        chips.append(
-            "<figure class='chip'>"
-            f"<img src='{data_url}' alt='{html.escape(caption)}' />"
-            f"<figcaption>{html.escape(caption)}</figcaption>"
-            "</figure>"
-        )
+    chips = _chip_figures_html(display)
 
     banner = (
         f"<div class='undatable-banner'>{html.escape(UNDATABLE_BANNER_TEXT)}</div>"
@@ -334,7 +546,8 @@ def render_anchor_section(
         f"{banner}"
         f"<div class='pipeline muted'>pipeline bracket = [{html.escape(pip_start)}, "
         f"{html.escape(pip_end)}]</div>"
-        f"<div class='chip-strip'>{''.join(chips)}</div>"
+        f"<div class='chip-strip'>{chips}</div>"
+        f"{_fullstack_row_html(fullstack_display, off_roof_marker)}"
         "<div class='verdict-controls'>"
         f"<button class='vbtn' data-verdict='CONFIRM'>CONFIRM <kbd>1</kbd></button>"
         f"<button class='vbtn' data-verdict='SHIFT'>SHIFT <kbd>2</kbd></button>"
@@ -346,6 +559,10 @@ def render_anchor_section(
         "<input type='date' data-corrected='start' /></label>"
         "<label>corrected end "
         "<input type='date' data-corrected='end' /></label>"
+        "<label>shift reason "
+        f"<select class='shift-reason' data-shift-reason>{_select_options_html(SHIFT_REASONS, 'date_correction')}</select></label>"
+        "<label>dwelling "
+        f"<select class='dwelling-context' data-dwelling-context>{_select_options_html(('',) + tuple(DWELLING_CONTEXTS), '')}</select></label>"
         "</div>"
         "<div class='notes-row'>"
         "<input type='text' class='notes' placeholder='notes (optional)' /></div>"
@@ -387,6 +604,11 @@ body{margin:0;background:var(--bg);color:var(--text);
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .pipeline{padding:6px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .chip-strip{display:flex;gap:8px;overflow-x:auto;padding:4px 10px 8px}
+.chip-strip.fullstack{border-left:3px solid var(--amber);margin:0 10px 4px;padding-left:8px}
+.fullstack-label{padding:8px 10px 2px;color:var(--amber);font-weight:700;font-size:12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2px}
+.scale-caveat{margin:2px 10px 6px;padding:6px 8px;background:#3b2f0e;border:1px solid var(--amber);
+  border-radius:5px;color:#f0c674;font-size:11px;line-height:1.35}
 .chip{margin:0;border:2px solid var(--line);border-radius:5px;padding:4px;background:#0d1117;
   min-width:160px;max-width:220px}
 .chip img{width:100%;height:auto;aspect-ratio:1/1;object-fit:cover;display:block;border-radius:3px;background:#000}
@@ -401,7 +623,7 @@ body{margin:0;background:var(--bg);color:var(--text);
 .vbtn.sel[data-verdict=UNDATABLE]{background:#3d1f1f;border-color:var(--red)}
 .verdict-state{margin-left:6px}
 .shift-bracket{padding:0 10px 8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-.shift-bracket input{background:#0d1117;color:var(--text);border:1px solid var(--line);
+.shift-bracket input,.shift-bracket select{background:#0d1117;color:var(--text);border:1px solid var(--line);
   border-radius:5px;padding:4px 6px}
 .notes-row{padding:0 10px 10px}
 .notes{width:100%;background:#0d1117;color:var(--text);border:1px solid var(--line);
@@ -410,14 +632,15 @@ body{margin:0;background:var(--bg);color:var(--text);
 """
 
 
-def _client_js(batch_id: str, annotator_id: str, context: dict) -> str:
+def _client_js(batch_id: str, annotator_id: str, context: dict, page_suffix: str = "") -> str:
     ctx_json = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
     return (
         "<script>\n"
         f"const CONTEXT = {ctx_json};\n"
         f"const BATCH = {json.dumps(batch_id)};\n"
         f"const ANNOTATOR = {json.dumps(annotator_id)};\n"
-        "const LS_KEY = 'goldset_verdicts_' + BATCH + '_' + ANNOTATOR;\n"
+        f"const PAGE_SUFFIX = {json.dumps(page_suffix)};\n"
+        "const LS_KEY = 'goldset_verdicts_' + BATCH + '_' + ANNOTATOR + PAGE_SUFFIX;\n"
         "const VERDICTS = ['CONFIRM','SHIFT','UNDATABLE'];\n"
         "function nowIso(){return new Date().toISOString().replace(/\\.\\d+Z$/,'Z');}\n"
         "let state = {};\n"
@@ -425,7 +648,7 @@ def _client_js(batch_id: str, annotator_id: str, context: dict) -> str:
         "let current = null;\n"
         "function saveLS(){try{localStorage.setItem(LS_KEY, JSON.stringify(state));}catch(e){}}\n"
         "function ensureRec(id){if(!state[id]){state[id]={verdict:'',corrected_interval_start:'',"
-        "corrected_interval_end:'',notes:'',opened_ts_utc:'',submitted_ts_utc:'',"
+        "corrected_interval_end:'',shift_reason:'',dwelling_context:'',notes:'',opened_ts_utc:'',submitted_ts_utc:'',"
         "adjudication_seconds:0};}return state[id];}\n"
         "function markOpened(id){const r=ensureRec(id);if(!r.opened_ts_utc){r.opened_ts_utc=nowIso();saveLS();}}\n"
         "function setCurrent(el){document.querySelectorAll('.anchor.current').forEach(a=>a.classList.remove('current'));"
@@ -438,6 +661,8 @@ def _client_js(batch_id: str, annotator_id: str, context: dict) -> str:
         "shift.hidden = (r.verdict!=='SHIFT');"
         "el.querySelector('[data-corrected=start]').value=r.corrected_interval_start||'';"
         "el.querySelector('[data-corrected=end]').value=r.corrected_interval_end||'';"
+        "const srSel=el.querySelector('[data-shift-reason]');if(srSel)srSel.value=r.shift_reason||'date_correction';"
+        "const dcSel=el.querySelector('[data-dwelling-context]');if(dcSel)dcSel.value=r.dwelling_context||'';"
         "if(notes)notes.value=r.notes||'';"
         "el.classList.toggle('answered', !!r.verdict);"
         "st.textContent = r.verdict ? (r.verdict+' · '+(r.adjudication_seconds||0).toFixed(1)+'s') : '';}\n"
@@ -453,6 +678,10 @@ def _client_js(batch_id: str, annotator_id: str, context: dict) -> str:
         "const r=ensureRec(el.dataset.anchorId);"
         "if(inp.dataset.corrected==='start')r.corrected_interval_start=inp.value;"
         "else r.corrected_interval_end=inp.value;saveLS();}));\n"
+        "  el.querySelectorAll('[data-shift-reason]').forEach(sel=>sel.addEventListener('change',()=>{"
+        "ensureRec(el.dataset.anchorId).shift_reason=sel.value;saveLS();}));\n"
+        "  el.querySelectorAll('[data-dwelling-context]').forEach(sel=>sel.addEventListener('change',()=>{"
+        "ensureRec(el.dataset.anchorId).dwelling_context=sel.value;saveLS();}));\n"
         "  const notes=el.querySelector('.notes');if(notes)notes.addEventListener('change',()=>{"
         "ensureRec(el.dataset.anchorId).notes=notes.value;saveLS();});\n"
         "  applyRec(el);\n"
@@ -472,6 +701,8 @@ def _client_js(batch_id: str, annotator_id: str, context: dict) -> str:
         "verdicts.push(Object.assign({}, CONTEXT[id], {verdict:r.verdict,"
         "corrected_interval_start:r.verdict==='SHIFT'?(r.corrected_interval_start||''):'',"
         "corrected_interval_end:r.verdict==='SHIFT'?(r.corrected_interval_end||''):'',"
+        "shift_reason:r.verdict==='SHIFT'?(r.shift_reason||'date_correction'):'',"
+        "dwelling_context:r.verdict==='SHIFT'?(r.dwelling_context||''):'',"
         "notes:r.notes||'',opened_ts_utc:r.opened_ts_utc||'',submitted_ts_utc:r.submitted_ts_utc||'',"
         "adjudication_seconds:r.adjudication_seconds||0}));}"
         "return {schema_version:1,sample_batch_id:BATCH,annotator_id:ANNOTATOR,"
@@ -484,14 +715,21 @@ def _client_js(batch_id: str, annotator_id: str, context: dict) -> str:
         f"const msg=missing.length+' {SHIFT_MISSING_BRACKET_CONFIRM_TEXT}: '+missing.join(', ')+'. Export anyway?';"
         "if(!confirm(msg))return;"
         "}"
+        "const missingDwelling=manifest.verdicts.filter(v=>v.verdict==='SHIFT'&&"
+        "v.shift_reason==='heater_swap'&&!v.dwelling_context).map(v=>v.anchor_id);"
+        "if(missingDwelling.length){"
+        f"const msg2=missingDwelling.length+' {HEATER_SWAP_MISSING_DWELLING_CONFIRM_TEXT}: '+missingDwelling.join(', ')+'. Export anyway?';"
+        "if(!confirm(msg2))return;"
+        "}"
         "const blob=new Blob([JSON.stringify(manifest,null,2)],{type:'application/json'});"
         "const a=document.createElement('a');a.href=URL.createObjectURL(blob);"
-        "a.download='verdicts_'+BATCH+'_'+ANNOTATOR+'.json';a.click();URL.revokeObjectURL(a.href);});\n"
+        "a.download='verdicts_'+BATCH+'_'+ANNOTATOR+PAGE_SUFFIX+'.json';a.click();URL.revokeObjectURL(a.href);});\n"
         "document.getElementById('import-input').addEventListener('change',ev=>{"
         "const f=ev.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{"
         "try{const m=JSON.parse(rd.result);(m.verdicts||[]).forEach(v=>{const r=ensureRec(v.anchor_id);"
         "r.verdict=v.verdict||'';r.corrected_interval_start=v.corrected_interval_start||'';"
-        "r.corrected_interval_end=v.corrected_interval_end||'';r.notes=v.notes||'';"
+        "r.corrected_interval_end=v.corrected_interval_end||'';"
+        "r.shift_reason=v.shift_reason||'';r.dwelling_context=v.dwelling_context||'';r.notes=v.notes||'';"
         "r.opened_ts_utc=v.opened_ts_utc||'';r.submitted_ts_utc=v.submitted_ts_utc||'';"
         "r.adjudication_seconds=v.adjudication_seconds||0;});saveLS();"
         "document.querySelectorAll('.anchor').forEach(applyRec);}catch(e){alert('import failed: '+e);}};"
@@ -500,7 +738,13 @@ def _client_js(batch_id: str, annotator_id: str, context: dict) -> str:
     )
 
 
-def render_page(batch_id: str, annotator_id: str, sections_html: list[str], context: dict) -> str:
+def render_page(
+    batch_id: str,
+    annotator_id: str,
+    sections_html: list[str],
+    context: dict,
+    page_suffix: str = "",
+) -> str:
     head = (
         "<div class='page-head'>"
         f"<h1>Gold-set jump review</h1>"
@@ -519,7 +763,7 @@ def render_page(batch_id: str, annotator_id: str, sections_html: list[str], cont
         f"<title>Gold-set jump review — {html.escape(batch_id)}/{html.escape(annotator_id)}</title>"
         f"<style>{CSS}</style></head><body>"
         f"{head}{body}"
-        f"{_client_js(batch_id, annotator_id, context)}"
+        f"{_client_js(batch_id, annotator_id, context, page_suffix)}"
         "</body></html>"
     )
 
@@ -547,6 +791,10 @@ def _context_entry(row: dict[str, str], frames: list[FrameIdentity], strip_hash:
         "sampler_seed": seed_val,
         "sample_batch_id": row.get("sample_batch_id", ""),
         "strip_content_hash": strip_hash,
+        # SHIFT-only codebook defaults; buildManifest overrides for SHIFT verdicts,
+        # so CONFIRM/UNDATABLE keep "" and the villa-hypothesis join stays exact.
+        "shift_reason": "",
+        "dwelling_context": "",
         "frames": [
             {
                 "source": f.source,
@@ -566,10 +814,18 @@ def build_group_html(
     scan_states_dir: Path,
     rerender_dir: Path | None,
     thumbnail_size: int,
+    page_suffix: str = "",
 ) -> str:
-    """Render one annotator's strip page from their assignment rows."""
+    """Render one annotator's strip page from their assignment rows.
+
+    ``page_suffix`` (e.g. ``_p01``) is threaded only into the client JS
+    ``LS_KEY`` + export download filename for ``--page-size`` chunking; it never
+    touches ``sample_batch_id`` (chunks of one batch must share the true tag so
+    ISSUE-11 concatenates them). Default ``""`` == today's single-file behavior.
+    """
     batch_id = rows[0].get("sample_batch_id", "")
     annotator_id = rows[0].get("annotator_id", "")
+    fullstack_sidecar = load_fullstack_sidecar(rerender_dir)
     sections: list[str] = []
     context: dict = {}
     for row in rows:
@@ -577,12 +833,18 @@ def build_group_html(
         state_path = row.get("scan_state_path", "") or str(scan_states_dir / f"{anchor_id}.json")
         state = load_scan_state(Path(state_path)) if Path(state_path).exists() else None
         chip_dir = _anchor_chip_dir(rerender_dir, anchor_id)
-        frames, display = build_anchor_frames(state, chip_dir, thumbnail_size)
+        sidecar_rows = fullstack_sidecar.get(anchor_id, [])
+        frames, display, fullstack_display, off_roof = build_anchor_frames(
+            state, chip_dir, thumbnail_size, sidecar_rows=sidecar_rows
+        )
         strip_hash = frame_content_hash(frames)
-        undatable = anchor_is_undatable(state)
-        sections.append(render_anchor_section(row, display, frames, strip_hash, undatable=undatable))
+        undatable = anchor_is_undatable(state, chip_dir)
+        sections.append(render_anchor_section(
+            row, display, frames, strip_hash, undatable=undatable,
+            fullstack_display=fullstack_display, off_roof_marker=off_roof,
+        ))
         context[anchor_id] = _context_entry(row, frames, strip_hash)
-    return render_page(batch_id, annotator_id, sections, context)
+    return render_page(batch_id, annotator_id, sections, context, page_suffix)
 
 
 # ---------------------------------------------------------------------------
@@ -598,15 +860,19 @@ BUILDER_REPORT_FIELDS: tuple[str, ...] = (
 
 
 def collect_undatable_anchors(
-    rows: list[dict[str, str]], scan_states_dir: Path
+    rows: list[dict[str, str]], scan_states_dir: Path, rerender_dir: Path | None = None
 ) -> list[dict[str, str]]:
-    """Unique anchors whose strip has no usable jump-window frame.
+    """Unique anchors whose strip has no usable frame — production AND full-stack.
 
     Deduped by ``anchor_id`` (assignments carry two annotator rows per anchor).
-    Reason distinguishes a missing/unloadable scan_state from a loadable-but-
-    degenerate one (no usable dated rounds). Purely diagnostic — it surfaces the
-    UNDATABLE candidates for ISSUE-11 completeness accounting and does NOT decide
-    adjudication policy.
+    Consults the same full-stack rescue as ``anchor_is_undatable``: when
+    ``rerender_dir`` is given, an anchor stays UNDATABLE only if the production window
+    is empty **and** no ``fsarm_`` chip was recovered, and the reason gains the
+    ``_no_fullstack`` suffix (``no_scan_state_no_fullstack`` /
+    ``no_usable_dated_rounds_no_fullstack``) to record that the dispute second row is
+    also empty. With ``rerender_dir=None`` the original production-only reasons stand.
+    Purely diagnostic — surfaces the UNDATABLE candidates for ISSUE-11 completeness
+    accounting; does NOT decide adjudication policy.
     """
     out: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -617,15 +883,18 @@ def collect_undatable_anchors(
         seen.add(anchor_id)
         state_path = row.get("scan_state_path", "") or str(scan_states_dir / f"{anchor_id}.json")
         state = load_scan_state(Path(state_path)) if Path(state_path).exists() else None
-        if not anchor_is_undatable(state):
+        chip_dir = _anchor_chip_dir(rerender_dir, anchor_id)
+        if not anchor_is_undatable(state, chip_dir):
             continue
+        base = "no_scan_state" if state is None else "no_usable_dated_rounds"
+        reason = base + ("_no_fullstack" if rerender_dir is not None else "")
         out.append(
             {
                 "anchor_id": anchor_id,
                 "sample_batch_id": row.get("sample_batch_id", ""),
                 "is_dispute_forced": row.get("is_dispute_forced", ""),
                 "dispute_target_ids": row.get("dispute_target_ids", ""),
-                "reason": "no_scan_state" if state is None else "no_usable_dated_rounds",
+                "reason": reason,
             }
         )
     return out
@@ -669,6 +938,8 @@ def _record_from_export(entry: dict) -> VerdictRecord:
         pipeline_interval_end=entry.get("pipeline_interval_end", ""),
         corrected_interval_start=entry.get("corrected_interval_start", "") or "",
         corrected_interval_end=entry.get("corrected_interval_end", "") or "",
+        shift_reason=entry.get("shift_reason", "") or "",
+        dwelling_context=entry.get("dwelling_context", "") or "",
         annotator_id=entry.get("annotator_id", ""),
         is_overlap=bool(entry.get("is_overlap", False)),
         is_dispute_forced=bool(entry.get("is_dispute_forced", False)),
@@ -717,6 +988,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output-dir", type=Path, default=None,
                    help="Override output dir for the strip HTML pages.")
     p.add_argument("--thumbnail-size", type=int, default=THUMBNAIL_SIZE)
+    p.add_argument("--page-size", type=int, default=0,
+                   help="Max anchors per HTML page (0 = unlimited = one file per "
+                        "annotator, today's behavior). N>0 slices each annotator's "
+                        "anchors into <=N-anchor pages named verdicts_<batch>_<ann>_pNN.html; "
+                        "the manifest's sample_batch_id stays the true tag so ISSUE-11 "
+                        "concatenates the chunks into one batch.")
     return p.parse_args(argv)
 
 
@@ -743,17 +1020,28 @@ def main(argv: list[str] | None = None) -> None:
         key = (row.get("sample_batch_id", ""), row.get("annotator_id", ""))
         groups.setdefault(key, []).append(row)
 
+    page_size = args.page_size if args.page_size and args.page_size > 0 else 0
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for (batch_id, annotator_id), grp in sorted(groups.items()):
-        page = build_group_html(grp, args.scan_states_dir, args.rerender_dir, args.thumbnail_size)
-        out_path = out_dir / f"verdicts_{batch_id}_{annotator_id}.html"
-        out_path.write_text(page, encoding="utf-8")
-        written.append(out_path)
-        print(f"Wrote strip page ({len(grp)} anchors) -> {out_path} "
-              f"({out_path.stat().st_size / 1024:.1f} KB)")
+        chunks = (
+            [grp[i:i + page_size] for i in range(0, len(grp), page_size)]
+            if page_size
+            else [grp]
+        )
+        for idx, chunk in enumerate(chunks, start=1):
+            page_suffix = f"_p{idx:02d}" if page_size else ""
+            page = build_group_html(
+                chunk, args.scan_states_dir, args.rerender_dir, args.thumbnail_size,
+                page_suffix=page_suffix,
+            )
+            out_path = out_dir / f"verdicts_{batch_id}_{annotator_id}{page_suffix}.html"
+            out_path.write_text(page, encoding="utf-8")
+            written.append(out_path)
+            print(f"Wrote strip page ({len(chunk)} anchors) -> {out_path} "
+                  f"({out_path.stat().st_size / 1024:.1f} KB)")
 
-    undatable = collect_undatable_anchors(rows, args.scan_states_dir)
+    undatable = collect_undatable_anchors(rows, args.scan_states_dir, args.rerender_dir)
     report_path = out_dir / "builder_report.csv"
     write_builder_report(undatable, report_path)
     if undatable:

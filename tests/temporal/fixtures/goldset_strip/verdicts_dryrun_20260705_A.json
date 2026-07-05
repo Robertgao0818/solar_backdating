@@ -1,0 +1,683 @@
+{
+  "schema_version": 1,
+  "sample_batch_id": "dryrun_20260705",
+  "annotator_id": "A",
+  "exported_ts_utc": "2026-07-05T04:57:23Z",
+  "verdicts": [
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003573",
+      "grid_id": "JNB0265",
+      "stratum": "done_appears_x_high_x_False",
+      "terminal_status": "done_appears",
+      "confidence": "high",
+      "any_contradiction": "False",
+      "pipeline_interval_start": "2019-01-30",
+      "pipeline_interval_end": "2019-04-30",
+      "annotator_id": "A",
+      "is_overlap": false,
+      "is_dispute_forced": false,
+      "dispute_target_ids": [],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "aed9270a90fd4e58a1ddb54f8449c17714c0b73f4de6b7594122c31d74a6f765",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2018-06-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003573/scan_2018-06-30_v277.png",
+          "chip_sha256": "528f03949017fa79710bb2bb9e1e21b978294c2c30ad0f8eb14d2005ac76e0d6"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2018-12-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003573/scan_2018-12-30_v277.png",
+          "chip_sha256": "1a1c86cbf98adbd23a7ad1c3f8609932108307f0153ea8038b9b6febcf52f54a"
+        },
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2019-01-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003573/scan_2019-01-30_v277.png",
+          "chip_sha256": "9b780a1d3b39859130eeef1d0d22375504e401a06a08c688d2b1d86961e529a6"
+        },
+        {
+          "source": "scan_tm",
+          "role": "earliest_present",
+          "capture_date": "2019-04-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003573/scan_2019-04-30_v277.png",
+          "chip_sha256": "a7f68a54883c7022b288545ab236a4a9d5cf81d9401bedf4a33c0717fee8558b"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_after",
+          "capture_date": "2019-05-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003573/scan_2019-05-30_v277.png",
+          "chip_sha256": "1fd7aed9c12836687a515a2aef80b7acedc306b86a4a45cbc507055dfd8ba255"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_after",
+          "capture_date": "2019-06-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003573/scan_2019-06-30_v277.png",
+          "chip_sha256": "454c906eec96b5a1c7d09acebe49846a9fa20d6c74cd20afdc352455514e16d7"
+        },
+        {
+          "source": "coj_2023",
+          "role": "reference",
+          "capture_date": "",
+          "version": null,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003573/coj_2023.png",
+          "chip_sha256": "0eda6bc3f6e1c6028e7765fe8a89211430f3422fb254152e00fc4a348867cb16"
+        }
+      ],
+      "verdict": "CONFIRM",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:42:35Z",
+      "submitted_ts_utc": "2026-07-05T04:55:56Z",
+      "adjudication_seconds": 801
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003811",
+      "grid_id": "JNB0258",
+      "stratum": "done_appears_x_high_x_False",
+      "terminal_status": "done_appears",
+      "confidence": "high",
+      "any_contradiction": "False",
+      "pipeline_interval_start": "2020-07-30",
+      "pipeline_interval_end": "2020-08-30",
+      "annotator_id": "A",
+      "is_overlap": false,
+      "is_dispute_forced": false,
+      "dispute_target_ids": [],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "aaa7d45deffd86a12fbf6232f38fd870f6671794f391ce0f054aad920abdb894",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2020-05-31",
+          "version": 296,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003811/scan_2020-05-31_v296.png",
+          "chip_sha256": "0360b51a7ba6604b5509bc405ecda46a35439f0b17428430843911f05f29519e"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2020-06-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003811/scan_2020-06-30_v277.png",
+          "chip_sha256": "0aeb43ae1a28918cf4695414ad8faa05e5ed739ff2294b142f6a83c06686a8e7"
+        },
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2020-07-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003811/scan_2020-07-30_v277.png",
+          "chip_sha256": "4f19019fa00c7917f1fe2974c2e51da8c7e23608c7442196e2d522a8c015f13f"
+        },
+        {
+          "source": "scan_tm",
+          "role": "earliest_present",
+          "capture_date": "2020-08-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003811/scan_2020-08-30_v277.png",
+          "chip_sha256": "bf8f185fb63a3ec8c1e827d309f554bdfcf5ddb33f4ab84b4b65a77c12730648"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_after",
+          "capture_date": "2020-09-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003811/scan_2020-09-30_v277.png",
+          "chip_sha256": "9cef5ae54efafa765bf9d6c18ba8439622387f9cd6777dfba2604f64072dc8e8"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_after",
+          "capture_date": "2021-03-31",
+          "version": 274,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003811/scan_2021-03-31_v274.png",
+          "chip_sha256": "f4c2dcd68d1f15893600f3da7038132b990d64ae02bbe87fced50ba0ac24a774"
+        },
+        {
+          "source": "coj_2023",
+          "role": "reference",
+          "capture_date": "",
+          "version": null,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0003811/coj_2023.png",
+          "chip_sha256": "65b3c990afeb8a1e5d933c340c0b3af45f217e97ac0578e2d20edc5353196de4"
+        }
+      ],
+      "verdict": "CONFIRM",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:42:35Z",
+      "submitted_ts_utc": "2026-07-05T04:56:04Z",
+      "adjudication_seconds": 809
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0005213",
+      "grid_id": "JNB0151",
+      "stratum": "done_appears_x_medium_x_False",
+      "terminal_status": "done_appears",
+      "confidence": "medium",
+      "any_contradiction": "False",
+      "pipeline_interval_start": "2022-07-30",
+      "pipeline_interval_end": "2024-04-19",
+      "annotator_id": "A",
+      "is_overlap": false,
+      "is_dispute_forced": false,
+      "dispute_target_ids": [],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "9ac6b1be27785e17fde4e85e23875d0241379ebe7c75925831640531159ddbbe",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2019-03-30",
+          "version": 296,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0005213/scan_2019-03-30_v296.png",
+          "chip_sha256": "1e4d5e94706c04dba0dfb2fe46e7247fdbff20e49c011cbd950743891f186724"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2020-05-31",
+          "version": 296,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0005213/scan_2020-05-31_v296.png",
+          "chip_sha256": "6707b091a7d8f49a638ce48833d5603cf319940fd43d2d1a49f74fbdb752331d"
+        },
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2022-07-30",
+          "version": 318,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0005213/scan_2022-07-30_v318.png",
+          "chip_sha256": "b3ecf201bb731cd6a582edc2720e0b73793ce665647ab5f459b9b816352a7d47"
+        },
+        {
+          "source": "scan_tm",
+          "role": "earliest_present",
+          "capture_date": "2025-05-30",
+          "version": 366,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0005213/scan_2025-05-30_v366.png",
+          "chip_sha256": "b57401675a85f1caf784afacaed6684261c2bc367efaf36743205f9f9c6d9a5a"
+        },
+        {
+          "source": "coj_2023",
+          "role": "reference",
+          "capture_date": "",
+          "version": null,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0005213/coj_2023.png",
+          "chip_sha256": "482767c9404b5701a65b27556e8e025667f65e15af3b4a796c12de3230f17d2e"
+        }
+      ],
+      "verdict": "CONFIRM",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:56:01Z",
+      "submitted_ts_utc": "2026-07-05T04:56:13Z",
+      "adjudication_seconds": 12
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0009873",
+      "grid_id": "JNB0077",
+      "stratum": "done_ambiguous_no_recent_anchor_x_low",
+      "terminal_status": "done_ambiguous_no_recent_anchor",
+      "confidence": "low",
+      "any_contradiction": "",
+      "pipeline_interval_start": "",
+      "pipeline_interval_end": "",
+      "annotator_id": "A",
+      "is_overlap": false,
+      "is_dispute_forced": false,
+      "dispute_target_ids": [],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "frames": [],
+      "verdict": "UNDATABLE",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:56:05Z",
+      "submitted_ts_utc": "2026-07-05T04:56:15Z",
+      "adjudication_seconds": 10
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0013445",
+      "grid_id": "JNB0046",
+      "stratum": "done_appears_x_medium_x_False",
+      "terminal_status": "done_appears",
+      "confidence": "medium",
+      "any_contradiction": "False",
+      "pipeline_interval_start": "2022-10-30",
+      "pipeline_interval_end": "2024-02-21",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": false,
+      "dispute_target_ids": [],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "f7eb66a65685422078f0e9c331e54b924be10d863e0c012d7927dfc04d3c7ff6",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2022-04-30",
+          "version": 342,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0013445/scan_2022-04-30_v342.png",
+          "chip_sha256": "f8c3842c98e0f72d2c0f1c3d5aee36fa611a06166838b73b5ecde476d3d0361e"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2022-08-30",
+          "version": 343,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0013445/scan_2022-08-30_v343.png",
+          "chip_sha256": "94174cea7feb098fa97447a862727afe9daebd3e38d7059bf4e425c4a7da81ae"
+        },
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2022-10-30",
+          "version": 337,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0013445/scan_2022-10-30_v337.png",
+          "chip_sha256": "ce969f028dd00621a50c3c0b083f2ef359a1dc02843b3d60d53599616c492e8a"
+        },
+        {
+          "source": "scan_tm",
+          "role": "earliest_present",
+          "capture_date": "2024-02-29",
+          "version": 361,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0013445/scan_2024-02-29_v361.png",
+          "chip_sha256": "86ddae6ed0ccf6392c24ecfcf1208612788dd201c6fe8725194088f96f01f7fa"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_after",
+          "capture_date": "2025-03-30",
+          "version": 363,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0013445/scan_2025-03-30_v363.png",
+          "chip_sha256": "aab6c6bc50eefd5f6b36aa803c1d0db12c416f87472c2b9668b8f65040b2ffb8"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_after",
+          "capture_date": "2025-05-30",
+          "version": 1029,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0013445/scan_2025-05-30_v1029.png",
+          "chip_sha256": "237bfdf198af7541bf123dc1e9c64a3c5d49e7e02a281e2012b2b9fdee15e53e"
+        },
+        {
+          "source": "coj_2023",
+          "role": "reference",
+          "capture_date": "",
+          "version": null,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0013445/coj_2023.png",
+          "chip_sha256": "554eb103da1d412bcbf569cf0dc2baa4bcf04dd14f82a6d8169eb1a3e3ae0852"
+        }
+      ],
+      "verdict": "SHIFT",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:56:14Z",
+      "submitted_ts_utc": "2026-07-05T04:56:34Z",
+      "adjudication_seconds": 20
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0015480",
+      "grid_id": "JNB0020",
+      "stratum": "done_appears_x_medium_x_False",
+      "terminal_status": "done_appears",
+      "confidence": "medium",
+      "any_contradiction": "False",
+      "pipeline_interval_start": "2022-10-30",
+      "pipeline_interval_end": "2024-02-17",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": false,
+      "dispute_target_ids": [],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "c57371a9dd8fc837b7307431f5fe76c5a14cc7660b1c06c8f50a613d0a551698",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2021-10-30",
+          "version": 288,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0015480/scan_2021-10-30_v288.png",
+          "chip_sha256": "5a7b98a87aa006409043b54f2827cb1411950fcc4e1dd6ca47edc9a3783f0cb3"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2022-03-30",
+          "version": 342,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0015480/scan_2022-03-30_v342.png",
+          "chip_sha256": "43f441479d52b3c3684ae2a250f5db1f4c3824618740a6a1abfdad35adee388b"
+        },
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2022-10-30",
+          "version": 318,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0015480/scan_2022-10-30_v318.png",
+          "chip_sha256": "544ddfb7e282b3b0888a37a07903a64b9388aaedb50c4ead7db67aea5cb45c6a"
+        },
+        {
+          "source": "scan_tm",
+          "role": "earliest_present",
+          "capture_date": "2024-03-30",
+          "version": 359,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0015480/scan_2024-03-30_v359.png",
+          "chip_sha256": "c58bcbaae8d28e7d8955f27c10dbff9649aec9b329fdf5767fd75510270a1828"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_after",
+          "capture_date": "2025-03-30",
+          "version": 366,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0015480/scan_2025-03-30_v366.png",
+          "chip_sha256": "81be4d2855e7762ca4a9ee626fa5d669800b0becfe7b0a656ec58ed68b1604fb"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_after",
+          "capture_date": "2025-05-30",
+          "version": 1029,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0015480/scan_2025-05-30_v1029.png",
+          "chip_sha256": "25680c832f513dfd259d5f1a4f1983f89440962779dede17a853ae2c85bf96d9"
+        },
+        {
+          "source": "coj_2023",
+          "role": "reference",
+          "capture_date": "",
+          "version": null,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0015480/coj_2023.png",
+          "chip_sha256": "c1eff8dd5c1ddd800c11d5955ac4053c1e253b0ad2d7e26ab2b53385543d2215"
+        }
+      ],
+      "verdict": "CONFIRM",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:56:16Z",
+      "submitted_ts_utc": "2026-07-05T04:56:43Z",
+      "adjudication_seconds": 27
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0000542",
+      "grid_id": "JNB0358",
+      "stratum": "done_ambiguous_no_recent_anchor_x_low",
+      "terminal_status": "done_ambiguous_no_recent_anchor",
+      "confidence": "low",
+      "any_contradiction": "",
+      "pipeline_interval_start": "",
+      "pipeline_interval_end": "",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": true,
+      "dispute_target_ids": [
+        "t00036959"
+      ],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "frames": [],
+      "verdict": "UNDATABLE",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:56:41Z",
+      "submitted_ts_utc": "2026-07-05T04:56:51Z",
+      "adjudication_seconds": 10
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0001985",
+      "grid_id": "JNB0319",
+      "stratum": "done_ambiguous_marker_missed_pv_x_low",
+      "terminal_status": "done_ambiguous_marker_missed_pv",
+      "confidence": "low",
+      "any_contradiction": "",
+      "pipeline_interval_start": "",
+      "pipeline_interval_end": "",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": true,
+      "dispute_target_ids": [
+        "t00034036",
+        "t00034038",
+        "t00034039"
+      ],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "ddd635ae44c494eb85f119bf9a856fd62be6c69a4a1fe12cc51e32a274560c26",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2025-05-30",
+          "version": 366,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0001985/scan_2025-05-30_v366.png",
+          "chip_sha256": "0da60cc0e967508495f8880dfe88564107057287c28f52364a259a44ecce41a0"
+        }
+      ],
+      "verdict": "UNDATABLE",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:56:44Z",
+      "submitted_ts_utc": "2026-07-05T04:56:54Z",
+      "adjudication_seconds": 10
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0009311",
+      "grid_id": "JNB0098",
+      "stratum": "done_ambiguous_marker_missed_pv_x_low",
+      "terminal_status": "done_ambiguous_marker_missed_pv",
+      "confidence": "low",
+      "any_contradiction": "",
+      "pipeline_interval_start": "",
+      "pipeline_interval_end": "",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": true,
+      "dispute_target_ids": [
+        "t00017105",
+        "t00017119"
+      ],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "8f9d164fd7c9c4a8f5258bfaa2d8a7a32b117fa7813b2056c13642c5a6fb5d4d",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2020-06-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0009311/scan_2020-06-30_v277.png",
+          "chip_sha256": "a6080fd91a974aadb9b4d08a448fc11060f61b0882c672b39d52a31cbca46df0"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2021-08-30",
+          "version": 279,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0009311/scan_2021-08-30_v279.png",
+          "chip_sha256": "d56b94b3eca97f35433d5b1efbe9d0e8833dc2dbf6abe0121d7fafb7c9987119"
+        },
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2025-05-30",
+          "version": 366,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0009311/scan_2025-05-30_v366.png",
+          "chip_sha256": "1067c5cf5bc97447febd59b75d4a969b785abfe1d3851a9f492d538374ca2510"
+        }
+      ],
+      "verdict": "UNDATABLE",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:56:52Z",
+      "submitted_ts_utc": "2026-07-05T04:57:04Z",
+      "adjudication_seconds": 12
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0009952",
+      "grid_id": "JNB0086",
+      "stratum": "done_ambiguous_gemini_failed_x_low",
+      "terminal_status": "done_ambiguous_gemini_failed",
+      "confidence": "low",
+      "any_contradiction": "",
+      "pipeline_interval_start": "",
+      "pipeline_interval_end": "",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": true,
+      "dispute_target_ids": [
+        "t00014386",
+        "t00014387",
+        "t00014388",
+        "t00014389"
+      ],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "5962c02cdffad42ee75d2553a6d8b0264153b5dfc916332324fd00553ea67e05",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2020-06-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0009952/scan_2020-06-30_v277.png",
+          "chip_sha256": "8071533a1c8bb4986ebbb2bb16e13d11604d172df70e23d5f432f067dfdb11ce"
+        }
+      ],
+      "verdict": "UNDATABLE",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:56:54Z",
+      "submitted_ts_utc": "2026-07-05T04:57:08Z",
+      "adjudication_seconds": 14
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0010052",
+      "grid_id": "JNB0083",
+      "stratum": "done_ambiguous_no_recent_anchor_x_low",
+      "terminal_status": "done_ambiguous_no_recent_anchor",
+      "confidence": "low",
+      "any_contradiction": "",
+      "pipeline_interval_start": "",
+      "pipeline_interval_end": "",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": true,
+      "dispute_target_ids": [
+        "t00013607"
+      ],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "0658c35973647036f3d7bc8414a090b29b7f7b3e496efa5ac192505bd0ea162d",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2019-08-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0010052/scan_2019-08-30_v277.png",
+          "chip_sha256": "adc5434a0e45221fef11ed740cf9a148d708557f311426c88972308bae0909bf"
+        },
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2020-07-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0010052/scan_2020-07-30_v277.png",
+          "chip_sha256": "76911d2ed61a22ba8d5255ff54ac1944d79d308f6b2ece2f8e563abc351f3a5d"
+        },
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2021-07-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0010052/scan_2021-07-30_v277.png",
+          "chip_sha256": "080b52aa828a2e05d9777dd91ea42d12b39aa747572f4440e94942c8893f387e"
+        }
+      ],
+      "verdict": "UNDATABLE",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:57:06Z",
+      "submitted_ts_utc": "2026-07-05T04:57:11Z",
+      "adjudication_seconds": 5
+    },
+    {
+      "anchor_id": "jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0010157",
+      "grid_id": "JNB0077",
+      "stratum": "done_ambiguous_gemini_failed_x_low",
+      "terminal_status": "done_ambiguous_gemini_failed",
+      "confidence": "low",
+      "any_contradiction": "",
+      "pipeline_interval_start": "",
+      "pipeline_interval_end": "",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": true,
+      "dispute_target_ids": [
+        "t00012135",
+        "t00012136",
+        "t00012142",
+        "t00012143"
+      ],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "dryrun_20260705",
+      "strip_content_hash": "8a51903aea6863164bf516d49adef79b40bd558b2e7fbd83b644dbabc0d5f2cc",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "flank_before",
+          "capture_date": "2019-07-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0010157/scan_2019-07-30_v277.png",
+          "chip_sha256": "8167e36598f7563d0777d0ca3770e4bce5f68020bc7093c716e19502b2f184af"
+        },
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2021-07-30",
+          "version": 277,
+          "chip_path": "/home/gaosh/zasolar_data/geid_temporal/goldset_dryrun_20260705/rerender/chips/jhb_full382_unified_a_merge01_c0925_fpcut_2026_06_01_c0010157/scan_2021-07-30_v277.png",
+          "chip_sha256": "f3f8cfcc73129160f98c42ac822a0221207d86f52a1cfc86d5dc935c8211c500"
+        }
+      ],
+      "verdict": "UNDATABLE",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "notes": "",
+      "opened_ts_utc": "2026-07-05T04:57:12Z",
+      "submitted_ts_utc": "2026-07-05T04:57:19Z",
+      "adjudication_seconds": 7
+    }
+  ]
+}

@@ -4,6 +4,14 @@ Status: ready-for-human
 Phase: 2 — Accuracy channel
 Blocked by: ISSUE-09, ISSUE-10
 
+> **Prep landed (2026-07-05, this commit):** verdict codebook (WI-1), villa oversample
+> knob (WI-2), and dispute full-stack frames (WI-3) are implemented with all ACs tested
+> (full suite green). Remaining before human adjudication: the **n=500 package build**
+> per [`ISSUE-11-prep-design-2026-07-05.md`](ISSUE-11-prep-design-2026-07-05.md) §WI-4
+> runbook (locked: n=500, seed 20260705, `--page-size 75`, 20% overlap, 15 disputes
+> forced). Collision forensics + rebuild record:
+> [`ISSUE-11-prep-handoff-2026-07-05.md`](ISSUE-11-prep-handoff-2026-07-05.md).
+
 ## Parent
 
 [`../install_date_optimization_v2_prd.md`](../install_date_optimization_v2_prd.md) — D10, D11. User stories 19, 21, 22.

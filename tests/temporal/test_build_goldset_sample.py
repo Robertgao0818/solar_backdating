@@ -18,6 +18,21 @@ docs/replan_v2/ISSUE-10-design-2026-07-05.md:
   (t2999) lands in `dispute_resolution_report.csv` without crashing the draw;
   forced anchors sit outside the stratified quota.
 * Stratum proportional allocation sums to exactly `n`.
+
+Also covers WI-2 (docs/replan_v2/ISSUE-11-prep-design-2026-07-05.md "WI-2" —
+villa-suspect grid oversample knob):
+
+* AC-2.1 oversample reweights: same `--seed --n`, with vs without
+  `--oversample-grid-ids` (F=3), the count of drawn quota anchors whose
+  `grid_id` is in the oversample set is strictly greater with the knob on.
+* AC-2.2 reproducible: two runs, identical `--seed --n --oversample-grid-ids
+  --oversample-factor` -> identical `sample_assignments.csv` rows.
+* AC-2.3 no-op default (golden): without the flags, `sample_assignments.csv`
+  rows are byte-identical to a golden captured from the pre-WI-2 sampler.
+* AC-2.4 degrade untouched: oversample on + `--cohort-audit-csv` absent -> no
+  crash, stratum keys are `status_x_confidence[_os]`; an oversample file whose
+  grid_ids match zero population anchors -> stderr warning, no crash, output
+  identical to off.
 """
 
 from __future__ import annotations
@@ -35,11 +50,15 @@ INTERVALS_CSV = FIXTURES / "intervals.csv"
 COHORT_CSV = FIXTURES / "cohort_audit.csv"
 DISPUTES_CSV = FIXTURES / "disputes.csv"
 CHIPGROUPS_CSV = FIXTURES / "chipgroups.csv"
+OVERSAMPLE_GRIDS_TXT = FIXTURES / "oversample_grids.txt"
+OVERSAMPLE_GRIDS_ZERO_MATCH_TXT = FIXTURES / "oversample_grids_zero_match.txt"
+GOLDEN_NOOP_CSV = FIXTURES / "golden_noop_sample_assignments.csv"
 
 
 def _run_cli(monkeypatch, tmp_path: Path, *, n: int, seed: int, tag: str,
              overlap_frac: float = 0.20, use_cohort: bool = True,
-             use_disputes: bool = True) -> Path:
+             use_disputes: bool = True, oversample_grid_ids: Path | None = None,
+             oversample_factor: float | None = None) -> Path:
     argv = [
         "build_goldset_sample.py",
         "--intervals-csv", str(INTERVALS_CSV),
@@ -53,6 +72,10 @@ def _run_cli(monkeypatch, tmp_path: Path, *, n: int, seed: int, tag: str,
         argv += ["--cohort-audit-csv", str(COHORT_CSV)]
     if use_disputes:
         argv += ["--disputes-csv", str(DISPUTES_CSV), "--chipgroups-csv", str(CHIPGROUPS_CSV)]
+    if oversample_grid_ids is not None:
+        argv += ["--oversample-grid-ids", str(oversample_grid_ids)]
+    if oversample_factor is not None:
+        argv += ["--oversample-factor", str(oversample_factor)]
     monkeypatch.setattr("sys.argv", argv)
     bgs.main()
     return goldset_schema.goldset_root(tag, base=tmp_path)
@@ -265,3 +288,158 @@ def test_draw_quota_is_deterministic_for_fixed_seed() -> None:
     draw1 = bgs.draw_quota(records, counts, seed=99)
     draw2 = bgs.draw_quota(records, counts, seed=99)
     assert [r.anchor_id for r in draw1] == [r.anchor_id for r in draw2]
+
+
+# ---------------------------------------------------------------------------
+# WI-2 — villa-suspect grid oversample knob
+# (docs/replan_v2/ISSUE-11-prep-design-2026-07-05.md "WI-2", ACs 2.1-2.4)
+# ---------------------------------------------------------------------------
+
+
+def _oversample_grid_id_set(path: Path) -> set[str]:
+    return {line.strip() for line in path.read_text().splitlines() if line.strip() and not line.startswith("#")}
+
+
+def _rows_without_batch_id(path: Path) -> list[dict]:
+    return [{k: v for k, v in r.items() if k != "sample_batch_id"} for r in csv.DictReader(path.open())]
+
+
+def test_ac2_3_no_op_default_matches_golden(monkeypatch, tmp_path: Path) -> None:
+    """AC-2.3: without --oversample-grid-ids/--oversample-factor, the sampler
+    is byte-identical to the pre-WI-2 sampler (golden captured before the
+    oversample knob existed, same --seed/--n/--tag/--overlap-frac)."""
+    root = _run_cli(monkeypatch, tmp_path, n=10, seed=42, tag="golden_noop")
+    got = list(csv.DictReader(goldset_schema.sample_assignment_path(root).open()))
+    golden = list(csv.DictReader(GOLDEN_NOOP_CSV.open()))
+    assert got == golden
+
+
+def test_ac2_1_oversample_reweights_pulls_strictly_more_matching_anchors(monkeypatch, tmp_path: Path) -> None:
+    """AC-2.1: same --seed/--n, with (F=3) vs without --oversample-grid-ids,
+    the count of drawn quota anchors whose grid_id is in the oversample set is
+    strictly greater with the knob on."""
+    oversample_ids = _oversample_grid_id_set(OVERSAMPLE_GRIDS_TXT)
+
+    root_off = _run_cli(monkeypatch, tmp_path, n=10, seed=42, tag="os_off")
+    root_on = _run_cli(
+        monkeypatch, tmp_path, n=10, seed=42, tag="os_on",
+        oversample_grid_ids=OVERSAMPLE_GRIDS_TXT, oversample_factor=3.0,
+    )
+
+    def _match_count(root: Path) -> int:
+        rows = goldset_schema.read_sample_assignments(goldset_schema.sample_assignment_path(root))
+        quota = [r for r in rows if r["is_dispute_forced"] != "True"]
+        return sum(1 for r in quota if r["grid_id"] in oversample_ids)
+
+    off_count = _match_count(root_off)
+    on_count = _match_count(root_on)
+    assert on_count > off_count, f"expected oversample knob to pull more matches: off={off_count} on={on_count}"
+
+
+def test_ac2_2_oversample_is_reproducible_for_fixed_seed(monkeypatch, tmp_path: Path) -> None:
+    """AC-2.2: two runs, identical --seed/--n/--oversample-grid-ids/
+    --oversample-factor -> identical sample_assignments.csv rows."""
+    root_a = _run_cli(
+        monkeypatch, tmp_path, n=10, seed=42, tag="os_rep_a",
+        oversample_grid_ids=OVERSAMPLE_GRIDS_TXT, oversample_factor=3.0,
+    )
+    root_b = _run_cli(
+        monkeypatch, tmp_path, n=10, seed=42, tag="os_rep_b",
+        oversample_grid_ids=OVERSAMPLE_GRIDS_TXT, oversample_factor=3.0,
+    )
+    rows_a = _rows_without_batch_id(goldset_schema.sample_assignment_path(root_a))
+    rows_b = _rows_without_batch_id(goldset_schema.sample_assignment_path(root_b))
+    assert rows_a == rows_b
+
+
+def test_ac2_4_oversample_degrade_no_cohort_file_stratum_keys(monkeypatch, tmp_path: Path) -> None:
+    """AC-2.4 (part 1): oversample on + --cohort-audit-csv absent -> no crash,
+    stratum keys are `status_x_confidence[_os]` (contradiction axis still
+    collapses to '', `_os` still composes onto whatever base key exists)."""
+    root = _run_cli(
+        monkeypatch, tmp_path, n=10, seed=42, tag="os_nocohort",
+        use_cohort=False, use_disputes=False,
+        oversample_grid_ids=OVERSAMPLE_GRIDS_TXT, oversample_factor=3.0,
+    )
+    rows = goldset_schema.read_sample_assignments(goldset_schema.sample_assignment_path(root))
+    assert rows
+    for r in rows:
+        assert r["any_contradiction"] == ""
+        base = f"{r['terminal_status']}_x_{r['confidence']}"
+        assert r["stratum"] in (base, f"{base}_os")
+        assert "_x_True" not in r["stratum"] and "_x_False" not in r["stratum"]
+    # The oversample fixture matches several JNB0001 anchors in this population,
+    # so at least one drawn row should actually land in an `_os` sub-stratum.
+    assert any(r["stratum"].endswith("_os") for r in rows)
+
+
+def test_ac2_4_oversample_zero_match_warns_and_is_noop(monkeypatch, tmp_path: Path, capsys) -> None:
+    """AC-2.4 (part 2): an oversample file whose grid_ids match zero anchors in
+    the population -> stderr warning, no crash, output identical to off."""
+    root_off = _run_cli(monkeypatch, tmp_path, n=10, seed=42, tag="os_zero_off")
+    root_zero = _run_cli(
+        monkeypatch, tmp_path, n=10, seed=42, tag="os_zero_on",
+        oversample_grid_ids=OVERSAMPLE_GRIDS_ZERO_MATCH_TXT, oversample_factor=3.0,
+    )
+    err = capsys.readouterr().err
+    assert "matched zero anchors" in err
+
+    rows_off = _rows_without_batch_id(goldset_schema.sample_assignment_path(root_off))
+    rows_zero = _rows_without_batch_id(goldset_schema.sample_assignment_path(root_zero))
+    assert rows_off == rows_zero
+
+
+def test_oversample_factor_below_one_raises(monkeypatch, tmp_path: Path) -> None:
+    """Supplementary (not a numbered AC): --oversample-factor must be >= 1.0."""
+    with pytest.raises(SystemExit):
+        _run_cli(
+            monkeypatch, tmp_path, n=10, seed=42, tag="os_badfactor",
+            oversample_grid_ids=OVERSAMPLE_GRIDS_TXT, oversample_factor=0.5,
+        )
+
+
+def test_forced_dispute_rows_are_never_oversampled(monkeypatch, tmp_path: Path) -> None:
+    """Supplementary: c0010 (JNB0001, in the oversample set) is a forced dispute
+    anchor -- `_make_stratum` still tags its stratum with `_os` (grid_id match
+    is computed per-anchor, independent of dispute status), but the knob's
+    *reweighting mechanism* (`allocate_quota`'s mass multiplier + the seeded
+    per-stratum draw) never touches it: it sits outside `eligible`
+    (`build_forced_rows`), so it is force-included exactly once per annotator
+    regardless of `--oversample-factor`, never additionally drawn via the
+    quota."""
+    root = _run_cli(
+        monkeypatch, tmp_path, n=10, seed=42, tag="os_forced",
+        oversample_grid_ids=OVERSAMPLE_GRIDS_TXT, oversample_factor=3.0,
+    )
+    rows = goldset_schema.read_sample_assignments(goldset_schema.sample_assignment_path(root))
+    forced = [r for r in rows if r["is_dispute_forced"] == "True"]
+    forced_c0010 = [r for r in forced if r["anchor_id"] == "c0010"]
+    assert len(forced_c0010) == 2  # exactly A + B, never re-drawn via the quota
+    quota_anchor_ids = {r["anchor_id"] for r in rows if r["is_dispute_forced"] != "True"}
+    assert "c0010" not in quota_anchor_ids
+
+
+# ---------------------------------------------------------------------------
+# WI-2 unit-level: allocate_quota mass reweighting (isolated from CLI/IO)
+# ---------------------------------------------------------------------------
+
+
+def test_allocate_quota_oversample_factor_boosts_os_stratum_share() -> None:
+    oversample_ids = frozenset({"JNB0001"})
+    records = bgs.build_anchor_records(INTERVALS_CSV, {}, oversample_ids)
+    counts_off = bgs.allocate_quota(records, 10)
+    counts_on = bgs.allocate_quota(records, 10, oversample_factor=3.0)
+
+    os_total_off = sum(c for s, c in counts_off.items() if s.endswith("_os"))
+    os_total_on = sum(c for s, c in counts_on.items() if s.endswith("_os"))
+    assert os_total_on > os_total_off
+    assert sum(counts_on.values()) == 10
+
+
+def test_allocate_quota_no_os_stratum_unaffected_by_factor() -> None:
+    """When no record is flagged for oversample (grid_ids don't match), the
+    factor is inert -- identical counts regardless of its value."""
+    records = bgs.build_anchor_records(INTERVALS_CSV, {})  # no oversample_grid_ids at all
+    counts_default = bgs.allocate_quota(records, 10)
+    counts_with_factor = bgs.allocate_quota(records, 10, oversample_factor=5.0)
+    assert counts_default == counts_with_factor
