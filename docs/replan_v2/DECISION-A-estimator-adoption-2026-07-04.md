@@ -151,3 +151,86 @@ the re-band completes, the 0.067 delivered-caliber pair is disclosed on every
 deliverable (amendment A5). No gate adjudicated above is re-litigated. Full
 terms:
 [`PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md`](PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md).
+
+## Second addendum (2026-07-05) — P3 re-band complete (ISSUE-21): rollback trigger evaluated, PASS
+
+The P3 band re-derivation (ISSUE-21, the condition-subsequent of the Option-A
+switch above) is complete. Two new store-backed production-channel end-to-end
+reps ran 2026-07-05 (rep4 10:06:49Z→10:37:06Z, rep5 10:37:31Z→11:07:49Z; both
+EXITCODE=0, 41,393-row delivery each, serial launches), bringing the sample to
+5 completed reps (10 pairs). **The pre-registered rollback trigger is NOT met —
+the production switch stands (PASS).**
+
+**Sample + launch invariants (prereg §6).** Pinned worktree
+`solar_backdating_tvdrerun` @ `89496dde59f1f6f1ae6514c35832bdc0fd63b8a7`,
+git-status-clean verified immediately before each launch; fresh per-layer
+verdict stores with `records=0` printed at open for L0/L1/L_census in
+`rep4.log` and `rep5.log`; `FROZEN_CHIPS_DIR` unset (fresh per-rep GEHI fetch,
+same as reps 1–3); `ANCHOR_WORKERS=40 QPS=10`; two-tier routing
+cheap=`gemini-3-flash` capable=`gemini-3-flash-agent`, `routing_salt_mode=target`.
+Launch-invariants record:
+`~/zasolar_data/geid_temporal/llm_endtoend_storebacked_20260704/launch_shim/ISSUE-21_rep45_launch_note.md`.
+All 5 completed reps enter; no exclusions.
+
+**Channel + analysis.** Registered channel: `issue03_gates.py` AC5
+`survival_curve_tvd` (changepoint decoder + EB prior, `--decoder-epoch-gap-days
+45`, emissions
+`panel_repair_20260703/analysis_estimator_harness_extended/emissions_fitted.json`,
+prior refit from `jhb_full382_fpcut_scan_2026-06-02` — byte-identical to the
+canonical `issue03_gates_20260704/cohort_prior.json`). AC5 survival math is
+unchanged since `89496dd` (ISSUE-22 commit `cbf4f4e` touched `issue03_gates.py`
+annotation-only); the rep1–3 sub-triple reproduced bit-identically before band
+math ((rep1,rep2)=0.039, (rep1,rep3)=0.0451, (rep2,rep3)=0.0672). Analysis
+out-dir:
+`~/zasolar_data/geid_temporal/llm_endtoend_storebacked_20260704/analysis_issue21_5rep/`
+(`issue03_gates.json`).
+
+**All C(5,2)=10 pairwise fractional-channel TVDs** (Python `combinations`
+order):
+
+| pair | TVD | pair | TVD |
+|---|---|---|---|
+| (rep1,rep2) | 0.039 | (rep2,rep4) | 0.0506 |
+| (rep1,rep3) | 0.0451 | (rep2,rep5) | 0.0459 |
+| (rep1,rep4) | 0.0551 | (rep3,rep4) | 0.0673 |
+| (rep1,rep5) | 0.0285 | (rep3,rep5) | 0.0454 |
+| (rep2,rep3) | 0.0672 | (rep4,rep5) | 0.0705 |
+
+**Band (registered formula, mean ± 2 sd, Bessel n−1).** m = 0.05146,
+s = 0.0136041824, **frozen band = [0.0243, 0.0787]** (full precision
+[0.0242516353, 0.0786683647]; lower limit unclamped, m−2s > 0). FROZEN per
+prereg §3 — any future re-derivation requires a new pre-registration.
+
+**Rollback trigger (prereg §4, asymmetric).** Pairs strictly above m+2s:
+**0 of 10** (threshold ⌈10/2⌉ = 5) → NOT met → **PASS**. Lower-edge
+variance-collapse canary: **0 of 10** below max(0, m−2s) → not tripped. Min–max
+envelope (non-gate diagnostic) = [0.0285, 0.0705]; all 10 pairs lie inside the
+band, including the 0.067-class pairs (0.0672, 0.0673, 0.0705) — as the prereg's
+incidental-effect disclosure anticipated.
+
+**Per-rep `gemini_failed`** (scan_state terminal-status rate over L0+L1, the
+historical caliber; context only, not a gate): rep1 4.43% (21/474), rep2 3.54%
+(17/480), rep3 4.97% (24/483), rep4 5.12% (24/469), rep5 5.11% (24/470) vs the
+historical 3.9–5.0% range — rep2 slightly below, rep4/rep5 slightly above.
+
+**Provenance disclosure (transparent record).** The prereg's §Disclosures
+"partial blindness" figure cited the 3 known pairs as
+`[0.0504, 0.0596, 0.0304]` with a trial band ≈ [0.017, 0.077]; those values are
+from the PRE-STORE 2026-06-23 root (`llm_endtoend_20260623`, recorded in
+`issue03_gates_20260704`). The prereg §1 sample (store-backed
+`llm_endtoend_storebacked_20260704`) yields `[0.039, 0.0451, 0.0672]` for reps
+1–3 on the same registered channel. The band was computed on the §1
+store-backed sample exactly as registered; the §Disclosures citation was
+registration-time incidental (its own text: "Incidental effect, not a selection
+reason") and never entered band math. This discrepancy is recorded here and in
+the prereg completion stamp for transparency.
+
+**Consequences (PASS path).**
+
+- The production default stays the **changepoint decoder + EB prior**;
+  this decision remains **closed** (DECISION-A is not reopened).
+- The A5 **0.067 disclosure is RETIRED** — superseded by the frozen band; the
+  0.067-class pairs are in-band and no longer require a travelling disclosure on
+  deliverables.
+- The stale 3-pair **0.037–0.063 band is retired as a live number**, superseded
+  by the frozen production-channel band [0.0243, 0.0787].

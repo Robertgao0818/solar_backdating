@@ -1,6 +1,6 @@
 # ISSUE-21: P3 band re-derivation reps (production-channel re-band)
 
-Status: ready-for-human
+Status: done
 Phase: 0 — Estimator (band hygiene)
 Blocked by: 20, 7
 
@@ -49,16 +49,24 @@ Re-establish the cohort reproducibility band on the production/delivery
   (band formula + channel + rep count + this issue linked)
   *(Done 2026-07-05: [`ISSUE-21-band-prereg-2026-07-05.md`](ISSUE-21-band-prereg-2026-07-05.md);
   no rep had been launched at registration time.)*
-- [ ] ≥ 2 new store-backed production-channel reps completed; each store
+- [x] ≥ 2 new store-backed production-channel reps completed; each store
   verified `records=0` at launch (logged)
-- [ ] ≥ 10 pairwise fractional-channel TVDs computed; band derived exactly
+  *(Done 2026-07-05: rep4/rep5 both EXITCODE=0, per-layer stores `records=0`
+  logged at open in `rep4.log`/`rep5.log`; launch note
+  `llm_endtoend_storebacked_20260704/launch_shim/ISSUE-21_rep45_launch_note.md`.)*
+- [x] ≥ 10 pairwise fractional-channel TVDs computed; band derived exactly
   per the pre-registered formula
-- [ ] Rollback trigger evaluated and the outcome recorded in a DECISION-A
+  *(Done 2026-07-05: 10 TVDs → band [0.0243, 0.0787] (mean ± 2 sd) in
+  `llm_endtoend_storebacked_20260704/analysis_issue21_5rep/`.)*
+- [x] Rollback trigger evaluated and the outcome recorded in a DECISION-A
   second addendum (pass ⇒ 0.067 disclosure retired; breach ⇒ revert + reopen)
-- [ ] Stale 0.037–0.063 band marked retired wherever it appears as a live
+  *(Done 2026-07-05: 0/10 pairs above m+2s ⇒ PASS, recorded in the DECISION-A
+  second addendum; A5 0.067 disclosure retired.)*
+- [x] Stale 0.037–0.063 band marked retired wherever it appears as a live
   number (PRD D3 diagnostic note, amendment A5)
+  *(Done 2026-07-05: annotated in PRD D3/D19 and amendment A3/A5/§4/§5.)*
 
 ## Blocked by
 
-- ISSUE-20 (done), ISSUE-07 (done). Remaining gate is **human**: the ~2-rep
-  API budget (band formula registered 2026-07-05).
+- ISSUE-20 (done), ISSUE-07 (done). Budget gate cleared 2026-07-05: the 2 new
+  reps (rep4/rep5) ran, the band is frozen and the rollback trigger PASSed — issue done.

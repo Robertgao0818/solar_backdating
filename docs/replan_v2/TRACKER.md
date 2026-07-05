@@ -47,15 +47,17 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 18 | [Resolution provenance + cache escape](ISSUE-18-resolution-provenance-cache-escape.md) | 1 | done | — (integration: 6) |
 | 19 | [Chip-geometry policy at Phase-3 re-render](ISSUE-19-chip-geometry-policy.md) | 3 | done | 4, 12 |
 | 20 | [Cohort deliverable caliber amendment (D19)](ISSUE-20-deliverable-caliber-amendment.md) | 0 | done | — |
-| 21 | [P3 band re-derivation reps](ISSUE-21-p3-band-rederivation.md) | 0 | ready-for-human | 20, 7 |
+| 21 | [P3 band re-derivation reps](ISSUE-21-p3-band-rederivation.md) | 0 | done | 20, 7 |
 | 22 | [D19 production switch (remaining §8 code items)](ISSUE-22-d19-production-switch.md) | 0 | done | 20 |
 
 Unblocked start set: **11** (human — ISSUE-10 landed 2026-07-05 with a
 10-anchor dry run adjudicated, n=500 recommended; precondition: extend
 dispute-anchor strips to source the full-stack arm's frames, see the
-ISSUE-10 evening progress note) · **21** (human gate: ~2-rep API budget —
+ISSUE-10 evening progress note) · ~~**21** (human gate: ~2-rep API budget —
 band formula registered 2026-07-05, mean ± 2 sd,
-[ISSUE-21-band-prereg-2026-07-05.md](ISSUE-21-band-prereg-2026-07-05.md);
+[ISSUE-21-band-prereg-2026-07-05.md](ISSUE-21-band-prereg-2026-07-05.md))~~
+**DONE 2026-07-05** (rep4/rep5 ran; band [0.0243, 0.0787] frozen; rollback
+trigger PASS 0/10 — DECISION-A second addendum);
 14 unblocked on the replan side (dinov3 slice 3 landed 2026-07-04); 15
 additionally needs 14). ISSUE-08 and
 **ISSUE-09 are both done** — the full 16,166-unit CoJ cohort run completed
@@ -71,7 +73,7 @@ audit_miss_2015; the 2015 layer is downweighted (~5% FN), not voided, and
 2023 stays the clean primary layer
 (`~/zasolar_data/geid_temporal/coj_audit_cohort_20260704/gate_a_2015_human_adjudication.{csv,md}`).
 The 8,407-bit `human_queue.csv` is ready for the gold-set channel. Done so
-far: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 22.
+far: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22.
 ISSUE-19 note (2026-07-04): Phase-3 re-render geometry decided —
 `chip_geom_v2_tight12` (ISSUE-04 tight-crop arm, 0.5/12 m/256 px) is the
 re-render default, `chip_geom_v1_banked96` stays the frozen legacy default;

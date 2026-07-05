@@ -60,3 +60,33 @@ committed in the pre-registration note before any new rep is scored").
   pairs (the observed 0.030 class) at the lower edge. These grounds hold
   without knowledge of the 0.067 pair. Recorded here so it cannot later be
   read as ruler-tuning (amendment §9.1).
+
+## Completion record (2026-07-05)
+
+Executed exactly as registered on the §1 store-backed sample. Two new reps
+(rep4, rep5) completed 2026-07-05, bringing the sample to 5 reps / 10 pairs;
+all launch invariants (§6) held (pinned worktree @
+`89496dde59f1f6f1ae6514c35832bdc0fd63b8a7`, fresh per-layer stores `records=0`
+logged at open, `FROZEN_CHIPS_DIR` unset). All C(5,2)=10 pairwise
+fractional-channel TVDs (Python `combinations` order): (rep1,rep2)=0.039,
+(rep1,rep3)=0.0451, (rep1,rep4)=0.0551, (rep1,rep5)=0.0285, (rep2,rep3)=0.0672,
+(rep2,rep4)=0.0506, (rep2,rep5)=0.0459, (rep3,rep4)=0.0673, (rep3,rep5)=0.0454,
+(rep4,rep5)=0.0705.
+
+Band per the registered §3 formula (mean ± 2 sd, Bessel n−1): m = 0.05146,
+s = 0.0136041824, **frozen band = [0.0243, 0.0787]** (full precision
+[0.0242516353, 0.0786683647]; lower limit unclamped). **Rollback trigger (§4):
+0 of 10 pairs above m+2s (threshold ⌈10/2⌉ = 5) ⇒ NOT met ⇒ PASS**; lower-edge
+variance-collapse canary 0 of 10, not tripped; min–max envelope [0.0285, 0.0705]
+inside the band. Outcome recorded in the DECISION-A **second addendum**
+([`DECISION-A-estimator-adoption-2026-07-04.md`](DECISION-A-estimator-adoption-2026-07-04.md));
+the stale 0.037–0.063 band and the A5 0.067 disclosure are retired.
+
+**Provenance discrepancy note.** The §Disclosures "partial blindness" figure
+cited `[0.0504, 0.0596, 0.0304]` — those are PRE-STORE 2026-06-23 values
+(`llm_endtoend_20260623`, via `issue03_gates_20260704`). The §1 store-backed
+sample governed the computation and yields `[0.039, 0.0451, 0.0672]` for reps
+1–3 on the same registered channel. The band was computed on the §1
+store-backed sample exactly as registered; the §Disclosures citation was
+registration-time incidental (its own "Incidental effect, not a selection
+reason") and never entered band math.

@@ -114,7 +114,8 @@ as pass:
 
 **A3 — Hard-MAP year table demoted.** The hard-MAP year histogram is demoted
 to a **derived diagnostic**. Its 0.037–0.063 band is retired as a gate (see A6
-and §5). The optional estimator-side stabiliser P2 (deterministic
+and §5). *(Re-band completed 2026-07-05, superseded by the frozen production-channel
+band [0.0243, 0.0787] — ISSUE-21; DECISION-A second addendum.)* The optional estimator-side stabiliser P2 (deterministic
 tie-breaking, epoch snapping, or margin-smoothed MAP; a **decode-only** re-run
 on the existing 3 store-backed reps, **zero LLM cost**) MAY be run to tighten
 the diagnostic, but is **not gate-bearing** and is not a precondition of
@@ -146,6 +147,12 @@ fractional cohort deliverable ships with, verbatim and non-negotiable:
   exceeds the old absolute band is **disclosed** on every deliverable until
   the P3 re-band (§5) resolves it.
 
+> **Update 2026-07-05 (ISSUE-21):** disclosure **RETIRED**. The re-derived
+> production-channel band [0.0243, 0.0787] (mean ± 2 sd over 10 pairs) contains
+> every observed pair, including the 0.067-class (0.0672 / 0.0673 / 0.0705); the
+> rollback trigger PASSed (0/10 above the upper edge). The 0.067 disclosure is
+> no longer required on deliverables — see the DECISION-A second addendum.
+
 **A6 — What does NOT change.** Explicitly out of the amendment's reach:
 
 - All already-passed **panel-caliber gates are not re-litigated** (per
@@ -175,7 +182,9 @@ recommendation is **Option A**. Owner ticks exactly one at sign-off.
   pre-registered **rollback trigger**: *if the fractional channel breaches the
   re-derived band on a majority of its first pairs (≥ ⌈n/2⌉ of the ≥10 pairs),
   revert the production default to sustained and re-open DECISION-A.* Until the
-  re-band completes, the 0.067 pair is disclosed (A5).
+  re-band completes, the 0.067 pair is disclosed (A5). *[Re-band complete
+  2026-07-05: rollback trigger PASS (0/10 above the upper edge), disclosure
+  retired — ISSUE-21; DECISION-A second addendum.]*
   - **Risk:** the cohort ships on the decoder before its band is independently
     re-established; if P3 later refutes the relative gate's generalisation, one
     delivered inventory was produced under a since-reverted default (mitigated
@@ -236,7 +245,10 @@ retroactive relabelling of the existing 0.067-exceeding pair (see §9.1).
    on 3 pre-store pairs, and breached by the production reference channel
    itself at **0.068 on 1/3 pairs** — is **retired**, superseded by the
    re-derived production-channel band. Until then it survives only as the
-   disclosure anchor for the 0.067 pair (A5).
+   disclosure anchor for the 0.067 pair (A5). *[Retirement EXECUTED 2026-07-05:
+   the re-derived production-channel band is [0.0243, 0.0787] (ISSUE-21); the
+   0.037–0.063 band and the 0.067 disclosure are retired — DECISION-A second
+   addendum.]*
 
 ---
 
@@ -477,7 +489,8 @@ follow-up execution** step — ≥5 store-backed production-channel reps, ≥10
 pairs, formula **pre-registered before decoding the candidate**, computed on
 the production channel only. It is **not** a retroactive relabelling of the
 existing 0.067-exceeding pair; the 0.067 pair is **disclosed** (A5) until the
-re-band supersedes it, not silently reclassified as passing.
+re-band supersedes it, not silently reclassified as passing. *[Superseded
+2026-07-05: re-band complete, disclosure retired — ISSUE-21.]*
 
 **9.2 — D8 rule (5) "no cohort decision from a stratum with n=2 support" + D3's
 closing D4 precondition.** Both already satisfied and cited, not bypassed:

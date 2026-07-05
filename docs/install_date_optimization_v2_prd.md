@@ -248,7 +248,8 @@ estimator (the sustained failure mode); HPD calibration proxy (rep-i's 90%
 interval contains rep-j's MAP ≈ 90%); **the operative cohort
 reproducibility gate is the survival/fractional channel — survival-curve
 rep-to-rep TVD beats point-date TVD (D19); the hard-MAP year-histogram TVD
-0.037–0.063 band is demoted to a derived diagnostic, retired-with-cause.**
+0.037–0.063 band is demoted to a derived diagnostic, retired-with-cause**
+(superseded 2026-07-05 by the re-derived production-channel band [0.0243, 0.0787]; ISSUE-21).
 Decision on cohort-wide adoption additionally requires the enlarged
 dominant-stratum panel (D4).
 
@@ -268,7 +269,8 @@ dominant-stratum panel (D4).
 
 > **Amended (2026-07-04, D19 — deliverable caliber; substantive):** the
 > year-histogram TVD (hard-MAP) 0.037–0.063 band is **demoted to a derived
-> diagnostic and retired-with-cause**; the operative cohort reproducibility
+> diagnostic and retired-with-cause** (superseded 2026-07-05 by the re-derived
+> production-channel band [0.0243, 0.0787]; ISSUE-21); the operative cohort reproducibility
 > gate is the **survival/fractional channel** (passes: AC5 survival mean 0.050
 > vs point-date 0.075, `beats_point_date: true`). Unlike the record-hygiene
 > Correction above, this **does** change the adoption verdict — see
@@ -435,7 +437,9 @@ accident of which builder ran.
 ### Amendment 2026-07-04: cohort deliverable caliber (D19)
 
 DECISION-A (2026-07-04) ruled the changepoint decoder NO-GO cohort-wide
-solely on the D3 hard-MAP year-histogram TVD band (0.037–0.063), which failed
+solely on the D3 hard-MAP year-histogram TVD band (0.037–0.063; superseded
+2026-07-05 by the re-derived production-channel band [0.0243, 0.0787], ISSUE-21),
+which failed
 on the sanctioned store-backed re-run (flat `[0.079,0.040,0.076]` mean 0.065;
 EB prior `[0.092,0.047,0.085]` mean 0.075) after the verdict-store and
 stronger-prior remediations were both refuted. Every panel-caliber gate and
@@ -453,7 +457,8 @@ survival mean 0.050 vs point-date 0.075, `beats_point_date: true`; same-run
 0.0696; cross-check 3/3). (iii) The hard-MAP year histogram is a derived
 diagnostic; its 0.037–0.063 band is retired-with-cause (small-sample fit on 3
 pre-store pairs; production reference channel breached it at 0.068 on 1/3
-pairs; instability is hard-MAP argmax collapse, not the posterior). (iv)
+pairs; instability is hard-MAP argmax collapse, not the posterior; superseded
+2026-07-05 by the re-derived production-channel band [0.0243, 0.0787], ISSUE-21). (iv)
 Production default switches to the changepoint decoder + EB/Turnbull prior
 (epoch-gap 45, EM emissions, `cohort_prior.json`; code `89496dd`/`1daa61d`);
 effective-date rule per the P1 amendment §4 — **Option A signed 2026-07-05**:
