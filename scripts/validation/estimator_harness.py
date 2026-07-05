@@ -66,6 +66,9 @@ PUBLISHED = {
 }
 TOL = 5e-4  # exact computation; +/-0.0005 only absorbs the published 3-dp rounding
 # Published pairwise install-year cohort TVD band (derived_cuts.json rep_to_rep).
+# RETIRED as a live gate per PRD-AMENDMENT-P1 (ISSUE-22): kept only for a
+# diagnostic report-only comparison. See _run_endtoend below — it no longer
+# affects the process exit code.
 REP_TO_REP_TVD_BAND = (0.037, 0.063)
 
 
@@ -249,18 +252,30 @@ def _run_endtoend(reference_csv: Path, rep_csvs: list[Path], out_dir: Path,
         "rep_vs_prod_tvd": rep_vs_prod,
         "rep_to_rep_tvd": rep_to_rep,
         "rep_to_rep_band": list(REP_TO_REP_TVD_BAND),
+        # Band retired per PRD-AMENDMENT-P1 (ISSUE-22): recorded for continuity
+        # only, no longer a gate.
+        "rep_to_rep_band_status": "retired_diagnostic_only",
     }
     (out_dir / "endtoend_tvd.json").write_text(json.dumps(payload, indent=2))
     print("\n=== end-to-end install-year cohort TVD (inventory-weighted) ===")
     print(f"rep_vs_prod: {rep_vs_prod}")
     print(f"rep_to_rep : {rep_to_rep}  band {list(REP_TO_REP_TVD_BAND)}")
 
-    ok = True
+    # Diagnostic-only: the [0.037, 0.063] rep-to-rep TVD band is a RETIRED
+    # hard-MAP-year caliber (band retired per PRD-AMENDMENT-P1, see ISSUE-22).
+    # The in-band comparison is still computed and printed for continuity, but
+    # it NO LONGER gates the process exit code (report-only). This function
+    # always returns True; the fpd/sustained regression gate (_gate) remains the
+    # sole exit-code authority.
     if do_gate and rep_to_rep:
         lo, hi = REP_TO_REP_TVD_BAND
-        ok = all(lo <= t <= hi for t in rep_to_rep)
-        print(f"endtoend gate (rep_to_rep in band): {'PASS' if ok else 'FAIL'}")
-    return ok
+        in_band = all(lo <= t <= hi for t in rep_to_rep)
+        print(
+            f"endtoend band check [diagnostic-only, band retired per "
+            f"PRD-AMENDMENT-P1 (ISSUE-22)]: rep_to_rep within "
+            f"{list(REP_TO_REP_TVD_BAND)}? {'yes' if in_band else 'no'}"
+        )
+    return True
 
 
 def main() -> int:

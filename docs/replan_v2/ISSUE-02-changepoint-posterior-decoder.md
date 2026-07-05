@@ -25,7 +25,15 @@ Undated-flip 0.055 = exact parity with sustained/pava; the memo's 0.034 is
 **fpd-caliber** (`panel_repair_d8_compare.py` computes `undated_flip_rate`
 from fpd tokens only) and is recorded not-met as a diagnostic — the 0.021 gap
 is one stable-undated unit (`c0015576`, the memo's own "stable-UNDATED" unit,
-which fpd unstably dates 7/10 reps) plus one `gemini_failed` rep. Endtoend
+which fpd unstably dates 7/10 reps) plus one `gemini_failed` rep.
+**Correction (2026-07-04):** the "fpd-caliber" explanation above was a
+misdiagnosis — the root cause is a script bug in
+`panel_repair_d8_compare.py` (it reused the FPD-only `undated_flip_rate`
+field for the sustained row too, not a deliberate caliber choice; see the
+ISSUE-04 memo's [Correction](ISSUE-04-decision-memo-2026-07-03.md#correction-2026-07-04)).
+Sustained's true undated-flip is 0.055 (same value this decoder scores),
+so re-anchored against the corrected gate (≤0.055) the decoder is
+**pass-at-parity (tie)**, not "not-met." Endtoend
 rep-to-rep year-TVD [0.081/0.059/0.079] exceeds the band (see unchecked AC
 below). n_undated fell 81→~22/rep after the censoring-exact correction
 (production floor ~4). Canonical artifacts:

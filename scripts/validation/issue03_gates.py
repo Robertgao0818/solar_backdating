@@ -105,6 +105,10 @@ INV_MAP_MIN = 0.798
 INV_YEAR_MIN = 0.757
 # Recorded point-date year-TVD band (endtoend, ISSUE-02) — reported alongside the
 # freshly computed point channel; the gate uses the fresh numbers, not this literal.
+# DIAGNOSTIC-ONLY: this hard-MAP point-date band is RETIRED as the production
+# install-year caliber (PRD-AMENDMENT-P1, ISSUE-22); it survives here only as the
+# AC5 relative comparison baseline. The AC5 gate (survival must beat point) is a
+# RELATIVE test and stays unchanged.
 POINT_DATE_BAND = [0.081, 0.059, 0.079]
 
 
@@ -424,7 +428,16 @@ def build_ac5(point_tvd: list[float], survival_tvd_vals: list[float],
         and max(survival_tvd_vals) < max(point_tvd)
     )
     return {
-        "point_date_year_tvd": {"rep_to_rep": point_tvd, "mean": round(point_mean, 4)},
+        "point_date_year_tvd": {
+            "rep_to_rep": point_tvd,
+            "mean": round(point_mean, 4),
+            # DIAGNOSTIC-ONLY: the point-date year TVD is the RETIRED hard-MAP
+            # caliber (PRD-AMENDMENT-P1, ISSUE-22), kept here solely as the AC5
+            # relative comparison baseline; the production install-year caliber is
+            # the fractional/survival channel. The AC5 gate below is a RELATIVE
+            # test (survival must beat point) and is unchanged.
+            "caliber": "diagnostic_only_retired_hard_MAP_PRD-AMENDMENT-P1_ISSUE-22",
+        },
         "survival_curve_tvd": {
             "rep_to_rep": survival_tvd_vals,
             "mean": round(surv_mean, 4),

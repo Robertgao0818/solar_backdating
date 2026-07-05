@@ -34,8 +34,8 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 5 | [PresenceScorer seam, 4 call-sites](ISSUE-05-presence-scorer-seam.md) | 1 | done | — |
 | 6 | [Provenance sidecar](ISSUE-06-provenance-sidecar.md) | 1 | done | 5 |
 | 7 | [Verdict store + replay + churn](ISSUE-07-verdict-store.md) | 1 | done | 6 |
-| 8 | [CoJ audit pilot (tracer)](ISSUE-08-coj-audit-pilot.md) | 2 | ready-for-agent | — |
-| 9 | [CoJ audit cohort scale](ISSUE-09-coj-audit-cohort.md) | 2 | ready-for-agent | 8 |
+| 8 | [CoJ audit pilot (tracer)](ISSUE-08-coj-audit-pilot.md) | 2 | done | — |
+| 9 | [CoJ audit cohort scale](ISSUE-09-coj-audit-cohort.md) | 2 | done | 8 |
 | 10 | [Gold-set tooling (jump-point UI)](ISSUE-10-goldset-tooling.md) | 2 | ready-for-agent | — |
 | 11 | [Gold-set adjudication + accuracy report](ISSUE-11-goldset-adjudication-run.md) | 2 | ready-for-human | 9, 10 |
 | 12 | [Student PRD amendments (D12)](ISSUE-12-student-prd-amendments.md) | 3 | done | — |
@@ -45,13 +45,52 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 16 | [P4-D sentinel decay](ISSUE-16-p4d-sentinel-decay.md) | 4 | ready-for-agent | 15 |
 | 17 | [Config truth: dead-knob removal + zoom single-source](ISSUE-17-config-truth-cleanup.md) | 1 | done | — |
 | 18 | [Resolution provenance + cache escape](ISSUE-18-resolution-provenance-cache-escape.md) | 1 | done | — (integration: 6) |
-| 19 | [Chip-geometry policy at Phase-3 re-render](ISSUE-19-chip-geometry-policy.md) | 3 | ready-for-agent | 4, 12 |
+| 19 | [Chip-geometry policy at Phase-3 re-render](ISSUE-19-chip-geometry-policy.md) | 3 | done | 4, 12 |
+| 20 | [Cohort deliverable caliber amendment (D19)](ISSUE-20-deliverable-caliber-amendment.md) | 0 | done | — |
+| 21 | [P3 band re-derivation reps](ISSUE-21-p3-band-rederivation.md) | 0 | ready-for-human | 20, 7 |
+| 22 | [D19 production switch (remaining §8 code items)](ISSUE-22-d19-production-switch.md) | 0 | done | 20 |
 
-Unblocked start set: **8, 10, 19** (14 unblocked on the replan side once
-dinov3 slice 3 lands; 15 additionally needs 14). Done so far: 1, 2, 3, 4, 5,
-6, 7, 12, 13, 17, 18. ISSUE-02 note: its endtoend year-TVD AC is recorded
-not-met, root-caused to pre-verdict-store rep noise — re-run that gate on
-store-backed reps now that ISSUE-07 is done. ISSUE-03 note: the shipped EB
+Unblocked start set: **10** (agent) · **21** (human gate: ~2-rep API budget —
+band formula registered 2026-07-05, mean ± 2 sd,
+[ISSUE-21-band-prereg-2026-07-05.md](ISSUE-21-band-prereg-2026-07-05.md);
+14 unblocked on the replan side (dinov3 slice 3 landed 2026-07-04); 15
+additionally needs 14). ISSUE-08 and
+**ISSUE-09 are both done** — the full 16,166-unit CoJ cohort run completed
+2026-07-05 11:52 NZST (tmux `coj_cohort`; fetch→score→join→gates→report,
+resumed idempotently after a Windows reboot killed the chain mid-score at
+02:26). Coverage 12,190/12,190 dated anchors = 100%, zero fetch failures;
+gate_nc PASS (1/300 false-present, Wilson CI [0.001, 0.019]). gate_a fails
+in exactly one cell (`c_cal_present_pre2019@2015`, 49/55 = 0.891 vs bar
+0.95) — all six disagreements were human-adjudicated 2026-07-05, splitting
+3/3 between backdating_early (incl. a heater_swap failure mode — GEHI
+change detection anchored on a pool heater that predates the PV) and
+audit_miss_2015; the 2015 layer is downweighted (~5% FN), not voided, and
+2023 stays the clean primary layer
+(`~/zasolar_data/geid_temporal/coj_audit_cohort_20260704/gate_a_2015_human_adjudication.{csv,md}`).
+The 8,407-bit `human_queue.csv` is ready for ISSUE-10. Done so far: 1, 2, 3,
+4, 5, 6, 7, 8, 9, 12, 13, 17, 18, 19, 20, 22.
+ISSUE-19 note (2026-07-04): Phase-3 re-render geometry decided —
+`chip_geom_v2_tight12` (ISSUE-04 tight-crop arm, 0.5/12 m/256 px) is the
+re-render default, `chip_geom_v1_banked96` stays the frozen legacy default;
+registry `scripts/temporal/chip_geometry.py` + `--chip-geometry` provenance
+wiring; decision memo
+([ISSUE-19-geometry-decision-2026-07-04.md](ISSUE-19-geometry-decision-2026-07-04.md))
+passed an adversarial audit **sound-with-caveats** — the memo assigns dinov3
+ISSUE-02 two obligations (teacher-label geometry disposition + guard-band QA
+spot-check). ISSUE-02 note: the endtoend year-TVD gate was re-run
+on store-backed reps 2026-07-04 (`llm_endtoend_storebacked_20260704/`) —
+the hard-MAP band was **still not met** (flat [0.079/0.040/0.076]; EB prior
+worsens it) and DECISION-A adjudicated **NO-GO** under the hard-MAP caliber
+([DECISION-A-estimator-adoption-2026-07-04.md](DECISION-A-estimator-adoption-2026-07-04.md));
+that verdict is since **qualified/flipped under the fractional deliverable
+definition (D19)**: the owner signed the P1 amendment (**Option A,
+2026-07-05**), the operative gate is now the survival/fractional channel
+(passes and beats point-date), and the production default is the decoder +
+EB prior with the P3 re-band as condition-subsequent
+([PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md](PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md)).
+Slice 20 was added 2026-07-04 from DECISION-A's P1/P3 pre-registered path
+(PRD amendment block, D19); slice 21 tracks the P3 band re-derivation reps.
+ISSUE-03 note: the shipped EB
 prior lifts the decoder above its ISSUE-02 record (mode-hit 0.905→0.942);
 downstream cohort curves DO carry the C5 caveat (2024 mass dip =
 imagery-clamp artifact, not a market signal).
@@ -88,6 +127,9 @@ graph LR
     I17[17 config truth]
     I18[18 resolution provenance]
     I19[19 chip geometry policy]
+    I20[20 caliber amendment]
+    I21[21 P3 band reps]
+    I22[22 D19 production switch]
 
     I1 --> I2
     I1 --> I3
@@ -104,4 +146,10 @@ graph LR
     I6 -.integration.-> I18
     I4 --> I19
     I12 --> I19
+    I2 --> I20
+    I3 --> I20
+    I4 --> I20
+    I20 --> I21
+    I7 --> I21
+    I20 --> I22
 ```

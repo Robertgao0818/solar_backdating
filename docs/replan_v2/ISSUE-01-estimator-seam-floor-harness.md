@@ -5,6 +5,20 @@ Phase: 0 — Estimator
 Blocked by: none
 Completed: 2026-07-03 — seam `src/solar_backdating/estimators/` (registry: `pava`, `fpd`, `sustained`), harness `scripts/validation/estimator_harness.py`, tests `tests/estimator/` (61 tests). Regression gate PASS (fpd 0.807 / sustained 0.911 / undated-flip 0.046, per-stratum n's match). PAVA floor on panel: mode-hit 0.875 (between fpd and sustained). End-to-end 3-rep pairwise year-TVD 0.037–0.063 band PASS. Harness artifacts: `fullstack_noscan_20260630/analysis_estimator_harness/`.
 
+**Correction (2026-07-04, record hygiene):** the "undated-flip 0.046" cited above
+(and in the AC below) is FPD's banked value, not sustained's — the "published"
+number this line's regression check reproduces bit-exact came from
+`fullstack_noscan_analyze.py`'s original banked table, which printed one shared
+undated-flip field under both the FPD and sustained rows (same bug pattern
+later found in `panel_repair_d8_compare.py`; see the ISSUE-04 memo's
+[Correction](ISSUE-04-decision-memo-2026-07-03.md#correction-2026-07-04)).
+This harness's own per-estimator reports
+(`d3_gates_banked_20260703/fit_emissions/report_sustained.md`) give sustained's
+true banked undated-flip as **0.075**. The regression-reproduction claim
+itself is unaffected (both scripts agree bit-exact on FPD's 0.046 and on
+mode-hit 0.911/0.807); only the implicit reading of 0.046 as sustained's
+number was wrong.
+
 ## Parent
 
 [`../install_date_optimization_v2_prd.md`](../install_date_optimization_v2_prd.md) — D1(ii), D2 (floor), D3/D8 (harness). User stories 1, 5, 6, 34.

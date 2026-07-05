@@ -51,6 +51,20 @@ channel is reproduced verbatim as a sanity check and must exact-match the
 ISSUE-01 banked numbers (rep_to_rep == [0.0595, 0.0625, 0.0374]); that channel
 is NOT re-gated here (it already passed ISSUE-01's own gate).
 
+NOTE (PRD-AMENDMENT-P1, ISSUE-22): the ``[0.037, 0.063]`` band is now RETIRED.
+The upper-edge check is kept purely as a DIAGNOSTIC-ONLY report — the
+``gate_pass_upper_edge_only`` field in the output JSON is informational and
+``main()`` still always returns 0. This script never gated the process exit
+code; the retirement only makes the JSON/print labeling explicit.
+
+DEFAULT ESTIMATOR (PRD-AMENDMENT-P1 §A4, owner-signed 2026-07-05, Option A):
+``--estimator`` now defaults to the **changepoint** posterior decoder + EB prior
+at the signed working point (``--decoder-epoch-gap-days 45``, EM emissions,
+``cohort_prior.json``); the flat-prior/PAVA path is opt-in via ``--estimator
+pava`` (or ``--no-cohort-prior`` / ``--no-emissions``). An ``estimator_id`` +
+input-hash provenance block is written into the output JSON (see
+``_build_estimator_provenance``), mirroring ``scripts.temporal.scoring_provenance``.
+
 Emissions: pass ``--emissions-json`` to load a pre-fitted
 ``solar_backdating.estimators.emissions.EmissionModel`` for a
 config-emissions-aware estimator (e.g. ``changepoint``, once registered) —
@@ -95,9 +109,37 @@ DEFAULT_VEXCEL_CSV = Path(
     "/home/gaosh/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
 )
 
+# --- DECISION-A / PRD-AMENDMENT-P1 (A4) signed production working point ------
+# The validation-chain default estimator is now the changepoint posterior
+# decoder + EB/Turnbull cohort prior (owner-signed 2026-07-05, Option A). The
+# baselines (pava/fpd/sustained) IGNORE every field below (pava reads only
+# ``epoch_gap_days``; fpd/sustained read no config), so passing an explicit
+# ``--estimator pava``/``sustained`` reproduces the pre-flip numbers byte-for-byte
+# even with these defaults populated — the decoder working point is inert for them.
+ADOPTED_ESTIMATOR = "changepoint"
+ADOPTED_DECODER_EPOCH_GAP_DAYS = 45  # A4 signed epoch-gap (code default is 30)
+DEFAULT_COHORT_PRIOR_JSON = (
+    Path.home() / "zasolar_data/geid_temporal/issue03_gates_20260704/cohort_prior.json"
+)  # A4 EB/Turnbull prior fit once on the 15,859-state production cohort
+DEFAULT_EMISSIONS_JSON = (
+    Path.home()
+    / "zasolar_data/geid_temporal/panel_repair_20260703/analysis_estimator_harness_extended/emissions_fitted.json"
+)  # A4 EM-fitted 3-symbol emission matrix (== issue03_gates DEFAULT_EMISSIONS)
+# Adopted code refs (DECISION-A gate table + PRD-AMENDMENT-P1 A4), pinned so the
+# provenance sidecar records exactly which decoder/prior implementation shipped.
+ADOPTED_CODE_REFS = {
+    "issue02_store_backed_endtoend_decoder": "89496dd",
+    "issue03_eb_prior_addon": "1daa61d",
+}
+DECISION_REFS = (
+    "docs/replan_v2/DECISION-A-estimator-adoption-2026-07-04.md",
+    "docs/replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md",
+)
+
 # Mirrors estimator_harness.REP_TO_REP_TVD_BAND (kept as a separate literal —
 # this script is intentionally decoupled from the harness CLI's argument
-# surface per the file whitelist in the ISSUE-02 spec).
+# surface per the file whitelist in the ISSUE-02 spec). RETIRED as a live gate
+# per PRD-AMENDMENT-P1 (ISSUE-22): the upper-edge check below is report-only.
 REP_TO_REP_TVD_BAND = (0.037, 0.063)
 
 # date_provider -> (scan layer subdir, reference.csv anchor-id column to join on).
@@ -282,19 +324,78 @@ def _pairwise_tvd(hists: dict[str, Counter], reps: list[str]) -> list[float]:
 
 def _band_report(rep_to_rep: list[float]) -> dict:
     lo, hi = REP_TO_REP_TVD_BAND
-    gate_pass = all(v <= hi for v in rep_to_rep) if rep_to_rep else True
+    within_upper_edge = all(v <= hi for v in rep_to_rep) if rep_to_rep else True
     n_below = sum(1 for v in rep_to_rep if v < lo)
     return {
         "band": list(REP_TO_REP_TVD_BAND),
         "values": rep_to_rep,
-        "gate_pass_upper_edge_only": gate_pass,
+        # Report-only: the band is a RETIRED caliber (PRD-AMENDMENT-P1, ISSUE-22).
+        # The key name is kept for artifact backward-compat, but this is no longer
+        # a gate — it never affects the exit code (main() always returns 0); it is
+        # purely a diagnostic upper-edge comparison.
+        "gate_pass_upper_edge_only": within_upper_edge,
+        "status": "diagnostic_only_band_retired_PRD-AMENDMENT-P1_ISSUE-22",
         "n_below_lower_edge": n_below,
         "interpretation": (
-            "gate is upper-edge-only (<=0.063); values below 0.037 mean the decoder "
-            "is MORE reproducible than the production reference computation and are "
-            "reported as better, not failed"
+            "DIAGNOSTIC-ONLY (band retired per PRD-AMENDMENT-P1, ISSUE-22): the "
+            "upper-edge (<=0.063) check is reported, not gated; values below 0.037 "
+            "mean the decoder is MORE reproducible than the production reference "
+            "computation and are reported as better, not failed"
         ),
     }
+
+
+def _build_estimator_provenance(
+    *,
+    estimator_id: str,
+    resolved_decoder_epoch_gap_days: int | None,
+    resolved_epoch_gap_days: int | None,
+    emissions_json: Path | None,
+    cohort_prior_json: Path | None,
+    clamp_used: bool,
+) -> dict:
+    """DECISION-A / PRD-AMENDMENT-P1 (A4) estimator-adoption provenance block.
+
+    Mirrors ``scripts.temporal.scoring_provenance``'s sha256 discipline exactly:
+    the cohort-prior / emissions inputs are digested with the bare-hex FILE
+    sha256 (``ChipHasher.sha256`` — the same format as the DECISION-A
+    ``cohort_prior.json`` pin ``dc67dc9c…``), and the assembled block is
+    fingerprinted with ``canonical_hash`` (``"sha256:<hex>"``, order-independent)
+    so one digest pins estimator id + working point + code refs + input hashes.
+
+    Imported lazily (like emissions/survival elsewhere in this file) to keep the
+    validation chain decoupled from the ``scripts.temporal`` scorer package at
+    module load. ChipHasher never raises — a missing/unreadable input is recorded
+    in ``*_sha256_error`` rather than aborting the run."""
+    from scripts.temporal.scoring_provenance import (  # noqa: PLC0415
+        ChipHasher,
+        canonical_hash,
+    )
+
+    hasher = ChipHasher()
+    prior_sha, prior_err = hasher.sha256(str(cohort_prior_json) if cohort_prior_json else None)
+    emis_sha, emis_err = hasher.sha256(str(emissions_json) if emissions_json else None)
+    block = {
+        "estimator_id": estimator_id,
+        "is_adopted_default": estimator_id == ADOPTED_ESTIMATOR,
+        "adopted_default_estimator": ADOPTED_ESTIMATOR,
+        "decision_refs": list(DECISION_REFS),
+        "adopted_code_refs": dict(ADOPTED_CODE_REFS),
+        "working_point": {
+            "decoder_epoch_gap_days": resolved_decoder_epoch_gap_days,
+            "epoch_gap_days": resolved_epoch_gap_days,
+            "clamp_used": clamp_used,
+            "cohort_prior_json": str(cohort_prior_json) if cohort_prior_json else None,
+            "cohort_prior_sha256": prior_sha,
+            "cohort_prior_sha256_error": prior_err,
+            "emissions_json": str(emissions_json) if emissions_json else None,
+            "emissions_sha256": emis_sha,
+            "emissions_sha256_error": emis_err,
+        },
+    }
+    # Order-independent digest over the whole block (before self-insertion).
+    block["provenance_sha256"] = canonical_hash(block)
+    return block
 
 
 def _run_channel(
@@ -359,16 +460,50 @@ def main() -> int:
     )
     ap.add_argument("--root", type=Path, default=DEFAULT_ROOT, help="llm_endtoend_20260623 root")
     ap.add_argument("--reps", nargs="+", default=["rep1", "rep2", "rep3"])
-    ap.add_argument("--estimator", default="pava", help="primary estimator (e.g. changepoint)")
+    ap.add_argument(
+        "--estimator",
+        default=ADOPTED_ESTIMATOR,
+        help="primary estimator. DEFAULT flipped to 'changepoint' per PRD-AMENDMENT-P1 "
+        "§A4 (owner-signed 2026-07-05). Pass 'pava'/'sustained'/'fpd' to override; those "
+        "baselines ignore the decoder working-point defaults below, so an explicit "
+        "baseline run is byte-identical to the pre-flip behaviour.",
+    )
     ap.add_argument(
         "--no-pava-sanity",
         action="store_true",
         help="skip the always-on pava sanity column (default: run it alongside --estimator)",
     )
-    ap.add_argument("--emissions-json", type=Path, default=None)
-    ap.add_argument("--cohort-prior-json", type=Path, default=None,
-                    help="ISSUE-03 CohortPrior JSON injected into the decoder (None = flat)")
-    ap.add_argument("--decoder-epoch-gap-days", type=int, default=None)
+    ap.add_argument(
+        "--emissions-json",
+        type=Path,
+        default=DEFAULT_EMISSIONS_JSON,
+        help="EM-fitted EmissionModel JSON. DEFAULT = canonical A4 emissions; "
+        "use --no-emissions for symmetric-noise (flat) emissions.",
+    )
+    ap.add_argument(
+        "--no-emissions",
+        action="store_true",
+        help="disable emissions (symmetric noise); overrides --emissions-json default",
+    )
+    ap.add_argument(
+        "--cohort-prior-json",
+        type=Path,
+        default=DEFAULT_COHORT_PRIOR_JSON,
+        help="ISSUE-03 CohortPrior JSON injected into the decoder. DEFAULT = canonical "
+        "A4 EB/Turnbull prior; use --no-cohort-prior for a flat prior.",
+    )
+    ap.add_argument(
+        "--no-cohort-prior",
+        action="store_true",
+        help="disable the EB cohort prior (flat prior); overrides --cohort-prior-json default",
+    )
+    ap.add_argument(
+        "--decoder-epoch-gap-days",
+        type=int,
+        default=ADOPTED_DECODER_EPOCH_GAP_DAYS,
+        help="changepoint epoch-collapse threshold. DEFAULT = 45 per A4 signed working "
+        "point (code/EstimatorConfig default is 30; PAVA keeps --epoch-gap-days).",
+    )
     ap.add_argument("--epoch-gap-days", type=int, default=None)
     ap.add_argument("--vexcel-capture-csv", type=Path, default=DEFAULT_VEXCEL_CSV)
     ap.add_argument(
@@ -376,6 +511,14 @@ def main() -> int:
     )
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     a = ap.parse_args()
+
+    # Escape hatches for the A4 default flip: clear the canonical prior/emissions
+    # so the decoder can be run flat again. (No-op for pava/fpd/sustained, which
+    # ignore both fields regardless.)
+    if a.no_emissions:
+        a.emissions_json = None
+    if a.no_cohort_prior:
+        a.cohort_prior_json = None
 
     if a.estimator not in available_estimators():
         ap.error(f"unknown estimator {a.estimator!r}; available: {available_estimators()}")
@@ -460,6 +603,17 @@ def main() -> int:
         },
         "emissions_json": str(a.emissions_json) if a.emissions_json else None,
         "cohort_prior_json": str(a.cohort_prior_json) if a.cohort_prior_json else None,
+        # DECISION-A / PRD-AMENDMENT-P1 (A4) estimator-adoption provenance: estimator
+        # id + working point + code refs + bare-hex file sha256 of the prior/emissions
+        # inputs + an order-independent canonical_hash fingerprint of the whole block.
+        "provenance": _build_estimator_provenance(
+            estimator_id=a.estimator,
+            resolved_decoder_epoch_gap_days=resolved_decoder_epoch_gap_days,
+            resolved_epoch_gap_days=resolved_epoch_gap_days,
+            emissions_json=a.emissions_json,
+            cohort_prior_json=a.cohort_prior_json,
+            clamp_used=clamp_used,
+        ),
         "channels": channels,
     }
     out_path = a.out_dir / "endtoend_decode_tvd.json"
@@ -469,10 +623,19 @@ def main() -> int:
         print(f"\n=== channel={ch['channel']} estimator={ch['estimator']} ===")
         print(f"decoder rep_vs_prod : {ch['decoder']['rep_vs_prod_tvd']}")
         print(f"decoder rep_to_rep  : {ch['decoder']['rep_to_rep_tvd']}  "
-              f"gate(upper<=0.063)={ch['decoder']['band_verdict']['gate_pass_upper_edge_only']}")
+              f"[diagnostic-only, band retired per PRD-AMENDMENT-P1/ISSUE-22] "
+              f"upper<=0.063? {ch['decoder']['band_verdict']['gate_pass_upper_edge_only']}")
         print(f"delivery rep_vs_prod: {ch['unmodified_delivery_reference']['rep_vs_prod_tvd']}")
         print(f"delivery rep_to_rep : {ch['unmodified_delivery_reference']['rep_to_rep_tvd']}")
 
+    prov = payload["provenance"]
+    print(
+        f"\nprovenance: estimator_id={prov['estimator_id']} "
+        f"(adopted_default={prov['is_adopted_default']}) "
+        f"gap={prov['working_point']['decoder_epoch_gap_days']} "
+        f"prior_sha256={prov['working_point']['cohort_prior_sha256']} "
+        f"{prov['provenance_sha256']}"
+    )
     print(f"\nwrote {out_path}")
     return 0
 

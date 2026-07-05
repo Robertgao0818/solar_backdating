@@ -68,6 +68,57 @@ calibration, D12.vii) — keep `sub_domain`, GSD tier (`actual_zoom`), and
 `terminal_status` columns in the manifest so the disagreement distribution can
 be stratified without re-derivation.
 
+## Distillation-label caveat — teacher/student geometry mismatch (disposition, 2026-07-05)
+
+Raised by the [ISSUE-19 decision memo](../replan_v2/ISSUE-19-geometry-decision-2026-07-04.md)
+"Distillation-label caveat" (decision-audit finding **F2**), which requires this
+issue to choose a disposition **in writing**.
+
+**The mismatch.** The harvested teacher labels were produced on **v1 geometry**
+(`chip_geom_v1_banked96` — the banked ~60 m-context / ≥128 px render; the
+`ensure_single_target_review_png` defaults `3.0 / 24.0 / 128` at
+`gehi_common.py:552-554` were in force for the 2026-06-02 scan corpus, which
+predates ISSUE-19's `--chip-geometry` flag). This issue re-renders the student's
+chips at **v2 geometry** (`chip_geom_v2_tight12` — `0.5 / 12.0 / 256`, ~12 m /
+256 px). The re-render changes the student's **input pixels, not the harvested
+labels**: v2 pixels are paired with labels carrying v1 bias — concentrated, per
+the ISSUE-04 evidence, on the small/hard units (T02: invisible small dark panels
+→ false-absent at 60 m; T04: confidently-wrong presence on a bare roof at 60 m).
+The ISSUE-19 mixing rule forbids silently pooling the two geometries.
+
+**Disposition assigned: (2) exclude/down-weight _composed_ with the mandated
+27.6 % handling + (1) accept-and-record the residual, with (3) direct
+measurement deferred to ISSUE-04.** ISSUE-02's hard constraint — *no new LLM
+calls* — makes option (3) (re-score at v2 with the teacher) structurally
+impossible **inside this issue**, so the in-scope choice is (2)+(1), engineered
+to make (3) cheap later:
+
+- **(2) Exclude/down-weight — largely already paid.** The worst
+  v1-render-artifact stratum, `done_ambiguous_gemini_failed`, is one of the
+  `done_ambiguous_*` terminal statuses and is therefore **already removed by the
+  mandated 27.6 % `done_ambiguous_*` exclusion** above — this caveat *composes*
+  with that rule, it does not add a second exclusion pass. Per-stratum
+  down-weighting by `actual_zoom` / footprint size stays available as a lever.
+- **(1) Accept + record the residual, and make it measurable.** The residual —
+  *confident* v1 labels on small/hard units (T04-shaped) — cannot be found
+  LLM-free (finding it is exactly what re-scoring does), so it is accepted as a
+  bounded **label-noise floor** consistent with the match-not-beat fidelity
+  target (~88 % of targets are ≤ 12 m footprint / p50 6.2 m and render in the
+  tested 12 m config, where v1↔v2 labels largely agree; the bias lives in the
+  small/hard minority). It is made explicit and downstream-stratifiable by
+  recording **`label_render_geometry`** (= `chip_geom_v1_banked96`, the geometry
+  the label was produced under) in the manifest, **distinct from** the re-render
+  `render_geometry` (= `chip_geom_v2_tight12`), alongside the already-required
+  `sub_domain` / `actual_zoom` / footprint columns.
+- **(3) Defer the direct measurement to ISSUE-04.** Re-scoring a v2 calibration
+  subset with the teacher to quantify the label-geometry disagreement slots into
+  ISSUE-04's **co-teacher dual-scoring** (D12.vii): it re-scores the v2 chips and
+  reads the v1-label vs v2-teacher disagreement stratified by the columns this
+  issue preserves. ISSUE-02's job is to make that measurable — not to measure it.
+
+Until (3) runs in ISSUE-04, "the re-render fixes the resolution artifact" remains
+a claim about **student inputs only** — not the training labels.
+
 ## Acceptance criteria
 
 - [ ] A label manifest harvested from the retained scan states with at least: `anchor_id, region, grid_id, capture_date, version, actual_zoom, pv_present, confidence, quality_flag, terminal_status, label_3class (present/absent/unusable), split, sub_domain`.
@@ -76,6 +127,8 @@ be stratified without re-derivation.
 - [ ] Chip re-render reads anchor coordinates from `chip_targets.csv` (hard dependency — fails loudly with a clear message if the manifest is missing).
 - [ ] A stratified ~500–1000-anchor chip subset re-downloaded via GEHI, idempotently (re-running does not re-fetch existing chips); GEHI stage code unchanged.
 - [ ] Chip geometry recorded as an explicit render parameter (per replan_v2 ISSUE-19), not silently inherited.
+- [ ] Manifest records `label_render_geometry` (= `chip_geom_v1_banked96`, the label-source geometry) as a column **distinct from** the re-render `render_geometry` (= `chip_geom_v2_tight12`), making the teacher/student geometry mismatch explicit (Distillation-label caveat, disposition 1+2).
+- [ ] The caveat disposition is documented in the sibling README, including that option (2) **composes with** — does not duplicate — the 27.6 % `done_ambiguous_*` exclusion, and that direct measurement (option 3) is deferred to ISSUE-04 co-teacher dual-scoring.
 - [ ] Train / held-out split is anchor-disjoint — verified by an assertion/test.
 - [ ] Strata counts and the unrecoverable-chip drop count are documented (manifest header or sibling README).
 - [ ] Manifest keeps `sub_domain` / `actual_zoom` / `terminal_status` for ISSUE-04's co-teacher disagreement stratification.

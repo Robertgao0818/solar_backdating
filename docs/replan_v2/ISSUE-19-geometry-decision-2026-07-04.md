@@ -264,6 +264,16 @@ writing, one (or a combination) of:
 Until one is chosen there, "the re-render fixes the resolution artifact" is a
 claim about student inputs only — not about the training labels.
 
+**Update 2026-07-05 — disposition assigned (F2 closed).** dinov3 ISSUE-02 chose a
+combination: **(2) exclude/down-weight composed with the mandated 27.6 %
+`done_ambiguous_*` handling** (the `done_ambiguous_gemini_failed` artifact stratum
+is already removed) **+ (1) accept-and-record the residual** via a
+`label_render_geometry` provenance column, **with (3) the direct re-score
+measurement deferred to ISSUE-04 co-teacher dual-scoring** — ISSUE-02's
+no-new-LLM-calls constraint rules option (3) out in-issue. See the
+"Distillation-label caveat" section in
+[dinov3 ISSUE-02](../dinov3_scorer/ISSUE-02-distillation-training-set.md).
+
 ## What ISSUE-19 ships
 
 - **A geometry registry module** mapping `geometry_version` string →

@@ -101,7 +101,7 @@ def main() -> int:
     for unit, reps in sorted(data.items()):
         chip = chip_of[unit]
         st = strat.get(chip, "unknown")
-        fpd_list, year_list, undated_list, fsd_list, syear_list = [], [], [], [], []
+        fpd_list, year_list, undated_list, fsd_list, syear_list, sundated_list = [], [], [], [], [], []
         for rep, datemap in sorted(reps.items()):
             profile = sorted(datemap.items())
             for d, pv in profile:
@@ -112,11 +112,13 @@ def main() -> int:
             year_list.append("" if und or len(fpd) < 4 else fpd[:4])
             syear_list.append("" if fsd == "" else fsd[:4])  # year off the SUSTAINED date
             undated_list.append(1 if und else 0)
+            sundated_list.append(1 if fsd == "" else 0)
         _, iv_hit = _mode_hit(fpd_list)
         modal_fsd, fsd_hit = _mode_hit(fsd_list)
         modal_yr, yr_hit = _mode_hit(year_list)
         modal_syr, syr_hit = _mode_hit(syear_list)
-        und_flip = sum(undated_list) / len(undated_list) if undated_list else 0.0
+        fpd_flip = sum(undated_list) / len(undated_list) if undated_list else 0.0
+        sustained_flip = sum(sundated_list) / len(sundated_list) if sundated_list else 0.0
         per_unit.append({
             "unit": str(unit), "chip_id": chip, "stratum": st,
             "n_reps": len(reps),
@@ -125,7 +127,8 @@ def main() -> int:
             "tier": _tier(iv_hit),
             "modal_year": modal_yr, "year_mode_hit": round(yr_hit, 3),
             "modal_sustained_year": modal_syr, "sustained_year_mode_hit": round(syr_hit, 3),
-            "undated_flip_rate": round(und_flip, 3),
+            "fpd_undated_flip_rate": round(fpd_flip, 3),
+            "sustained_undated_flip_rate": round(sustained_flip, 3),
             "arma_interval_hit": arma.get(unit, ""),
             "fpd_reps": "|".join(fpd_list),
         })
@@ -158,7 +161,8 @@ def main() -> int:
             "mean_sustained_mode_hit": round(sum(r["sustained_mode_hit"] for r in rows) / n, 3),
             "mean_year_mode_hit": round(sum(r["year_mode_hit"] for r in rows) / n, 3),
             "mean_sustained_year_mode_hit": round(sum(r["sustained_year_mode_hit"] for r in rows) / n, 3),
-            "mean_undated_flip": round(sum(r["undated_flip_rate"] for r in rows) / n, 3),
+            "mean_fpd_undated_flip": round(sum(r["fpd_undated_flip_rate"] for r in rows) / n, 3),
+            "mean_sustained_undated_flip": round(sum(r["sustained_undated_flip_rate"] for r in rows) / n, 3),
         }
 
     overall = {**tier_counts(per_unit), **means(per_unit)}
@@ -187,6 +191,11 @@ def main() -> int:
     flip_hi = sorted(frame_rows, key=lambda r: -r["flip_rate"])[:15]
     summary = {
         "experiment": "full-stack no-search L1 reliability (window=8 sequence, K reps)",
+        # DIAGNOSTIC-ONLY caliber: the mode-hit / year-mode-hit numbers below are
+        # hard-MAP point-date metrics, RETIRED as the production install-year
+        # caliber (PRD-AMENDMENT-P1, ISSUE-22). Production caliber = fractional /
+        # survival year mass; these are reproducibility diagnostics only.
+        "caliber_note": "diagnostic_only_hard_MAP_retired_PRD-AMENDMENT-P1_ISSUE-22",
         "n_units": len(per_unit),
         "overall": overall,
         "by_stratum": by_stratum,
@@ -206,16 +215,19 @@ def main() -> int:
 
     # markdown
     L = ["# Full-stack no-search L1 reliability (window=8, K reps)", "",
+         "_Diagnostic-only caliber: hard-MAP point-date mode-hit metrics, retired as "
+         "the production install-year caliber per PRD-AMENDMENT-P1 (ISSUE-22); "
+         "production caliber = fractional/survival year mass._", "",
          f"- units (chip x target): {len(per_unit)}   frames scored: {len(frame_rows)}", "",
          "## Overall vs 2026-06-24 two-arm baseline", "",
          "| run | n | rock-solid | wobbly | chaotic | mean iv-hit | mean yr-hit | mean undated-flip |",
          "|---|--:|--:|--:|--:|--:|--:|--:|",
          f"| **full-stack · FPD** | {overall['n']} | {overall['rock_solid']} | {overall['wobbly']} | "
          f"{overall['chaotic']} | {overall['mean_interval_mode_hit']} | {overall['mean_year_mode_hit']} | "
-         f"{overall['mean_undated_flip']} |",
+         f"{overall['mean_fpd_undated_flip']} |",
          f"| **full-stack · sustained** | {overall['n']} | - | - | - "
          f"| {overall['mean_sustained_mode_hit']} | {overall['mean_sustained_year_mode_hit']} | "
-         f"{overall['mean_undated_flip']} |",
+         f"{overall['mean_sustained_undated_flip']} |",
          f"| Arm A (frozen 8-frame, L1) | 28 | 20 | 8 | 0 | {ref['arm_A'].get('mean_iv', 0.875)} | "
          f"{ref['arm_A'].get('mean_yr', 0.768)} | - |",
          f"| Arm B (adaptive, L3 frozen) | 28 | 14 | 14 | 0 | {ref['arm_B'].get('mean_iv', 0.771)} | "
@@ -228,11 +240,12 @@ def main() -> int:
           f"{overall['mean_interval_mode_hit']}), year-hit {overall['mean_sustained_year_mode_hit']} "
           f"(vs FPD {overall['mean_year_mode_hit']})", "",
           "## By status stratum (full-stack)", "",
-          "| stratum | n | rock | wob | chaos | mean iv | mean yr | mean undated-flip |",
-          "|---|--:|--:|--:|--:|--:|--:|--:|"]
+          "| stratum | n | rock | wob | chaos | mean iv | mean yr | FPD flip | sus flip |",
+          "|---|--:|--:|--:|--:|--:|--:|--:|--:|"]
     for st, s in sorted(by_stratum.items(), key=lambda kv: -kv[1]["n"]):
         L.append(f"| {st} | {s['n']} | {s['rock_solid']} | {s['wobbly']} | {s['chaotic']} "
-                 f"| {s['mean_interval_mode_hit']} | {s['mean_year_mode_hit']} | {s['mean_undated_flip']} |")
+                 f"| {s['mean_interval_mode_hit']} | {s['mean_year_mode_hit']} "
+                 f"| {s['mean_fpd_undated_flip']} | {s['mean_sustained_undated_flip']} |")
     L += ["", "## Top per-frame flips (residual L1 noise, vote targets)", "",
           "| chip | date | present | absent | abstain | flip_rate |", "|---|---|--:|--:|--:|--:|"]
     for r in flip_hi:

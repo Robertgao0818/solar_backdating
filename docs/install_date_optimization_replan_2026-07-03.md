@@ -170,6 +170,15 @@ own turf); HPD calibration proxy (rep-i's 90% interval contains rep-j's MAP
 `done_appears` year-stability (the sustained failure mode, C2); survival-curve
 rep-to-rep TVD beats point-date TVD.
 
+> **Correction (2026-07-04, record hygiene — superseded by the ISSUE-04
+> re-anchor):** the `0.046` undated-flip figure is FPD's banked value, not
+> sustained's; `fullstack_noscan_analyze.py`'s original banked table printed
+> one shared flip field under both estimators' rows (bug also inherited by
+> `panel_repair_d8_compare.py`, see the ISSUE-04 memo's
+> [Correction](replan_v2/ISSUE-04-decision-memo-2026-07-03.md#correction-2026-07-04)).
+> Sustained's true banked undated-flip is **0.075**. Live gate: the
+> ISSUE-04-reanchored extended-panel bar (undated-flip ≤0.055, pass-at-parity).
+
 **Deliverable**: credible intervals as a first-class product for the economic
 event study — something point dates cannot give.
 
@@ -317,11 +326,21 @@ on first run and to ~zero on re-runs.
 
 | Phase | Gate | Bar |
 |---|---|---|
-| 0 | decoder vs sustained on banked panel (weighted + per-stratum) | ≥0.911 mode-hit, ≤0.046 undated-flip, `done_appears` year ≥ FPD, HPD coverage ~nominal, TVD in band |
+| 0 | decoder vs sustained on banked panel (weighted + per-stratum) | ≥0.911 mode-hit, ≤0.046¹ undated-flip, `done_appears` year ≥ FPD, HPD coverage ~nominal, TVD in band |
 | 1 | replay test | byte-identical scan_state.json from cache |
 | 2a | CoJ audit self-gates | known-sign strata >95%, Vexcel monotone consistency |
 | 2b | gold set quality | inter-annotator ≥ agreed floor on 20% double-annotated |
 | 3 | fidelity gate (ISSUE-06 amended) | self rep↔rep ≈1.0; vs-Gemini interval agreement ≈ teacher ceiling; DINOv2-S floor not matching L-SAT |
 | 4-E | mini-reliability rerun, arm B′ | rep↔rep ≥0.875, undated-flip ≤0.171 |
-| 4-A | hybrid vs Gemini-full-stack on 28-unit panel | agreement in 0.911 band, undated-flip ≤0.05, escalation 7–18% |
+| 4-A | hybrid vs Gemini-full-stack on 28-unit panel | agreement in 0.911 band, undated-flip ≤0.05¹, escalation 7–18% |
 | 4-D | sentinel time series | agreement drift bounded; TVD vs frozen production in band |
+
+¹ **Correction (2026-07-04, record hygiene):** both the row-0 `≤0.046` and the
+row-4-A `≤0.05` bars were set from `fullstack_noscan_analyze.py`'s original
+banked-panel table, which printed one shared undated-flip field under both
+the FPD and sustained rows (0.046 is FPD's; the bug is also in
+`panel_repair_d8_compare.py`, see the ISSUE-04 memo's
+[Correction](replan_v2/ISSUE-04-decision-memo-2026-07-03.md#correction-2026-07-04)).
+Sustained's true banked undated-flip is **0.075**. Both bars are superseded by
+the ISSUE-04-reanchored extended-panel bar (undated-flip ≤0.055,
+pass-at-parity).

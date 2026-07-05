@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PRD Amendment P1 - posterior-mass caliber (ADOPTED)</title>
+<style>
+  :root {
+    --bg: #fdfdfc;
+    --fg: #1f2328;
+    --muted: #5c636a;
+    --border: #d9dde1;
+    --rule: #e6e9ec;
+    --code-bg: #f1f2f4;
+    --code-fg: #34452c;
+    --link: #2f5fa8;
+    --bq-border: #c6ccd2;
+    --bq-bg: #f6f7f9;
+    --badge-bg: #a94b1a;
+    --badge-fg: #ffffff;
+    --accent: #8a5a00;
+    --summary-bg: #f4f6f8;
+    --summary-border: #d3dae0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171b;
+      --fg: #d6dae0;
+      --muted: #98a0a9;
+      --border: #2b3037;
+      --rule: #24282e;
+      --code-bg: #23272d;
+      --code-fg: #c6d2ba;
+      --link: #8fb4ee;
+      --bq-border: #39404a;
+      --bq-bg: #1b1e23;
+      --badge-bg: #c96a2e;
+      --badge-fg: #15171b;
+      --accent: #d9b25a;
+      --summary-bg: #1a1d22;
+      --summary-border: #313841;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB",
+      "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+    font-size: 17px;
+    line-height: 1.72;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main {
+    position: relative;
+    z-index: 1;
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 3rem 1.3rem 6rem;
+  }
+
+  .watermark {
+    position: fixed;
+    top: 42%;
+    right: -0.5rem;
+    transform: rotate(-90deg);
+    transform-origin: right center;
+    font-size: 5.2rem;
+    font-weight: 800;
+    letter-spacing: 0.28em;
+    color: var(--fg);
+    opacity: 0.035;
+    pointer-events: none;
+    user-select: none;
+    z-index: 0;
+    white-space: nowrap;
+  }
+
+  h1, h2, h3, h4 {
+    line-height: 1.3;
+    font-weight: 680;
+  }
+  h1 {
+    font-size: 1.6rem;
+    margin: 0 0 0.4rem;
+    letter-spacing: -0.01em;
+  }
+  h2 {
+    font-size: 1.24rem;
+    margin: 2.6rem 0 0.9rem;
+    padding-top: 0.4rem;
+  }
+  h3 {
+    font-size: 1.05rem;
+    margin: 1.9rem 0 0.7rem;
+    color: var(--fg);
+  }
+  h4 {
+    font-size: 1rem;
+    margin: 0 0 0.6rem;
+  }
+
+  p { margin: 0.85rem 0; }
+
+  a {
+    color: var(--link);
+    text-decoration: none;
+    border-bottom: 1px solid color-mix(in srgb, var(--link) 35%, transparent);
+  }
+  a:hover { border-bottom-color: var(--link); }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+      "Liberation Mono", monospace;
+    font-size: 0.86em;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+    word-break: break-word;
+  }
+
+  strong { font-weight: 680; }
+  em { font-style: italic; }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 2.4rem 0;
+  }
+
+  blockquote {
+    margin: 0.9rem 0;
+    padding: 0.15rem 1.1rem;
+    border-left: 3px solid var(--bq-border);
+    background: var(--bq-bg);
+    border-radius: 0 5px 5px 0;
+    color: var(--fg);
+  }
+  blockquote > :first-child { margin-top: 0.65rem; }
+  blockquote > :last-child { margin-bottom: 0.65rem; }
+  blockquote ul { margin: 0.4rem 0; }
+
+  ul, ol { margin: 0.7rem 0; padding-left: 1.5rem; }
+  li { margin: 0.4rem 0; }
+  li > ul, li > ol { margin: 0.35rem 0; }
+
+  ul.checklist, ul.checklist ul { list-style: none; padding-left: 0.2rem; }
+  ul.checklist > li { padding-left: 0; }
+  ul.checklist li {
+    position: relative;
+    padding-left: 1.7rem;
+  }
+  ul.checklist input[type="checkbox"] {
+    position: absolute;
+    left: 0;
+    top: 0.42em;
+    width: 0.95em;
+    height: 0.95em;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: not-allowed;
+  }
+  ul.checklist li ul.sub {
+    list-style: disc;
+    padding-left: 1.3rem;
+    margin-top: 0.35rem;
+  }
+  ul.checklist li ul.sub li { padding-left: 0; }
+
+  .meta {
+    color: var(--muted);
+    font-size: 0.95rem;
+    line-height: 1.85;
+    margin: 0 0 0.5rem;
+  }
+
+  .draft-badge {
+    display: inline-block;
+    font-size: 0.6rem;
+    letter-spacing: 0.14em;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--badge-fg);
+    background: var(--badge-bg);
+    padding: 0.2em 0.55em;
+    border-radius: 3px;
+    vertical-align: middle;
+    margin-left: 0.55rem;
+    position: relative;
+    top: -0.12em;
+  }
+
+  .summary {
+    background: var(--summary-bg);
+    border: 1px solid var(--summary-border);
+    border-radius: 9px;
+    padding: 1.4rem 1.6rem 1.5rem;
+    margin: 1.6rem 0 2.2rem;
+  }
+  .summary h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.08rem;
+    padding-top: 0;
+  }
+  .summary p { margin: 0.6rem 0; font-size: 0.985rem; }
+  .summary .lede {
+    color: var(--muted);
+    font-size: 0.82rem;
+    letter-spacing: 0.02em;
+    margin: 0 0 0.7rem;
+    text-transform: uppercase;
+  }
+
+  .label {
+    font-weight: 680;
+    margin: 1.1rem 0 0.35rem;
+  }
+
+  .sig-line {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9rem;
+    background: var(--code-bg);
+    padding: 0.7rem 0.9rem;
+    border-radius: 5px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .table-wrap { overflow-x: auto; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.92rem;
+    font-variant-numeric: tabular-nums;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.6rem;
+    text-align: left;
+  }
+  th { background: var(--code-bg); font-weight: 680; }
+
+  .doc-title-wrap { margin-bottom: 1.4rem; }
+</style>
+</head>
+<body>
+<div class="watermark" aria-hidden="true">ADOPTED</div>
+<main>
+
+  <section class="summary" aria-label="中文执行摘要">
+    <p class="lede">执行摘要 · Executive summary（中文）</p>
+    <h2>队列交付口径修订：后验质量（分数）聚合（P1 + P3）</h2>
+
+    <p>本文是对《install_date_optimization_v2_prd》的正式修订（owner 已于 2026-07-05 按 <strong>Option A</strong> 签署，签署即生效；PRD 补丁已打入），只改一件事：装机队列（cohort）"安装年份直方图"这一交付物的口径，从"硬性单一年份（hard-MAP，取最可能的一年）"改为"后验质量分数聚合"（把每样本落在各年份上的概率按比例计入）。DECISION-A 此前因硬 MAP 直方图复现性带宽未过而判 NO-GO；本文执行其预注册路径 P1，并顺带解决 P3 尺子问题。</p>
+
+    <p>Owner 两条理由。其一，下游是计量经济学用途：装机日期直接充当 RD/DiD 事件研究的处理时点，日期测量误差会把 DiD 系数压向零并污染平行趋势，给每样本后验区间比给点估计年份更有信息量，也避免取最大值的年份翻转噪声。其二，复现性采"计算可复现"定义——同数据同代码必得同结果，已成立；托管大模型 API 上做不到重采集完全确定，故以"有界的分数通道复现性"为诚实指标，而非硬 MAP 点直方图距离。</p>
+
+    <p>A1–A6 各一句：A1 定分数后验通道为直方图正式交付口径；A2 定"生存／分数通道"为生效的复现性关卡（既通过又胜现任）；A3 把硬 MAP 年份表降为派生诊断、退役旧带宽；A4 生产默认切到"变点解码器＋EB/Turnbull 先验"；A5 列四条须随交付物同行的警示（2024 下探是影像右删失伪影而非市场信号、生存曲线按网格边缘化、只谈首次可见日期、0.067 那对超带值须披露）；A6 划定不动之处（已过面板关卡不重审、旧硬 MAP 带记为"有因退役"而非豁免）。</p>
+
+    <p>两个生效选项：A（推荐）签字即生效，凭已过的相对关卡上线，P3 重估作后续验证并预设回滚触发；B（保守）此刻只签口径变更、生产切换推迟到 P3 新带宽做出并通过为止，期间沿用旧的 sustained 估计器。</p>
+
+    <p>P3 重估尺子协议：在生产／交付通道上跑 ≥5 次冻结存储的端到端重复（≥10 对），带宽公式须在解码新样本前预注册，每次用全新空存储（records=0），完成后退役旧的 3 对小样本带（0.037–0.063）。</p>
+
+    <p>签署后要做：记录签字与所选项、把 §7 机械补丁打入 PRD、给 DECISION-A 追加"翻转"记录、更新 TRACKER 并新建 ISSUE-20/21、把生产配置与报表切读分数通道、将关卡脚本 AC5 生存断言设为生效阈值。</p>
+  </section>
+
+  <hr>
+
+  <div class="doc-title-wrap">
+    <h1>PRD Amendment — Cohort deliverable caliber: posterior-mass (fractional) aggregation (P1 + P3)<span class="draft-badge">Adopted · Option A</span></h1>
+  </div>
+
+  <p class="meta">
+    Date: 2026-07-04 · Status: <strong>ADOPTED (D19) — Option A signed 2026-07-05</strong><br>
+    Parent: <a href="../install_date_optimization_v2_prd.md"><code>../install_date_optimization_v2_prd.md</code></a> — amends D2 and D3, adds D19.<br>
+    Trigger: <a href="DECISION-A-estimator-adoption-2026-07-04.md"><code>DECISION-A-estimator-adoption-2026-07-04.md</code></a> pre-registered path <strong>P1</strong> (with <strong>P3</strong> folded in per P1's own text).<br>
+    Scope: the cohort <strong>reporting caliber</strong> only — which aggregation of the estimator's per-anchor posterior is the operative deliverable and the operative reproducibility gate. This amendment does <strong>not</strong> re-open any panel-caliber gate that already passed, and does not touch estimator internals, seams (D1), or Phase 1–4 slices.
+  </p>
+
+  <hr>
+
+  <h2>1. What this amendment is</h2>
+
+  <p>DECISION-A (2026-07-04) ruled <strong>NO-GO</strong> on cohort-wide adoption of the changepoint posterior decoder. The decoder passed every re-anchored panel gate (D3/D8, extended 38-unit panel) and the relative survival-reproducibility gate, but failed the D3 <strong>year-histogram TVD band (0.037–0.063)</strong> in <strong>hard-MAP</strong> form — flat <code>[0.079, 0.040, 0.076]</code> mean 0.065, EB-prior <code>[0.092, 0.047, 0.085]</code> mean 0.075 — on the sanctioned store-backed re-run (<code>~/zasolar_data/geid_temporal/llm_endtoend_storebacked_20260704/</code>), after both hypothesised remediations (verdict store; stronger prior) were tested and refuted. One gate objectively not cleared meant no incumbent switch; sustained was retained.</p>
+
+  <p>DECISION-A pre-registered three paths to GO. This document executes <strong>P1</strong>, and — as P1's own text requires — resolves the band question <strong>P3</strong> in the same amendment. This is a reporting-caliber change, delivered as an explicit PRD amendment, not an adjudication footnote. Signed <strong>Option A</strong> on 2026-07-05 (§4); adoption effective at sign-off, PRD delta applied (§8).</p>
+
+  <h3>Verbatim trigger text (DECISION-A, "Pre-registered paths to GO")</h3>
+
+  <blockquote>
+    <ul>
+      <li><strong>P1 (recommended; owner decision required).</strong> Amend the PRD to specify cohort year-histogram deliverables as <strong>posterior-mass (fractional) aggregation</strong> — exactly what ISSUE-03 shipped. The operative reproducibility gate then becomes the survival/fractional channel, which passes and beats the incumbent. This is a reporting-caliber change and must be an explicit PRD amendment, not an adjudication footnote; if taken, resolve the band question (P3) in the same amendment since one fractional pair (0.067) still exceeds the absolute band.</li>
+    </ul>
+  </blockquote>
+
+  <blockquote>
+    <ul>
+      <li><strong>P3 (band hygiene).</strong> Re-establish the band from ≥5 store-backed production-channel reps (≥10 pairs), pre-registered before decoding the candidate. Legitimate only computed on the production channel, never tuned on the decoder.</li>
+    </ul>
+  </blockquote>
+
+  <p>DECISION-A's scope discipline is binding on this amendment: "the pre-registered paths below terminate this decision without re-litigating the gates that already passed." This amendment therefore touches <strong>only</strong> the year-histogram-TVD / deliverable-caliber question (D2/D3) — see §9.3.</p>
+
+  <hr>
+
+  <h2>2. Owner rationale (recorded 2026-07-04)</h2>
+
+  <p>Recorded verbatim as the owner's stated grounds for taking P1.</p>
+
+  <p><strong>(a) Downstream consumption is econometric.</strong> The install-date inventory feeds RD / DiD event-study designs in which <strong>install-date accuracy IS treatment-timing accuracy</strong>. Measurement error in event time attenuates DiD coefficients toward zero and contaminates the pre-trend estimates the design rests on. A per-anchor <strong>posterior / credible interval</strong> output is strictly more informative than a hard-MAP year and avoids the argmax flip noise that a point date injects. ISSUE-03 AC3 already demonstrated the concrete failure of <strong>midpoint imputation</strong> — the specific non-fractional aggregation it measured: midpoint aggregation shifts L1 by <strong>18.50 / 14.76 / 17.90</strong> install-units per rep, over-piles 2021–2023, and <strong>zeroes both the 2024–2025 tail and the 2009–2017 early-adopter tail that posterior mass restores</strong> — precisely the event-study windows the RD/DiD design is built on. Fractional posterior mass is therefore load-bearing for the downstream estimand, not a cosmetic reporting choice.</p>
+
+  <p><strong>(b) Reproducibility doctrine.</strong> The owner's operative definition is <strong>computational reproducibility</strong>: same frozen dataset + same code ⇒ identical results. That standard already holds by construction. The decoder is <strong>deterministic given verdicts</strong> (ISSUE-02 AC: no RNG anywhere, including EM — fixed init + tolerance; property tests), and the verdict store freezes scorer outputs (ISSUE-03: banked Panel A baselines re-verified <strong>bit-exact</strong> with the prior injected — fpd <code>0.807/0.046/0.814</code>, sustained <code>0.911/0.857</code>). Collection-level determinism <strong>at a hosted-LLM API boundary is not attainable</strong> (no seeding, silent model updates) and is <strong>not</strong> the standard this program holds estimators to. Re-collection variance is a property of the collection process — it is <strong>measured and bounded on the fractional channel</strong> (AC5), not eliminated by choice of estimator. The path to deterministic re-collection is a <strong>local frozen-weight scorer</strong> (the Phase-3 DINOv3 student), which is out of scope here; until it lands, the honest object is a bounded fractional reproducibility figure, not a hard-MAP point-histogram distance.</p>
+
+  <hr>
+
+  <h2>3. Normative amendment text</h2>
+
+  <p>Numbered A1–A6. These are the substantive changes; §7 renders them as the mechanical PRD patch.</p>
+
+  <p><strong>A1 — Deliverable caliber.</strong> The cohort year-histogram deliverable is <strong>posterior-mass (fractional) aggregation</strong>, produced by the ISSUE-03 <code>eval/aggregate.py</code> <strong>fractional</strong> channel (of its three deliberately separate cohort-year channels: point / midpoint / fractional posterior-mass). This formalises what D2 already specifies ("Aggregation uses fractional counting of posterior mass, not midpoint imputation") as the headline reporting object, not merely an internal aggregation rule.</p>
+
+  <p><strong>A2 — Operative cohort reproducibility gate.</strong> The operative cohort reproducibility gate is the <strong>survival / fractional channel</strong>, not the hard-MAP year histogram. It <strong>passes and beats the incumbent</strong>, recorded here as pass:</p>
+  <ul>
+    <li>AC5 official (<code>issue03_gates.json</code>): survival-curve rep-to-rep TVD mean <strong>0.050</strong> vs point-date year TVD mean <strong>0.075</strong>, <code>beats_point_date: true</code>.</li>
+    <li>ISSUE-03 same-run triple: survival <code>[0.0504 / 0.0596 / 0.0304]</code> mean <strong>0.0468</strong> vs same-run point-date year <code>[0.090 / 0.0314 / 0.0875]</code> mean <strong>0.0696</strong> — beats on mean + 2/3 reps (~33% more rep-stable). (rep2 orders the other way because rep2's point TVD is anomalously low — an upstream L2-search draw, ISSUE-03 C3 — not a survival regression.)</li>
+    <li>Independent cross-check vs sustained-fractional: decoder wins <strong>3/3</strong>.</li>
+  </ul>
+
+  <p><strong>A3 — Hard-MAP year table demoted.</strong> The hard-MAP year histogram is demoted to a <strong>derived diagnostic</strong>. Its 0.037–0.063 band is retired as a gate (see A6 and §5). The optional estimator-side stabiliser P2 (deterministic tie-breaking, epoch snapping, or margin-smoothed MAP; a <strong>decode-only</strong> re-run on the existing 3 store-backed reps, <strong>zero LLM cost</strong>) MAY be run to tighten the diagnostic, but is <strong>not gate-bearing</strong> and is not a precondition of adoption.</p>
+
+  <p><strong>A4 — Production default.</strong> The production default estimator switches to the <strong>changepoint decoder + EB/Turnbull prior</strong>: epoch-gap <strong>45</strong>, EM-fitted 3-symbol emissions, cohort prior per <code>issue03/cohort_prior.json</code> (EB prior fit once on the 15,859-state production cohort <code>jhb_full382_fpcut_scan_2026-06-02</code>, 40 EM iters, <code>final_loglik −18659.79</code>); pinned code refs <strong>89496dd</strong> (store-backed end-to-end) / <strong>1daa61d</strong> (prior add-on worktree). The operative rule for <strong>when</strong> the switch takes effect is set in §4 (owner picks Option A or Option B at sign-off).</p>
+
+  <p><strong>A5 — Caveats that MUST travel with all fractional deliverables.</strong> Every fractional cohort deliverable ships with, verbatim and non-negotiable:</p>
+  <ul>
+    <li>The <strong>C5 2024 prior-mass dip</strong> (0.0135 « 2023's 0.656) is a <strong>Vexcel flight-date right-censoring artifact — never a market signal</strong>. Do not read it as an install-rate decline.</li>
+    <li>Survival curves are <strong>grid-marginalised</strong>: censoring is only conditionally non-informative given grid (per-grid median cadence spans 30.5–624.5 d over 335 grids; cadence-stratified S(2021) spreads 0.081 vs 0.908). Read cohort curves as grid-marginalised, not as a clean population survival function.</li>
+    <li><strong>D11 first-visible-appearance scope is unchanged.</strong> Posterior mass is over <strong>first-visible-appearance epochs under imagery-cadence censoring</strong>; it claims <strong>no</strong> new precision about physical install dates (see §9.4).</li>
+    <li>The one <strong>0.067</strong> delivered-caliber (survival/fractional) pair that still exceeds the old absolute band is <strong>disclosed</strong> on every deliverable until the P3 re-band (§5) resolves it.</li>
+  </ul>
+
+  <p><strong>A6 — What does NOT change.</strong> Explicitly out of the amendment's reach:</p>
+  <ul>
+    <li>All already-passed <strong>panel-caliber gates are not re-litigated</strong> (per DECISION-A's own terms): MAP mode-hit ≥ 0.882 (achieved 0.905, 0.942 with EB prior), HPD calibration ≈ 0.90 (0.914 → 0.937), dominant-stratum year-stability (0.867), inventory-weighted headline (0.863 → 0.923), undated-flip 0.055 at parity — all stand as adjudicated.</li>
+    <li><strong>ISSUE-04's standing rule</strong> ("no change to the production default until the decoder clears its gates") remains in force and is now <strong>satisfied through the operative gate</strong> (A2), not waived.</li>
+    <li>The <strong>retired hard-MAP absolute gate</strong> is recorded as <strong>retired-with-cause</strong> (small-sample band fit on 3 pre-store pairs; production reference channel itself breached it at 0.068 on 1/3 pairs; hard-MAP argmax collapse is the instability source, not the posterior — DECISION-A root-cause 3/4), <strong>not waived</strong>.</li>
+  </ul>
+
+  <hr>
+
+  <h2>4. Operative adoption rule — owner decision</h2>
+
+  <p>A4's production switch needs an explicit effective-date rule. Two options; recommendation is <strong>Option A</strong>. Owner ticks exactly one at sign-off.</p>
+
+  <ul class="checklist">
+    <li>
+      <input type="checkbox" checked disabled aria-hidden="true">
+      <strong>Option A (recommended; SIGNED 2026-07-05).</strong> Adoption is <strong>effective at owner sign-off</strong>, on the strength of the already-passing pre-registered relative gate (A2). The P3 re-band (§5) runs as a <strong>condition-subsequent</strong> verification, with a pre-registered <strong>rollback trigger</strong>: <em>if the fractional channel breaches the re-derived band on a majority of its first pairs (≥ ⌈n/2⌉ of the ≥10 pairs), revert the production default to sustained and re-open DECISION-A.</em> Until the re-band completes, the 0.067 pair is disclosed (A5).
+      <ul class="sub">
+        <li><strong>Risk:</strong> the cohort ships on the decoder before its band is independently re-established; if P3 later refutes the relative gate's generalisation, one delivered inventory was produced under a since-reverted default (mitigated by the pre-registered rollback trigger and the disclosure caveat).</li>
+      </ul>
+    </li>
+    <li>
+      <input type="checkbox" disabled aria-hidden="true">
+      <strong>Option B (conservative).</strong> The <strong>caliber change is signed now</strong> (A1–A3, A5, A6 land in the PRD immediately), but the <strong>production switch is deferred</strong> until the re-derived band (§5) exists and the fractional channel clears it. Sustained remains the production default in the interim.
+      <ul class="sub">
+        <li><strong>Risk:</strong> the cohort keeps shipping on <strong>sustained</strong> — the estimator DECISION-A found strictly less reproducible on the fractional channel and strictly worse on panel accuracy — for the several-rep, real-LLM-cost duration of the P3 re-band, delaying the downstream RD/DiD benefit for reporting-hygiene reasons the relative gate already addresses.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <p class="sig-line">Owner: <strong>Robert Gao</strong> · Date: <strong>2026-07-05</strong> · Option: <strong>A</strong> — sub-decision resolved 2026-07-05: §5.3 band formula = <strong>mean ± 2 sd</strong>, registered with binding refinements in <code>ISSUE-21-band-prereg-2026-07-05.md</code> (zero floor; upper-edge breach → rollback trigger, lower-edge breach → variance-collapse audit).</p>
+
+  <hr>
+
+  <h2>5. P3 band re-derivation protocol (normative)</h2>
+
+  <p>Resolves P3. This is real follow-up <strong>execution</strong> work (API cost), not a retroactive relabelling of the existing 0.067-exceeding pair (see §9.1).</p>
+
+  <ol>
+    <li><strong>Sample.</strong> ≥ <strong>5</strong> store-backed <strong>production-channel</strong> end-to-end reps ⇒ ≥ <strong>10</strong> rep-to-rep pairs. <strong>3 store-backed reps already exist</strong> (<code>llm_endtoend_storebacked_20260704/</code>); therefore <strong>≥ 2 more reps</strong> are needed. Honest cost note: these are <strong>real gemini-3-flash-agent sequence calls</strong> on the 642-anchor cohort — not free; budget and schedule before launch.</li>
+    <li><strong>Channel.</strong> The band is computed on the <strong>production/delivery channel only</strong> (the survival/fractional deliverable of A1), <strong>never tuned on any candidate estimator</strong> (P3 constraint — P3's verbatim wording is "never tuned on the decoder", generalised here to any candidate estimator). It characterises the collection process, not the decoder.</li>
+    <li><strong>Pre-registration.</strong> The band <strong>formula is written down BEFORE the new reps are decoded.</strong> Proposed forms (owner picks one at sign-off): <strong>mean ± 2 sd</strong> of the pairwise fractional-channel TVDs, <strong>or</strong> the <strong>min–max envelope</strong> of the ≥10 pairs. Whichever is chosen is committed in the pre-registration note before any new rep is scored.</li>
+    <li><strong>Fresh-per-rep verdict stores.</strong> Each re-band rep MUST run against a <strong>fresh, empty verdict store</strong> (<code>records=0</code> verified at launch), exactly as DECISION-A verified for the existing reps ("Stores were per-rep fresh …, so measured variance is genuine"). A store shared across reps would let a cached verdict never drift (D6), silently collapsing the very rep-to-rep variance the band is meant to measure — see §9.5.</li>
+    <li><strong>Retirement.</strong> On completion, the <strong>stale 3-pair band (0.037–0.063)</strong> — fit on 3 pre-store pairs, and breached by the production reference channel itself at <strong>0.068 on 1/3 pairs</strong> — is <strong>retired</strong>, superseded by the re-derived production-channel band. Until then it survives only as the disclosure anchor for the 0.067 pair (A5).</li>
+  </ol>
+
+  <hr>
+
+  <h2>6. Downstream (RD/DiD) consumption spec</h2>
+
+  <p>The deliverables handed to downstream econometrics:</p>
+
+  <ul>
+    <li><strong>Per-anchor posterior mass</strong> over first-visible-appearance epochs, in the <code>year_log_mass</code> form (the ISSUE-03 <code>CohortPrior(year_log_mass, beyond_log_mass)</code> representation), plus <code>P(undated) = P(τ &gt; T)</code> and the credible interval.</li>
+    <li><strong>Cohort survival curves</strong> (grid-marginalised, A5), the operative reproducibility object (A2).</li>
+    <li><strong>Fractional cohort-year tables</strong> (<code>eval/aggregate.py</code> fractional channel).</li>
+  </ul>
+
+  <p>Recommended usage: <strong>interval-censored event-time</strong> or <strong>posterior-weighted</strong> RD/DiD designs that propagate dating uncertainty. <strong>Hard MAP years are display columns only</strong> — never the regression's event-time input (they reintroduce the argmax flip noise A2 avoids and zero the tails A3/AC3 documents).</p>
+
+  <hr>
+
+  <h2>7. Proposed mechanical PRD delta</h2>
+
+  <p>Adoption is a mechanical patch to <code>../install_date_optimization_v2_prd.md</code>. Quote → replacement for each passage; one new D-entry (next free number <strong>D19</strong>). Nothing here is applied by this draft — it is the exact edit set for the sign-off step (§8).</p>
+
+  <h3>7.1 D2 — formalise the deliverable (append one clause)</h3>
+
+  <p class="label"><strong>Current</strong> (final two sentences of D2):</p>
+  <blockquote>
+    <p>Aggregation uses fractional counting of posterior mass, not midpoint imputation. A PAVA/isotonic single-changepoint fit is the mandatory falsification floor.</p>
+  </blockquote>
+
+  <p class="label"><strong>Replacement:</strong></p>
+  <blockquote>
+    <p>Aggregation uses fractional counting of posterior mass, not midpoint imputation; the <strong>cohort year-histogram deliverable and the survival curves are that fractional channel</strong> (the headline reporting object, formalised in D19). A PAVA/isotonic single-changepoint fit is the mandatory falsification floor.</p>
+  </blockquote>
+
+  <h3>7.2 D3 — demote the hard-MAP TVD gate (reword the gate sentence)</h3>
+
+  <p class="label"><strong>Current</strong> (the TVD clauses inside D3):</p>
+  <blockquote>
+    <p>… HPD calibration proxy (rep-i's 90% interval contains rep-j's MAP ≈ 90%); year-histogram TVD within the established 0.037–0.063 band; survival-curve rep-to-rep TVD beats point-date TVD. Decision on cohort-wide adoption additionally requires the enlarged dominant-stratum panel (D4).</p>
+  </blockquote>
+
+  <p class="label"><strong>Replacement:</strong></p>
+  <blockquote>
+    <p>… HPD calibration proxy (rep-i's 90% interval contains rep-j's MAP ≈ 90%); <strong>the operative cohort reproducibility gate is the survival/fractional channel — survival-curve rep-to-rep TVD beats point-date TVD (D19); the hard-MAP year-histogram TVD 0.037–0.063 band is demoted to a derived diagnostic, retired-with-cause.</strong> Decision on cohort-wide adoption additionally requires the enlarged dominant-stratum panel (D4).</p>
+  </blockquote>
+
+  <h3>7.3 D3 — add a distinctly-tagged pointer blockquote (NOT a "Correction")</h3>
+
+  <p>Insert directly <strong>after</strong> the existing <code>&gt; **Correction (2026-07-04, record hygiene only …)**</code> blockquote already appended to D3. Uses an <strong>Amended</strong> tag, not a second same-dated "Correction" tag, to avoid two ambiguous same-dated Correction blocks on one D-entry (see §9.8):</p>
+  <blockquote>
+    <p><strong>Amended (2026-07-04, D19 — deliverable caliber; substantive):</strong> the year-histogram TVD (hard-MAP) 0.037–0.063 band is <strong>demoted to a derived diagnostic and retired-with-cause</strong>; the operative cohort reproducibility gate is the <strong>survival/fractional channel</strong> (passes: AC5 survival mean 0.050 vs point-date 0.075, <code>beats_point_date: true</code>). Unlike the record-hygiene Correction above, this <strong>does</strong> change the adoption verdict — see <a href="replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md"><code>PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md</code></a> and D19.</p>
+  </blockquote>
+
+  <h3>7.4 New decision entry (banner + provenance + D19)</h3>
+
+  <p>Insert after D18, before <code>## Testing Decisions</code>:</p>
+  <blockquote>
+    <h4>Amendment 2026-07-04: cohort deliverable caliber (D19)</h4>
+    <p>DECISION-A (2026-07-04) ruled the changepoint decoder NO-GO cohort-wide solely on the D3 hard-MAP year-histogram TVD band (0.037–0.063), which failed on the sanctioned store-backed re-run (flat <code>[0.079,0.040,0.076]</code> mean 0.065; EB prior <code>[0.092,0.047,0.085]</code> mean 0.075) after the verdict-store and stronger-prior remediations were both refuted. Every panel-caliber gate and the relative survival-reproducibility gate passed. Pre-registered path P1 (owner decision) redefines the headline deliverable; this entry lands it.</p>
+    <p><strong>D19 — Cohort deliverable caliber = posterior-mass (fractional); operative gate = survival/fractional channel (owner decision required).</strong> (i) The cohort year-histogram deliverable is the fractional posterior-mass channel (ISSUE-03 <code>eval/aggregate.py</code>), formalising D2's aggregation rule as the headline object. (ii) The operative cohort reproducibility gate is the survival/fractional channel — it passes and beats the incumbent (AC5: survival mean 0.050 vs point-date 0.075, <code>beats_point_date: true</code>; same-run <code>[0.0504/0.0596/0.0304]</code> mean 0.0468 vs point <code>[0.090/0.0314/0.0875]</code> mean 0.0696; cross-check 3/3). (iii) The hard-MAP year histogram is a derived diagnostic; its 0.037–0.063 band is retired-with-cause (small-sample fit on 3 pre-store pairs; production reference channel breached it at 0.068 on 1/3 pairs; instability is hard-MAP argmax collapse, not the posterior). (iv) Production default switches to the changepoint decoder + EB/Turnbull prior (epoch-gap 45, EM emissions, <code>cohort_prior.json</code>; code <code>89496dd</code>/<code>1daa61d</code>); effective-date rule per the P1 amendment §4. (v) P3 band re-derivation is mandatory follow-up: ≥5 store-backed production-channel reps (≥10 pairs), pre-registered before decoding, fresh-per-rep stores, never tuned on the decoder (→ ISSUE-21). (vi) All already-passed panel gates are not re-litigated; D11 first-visible-appearance scope unchanged; the C5 2024-dip and grid-marginalisation caveats travel with every deliverable. Full normative text: <a href="replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md"><code>replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md</code></a>.</p>
+  </blockquote>
+
+  <h3>7.5 Testing Decisions — update the "gate IS the acceptance test" bullet</h3>
+
+  <p class="label"><strong>Current</strong> (InstallDateEstimator seam bullet, final sentence):</p>
+  <blockquote>
+    <p>The D3 gates run as an offline evaluation script whose outputs are asserted against thresholds — the gate IS the acceptance test.</p>
+  </blockquote>
+
+  <p class="label"><strong>Replacement:</strong></p>
+  <blockquote>
+    <p>The D3 gates run as an offline evaluation script whose outputs are asserted against thresholds — the gate IS the acceptance test; <strong>the operative cohort-reproducibility assertion is the survival/fractional channel (D19), so <code>scripts/validation/issue03_gates.py</code>'s AC5 survival assertion is the gate-bearing threshold and the retired hard-MAP year-histogram TVD band is a reported diagnostic, not a pass/fail assertion</strong> (see §9.6).</p>
+  </blockquote>
+
+  <h3>7.6 Further Notes — add a provenance bullet</h3>
+
+  <p>Append to <code>## Further Notes</code>:</p>
+  <blockquote>
+    <ul>
+      <li>Provenance (amendment): the 2026-07-04 cohort-deliverable-caliber amendment (P1 + P3, D19) executes DECISION-A's pre-registered path P1; it redefines the headline cohort deliverable as fractional posterior mass and the operative gate as the survival channel, and schedules the P3 band re-derivation. Evidence base: <a href="replan_v2/DECISION-A-estimator-adoption-2026-07-04.md"><code>replan_v2/DECISION-A-estimator-adoption-2026-07-04.md</code></a>, ISSUE-02, ISSUE-03; full amendment in <a href="replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md"><code>replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md</code></a>.</li>
+    </ul>
+  </blockquote>
+
+  <p>Passages left <strong>unchanged</strong> (addressed only in §9, no edit): Problem Statement item 1, Solution/Phase 0, User Stories 2–4, D1, D4, D8, D11, Out of Scope. The first-visible-appearance framing (D11, Out of Scope) is preserved verbatim.</p>
+
+  <hr>
+
+  <h2>8. Adoption checklist</h2>
+
+  <p>Signed 2026-07-05: the five docs-level items below are done; the three code-level items (production config, report builder, gate runner) remain open.</p>
+
+  <ul class="checklist">
+    <li><input type="checkbox" checked disabled aria-hidden="true"><strong>Owner sign-off</strong> — name / date / Option A|B recorded in §4. <em>(Done 2026-07-05: Robert Gao, Option A.)</em></li>
+    <li><input type="checkbox" checked disabled aria-hidden="true"><strong>Apply the PRD delta</strong> (§7.1–§7.6) to <code>../install_date_optimization_v2_prd.md</code>; flip this file's Status from <strong>DRAFT — pending owner sign-off</strong> to <strong>ADOPTED (D19)</strong>.</li>
+    <li><input type="checkbox" checked disabled aria-hidden="true"><strong>DECISION-A addendum</strong> — append a dated block to <code>DECISION-A-estimator-adoption-2026-07-04.md</code> recording the verdict flip: NO-GO (hard-MAP caliber) → GO (fractional caliber via D19), with the effective-date rule (§4 option) and a link to this amendment.</li>
+    <li><input type="checkbox" checked disabled aria-hidden="true"><strong>TRACKER.md updates</strong> (then re-run <code>python3 docs/replan_v2/render_tracker.py</code>):
+      <ul class="sub">
+        <li>Add Slices row <strong>20</strong> — <code>| 20 | [Cohort deliverable caliber amendment (D19)](ISSUE-20-deliverable-caliber-amendment.md) | 0 | ready-for-agent | — |</code> (a docs delta; D2/D3/D4 already done/discharged).</li>
+        <li>Add Slices row <strong>21</strong> — <code>| 21 | [P3 band re-derivation reps](ISSUE-21-p3-band-rederivation.md) | 0 | ready-for-human | 20, 7 |</code> (real LLM-cost execution, fresh-per-rep stores; distinct from the docs delta — do not conflate "write the amendment" with "run ≥2 more production reps").</li>
+        <li>Add mermaid nodes <code>I20[20 caliber amendment]</code>, <code>I21[21 P3 band reps]</code>; edges <code>I2 --> I20</code>, <code>I3 --> I20</code>, <code>I4 --> I20</code>, <code>I20 --> I21</code>, <code>I7 --> I21</code>.</li>
+        <li>Rewrite the existing <strong>ISSUE-02 note</strong> paragraph: the NO-GO is now <strong>qualified/flipped under the fractional deliverable definition (D19)</strong> — link both DECISION-A and this amendment; add the sentence "Slice 20 was added 2026-07-04 from DECISION-A's P1/P3 pre-registered path (PRD amendment block, D19); slice 21 tracks the P3 band re-derivation reps."</li>
+        <li>Move slices 20 (and later 21) into "Done so far:" only once their Status lines actually read <code>done</code>.</li>
+      </ul>
+    </li>
+    <li><input type="checkbox" checked disabled aria-hidden="true"><strong>New ISSUE files</strong> — <code>ISSUE-20-deliverable-caliber-amendment.md</code> (Parent → D19 + user stories 2, 4; What-to-build = the §7 mechanical delta; Acceptance = grep-verified PRD edits) and <code>ISSUE-21-p3-band-rederivation.md</code> (Parent → D19 + P3; What-to-build = §5 protocol; Acceptance = ≥5 store-backed reps, pre-registered band, fresh-per-rep stores verified <code>records=0</code>). Follow the ISSUE-12 shape.</li>
+    <li><input type="checkbox" disabled aria-hidden="true"><strong>Production config + provenance</strong> — switch the default estimator to the decoder + EB prior (A4); config provenance MUST carry <strong>estimator id + prior hash</strong> (<code>cohort_prior.json</code>) alongside code refs <code>89496dd</code>/<code>1daa61d</code>.</li>
+    <li><input type="checkbox" disabled aria-hidden="true"><strong>Report-builder switch</strong> — cohort report tables read the <strong>fractional</strong> channel; hard-MAP years demoted to display columns; C5-dip + grid-marginalisation + 0.067-disclosure caveats attached (A5).</li>
+    <li><input type="checkbox" disabled aria-hidden="true"><strong>Gate runner</strong> — annotate/retire the hard-MAP year-histogram TVD assertion in <code>scripts/validation/issue03_gates.py</code> (and the <code>fullstack_noscan_analyze.py</code> / <code>panel_repair_d8_compare.py</code> reporting path) so the AC5 survival assertion is the gate-bearing threshold and the hard-MAP band is reported as a diagnostic, not asserted pass/fail (§9.6).</li>
+  </ul>
+
+  <hr>
+
+  <h2>9. Risk resolutions</h2>
+
+  <p>Each Scout-flagged contradicting passage gets an explicit resolution.</p>
+
+  <p><strong>9.1 — P3 no-tuning constraint</strong> ("Legitimate only computed on the production channel, never tuned on the decoder"). Resolved by §5: the band is a <strong>real follow-up execution</strong> step — ≥5 store-backed production-channel reps, ≥10 pairs, formula <strong>pre-registered before decoding the candidate</strong>, computed on the production channel only. It is <strong>not</strong> a retroactive relabelling of the existing 0.067-exceeding pair; the 0.067 pair is <strong>disclosed</strong> (A5) until the re-band supersedes it, not silently reclassified as passing.</p>
+
+  <p><strong>9.2 — D8 rule (5) "no cohort decision from a stratum with n=2 support" + D3's closing D4 precondition.</strong> Both already satisfied and cited, not bypassed: DECISION-A records "D4 is fully discharged: dominant stratum <strong>n=2 → 12</strong> (≥8 required); tight-crop hypothesis CONFIRMED." This amendment inherits that discharged precondition and does not re-open it.</p>
+
+  <p><strong>9.3 — DECISION-A scope discipline</strong> ("terminate this decision without re-litigating the gates that already passed"). This amendment touches <strong>only</strong> the year-histogram-TVD / deliverable-caliber question (D2/D3, A1–A3). The panel-caliber gates that already passed — MAP mode-hit ≥ 0.882, HPD calibration ≈ 0.90, dominant-stratum year-stability — are stated as <strong>standing, not reopened</strong> (A6). No panel number is recomputed or renegotiated here.</p>
+
+  <p><strong>9.4 — D11 + Out of Scope (physical install dates).</strong> Redefining the deliverable as posterior-mass/fractional makes <strong>no</strong> claim of new precision about physical install dates. The posterior is over <strong>first-visible-appearance epochs under imagery-cadence censoring</strong>; D11 and the Out-of-Scope "first visible appearance" framing are <strong>preserved verbatim</strong> (A5, §7.6). Fractional mass narrows the <em>representation of dating uncertainty</em>, not the physical-date claim.</p>
+
+  <p><strong>9.5 — D6 verdict-store correctness vs P3 measurement validity.</strong> A subtle contradiction: D6's cost-saving intent (a cached verdict "can never drift") would, if a store were shared across the P3 re-band reps, <strong>collapse the genuine rep-to-rep variance</strong> the band exists to measure — invalidating the measurement. Resolved by §5.4: re-band reps <strong>MUST use fresh, empty (<code>records=0</code>-verified) per-rep stores</strong>, matching DECISION-A's own verification that "measured variance is genuine." This is written into the ISSUE-21 acceptance criteria.</p>
+
+  <p><strong>9.6 — Testing Decisions "the gate IS the acceptance test".</strong> A prose-only amendment would falsify this clause, because the authoritative metric changes from hard-MAP year-histogram TVD to the survival/fractional channel. Resolved by §7.5: <code>scripts/validation/issue03_gates.py</code>'s <strong>AC5 survival assertion becomes the gate-bearing threshold</strong>, and the hard-MAP year-histogram TVD in <code>fullstack_noscan_analyze.py</code> / <code>panel_repair_d8_compare.py</code> is reported as a diagnostic, not asserted. The gate script is updated in code (checklist §8), so the clause stays true.</p>
+
+  <p><strong>9.7 — Owner-decision gating precedent.</strong> D4 is tagged "(budget approved)", D12.iv "(owner decision)", D18 "(owner decision 2026-07-03)"; DECISION-A's P1 is "(recommended; owner decision required)" and demands "an explicit PRD amendment, not an adjudication footnote." This is not a routine mechanical docs delta — it redefines the <strong>headline cohort deliverable</strong>. The document is therefore <strong>DRAFT — pending owner sign-off</strong>, D19 carries "(owner decision required)", and §4 requires an explicit signed option before the production switch takes effect.</p>
+
+  <p><strong>9.8 — Numbering/dating collision on D3.</strong> D3 already carries a <code>Correction (2026-07-04, record hygiene only …)</code> blockquote whose tag explicitly promises <strong>no</strong> verdict change. This amendment <strong>does</strong> change the adoption verdict, so it must not stack a second same-dated "Correction" on D3 (two same-dated Correction blocks would be ambiguous about which supersedes). Resolved by using a <strong>new D19 entry</strong> (§7.4) plus a distinctly-tagged <code>Amended (2026-07-04, D19 — … substantive)</code> pointer on D3 (§7.3) — never a second "Correction" tag.</p>
+
+  <hr>
+
+  <h2>Provenance</h2>
+
+  <ul>
+    <li>Provenance (amendment): drafted 2026-07-04 as the execution of DECISION-A's pre-registered path P1 (with P3 folded in per P1's text). Evidence base: <a href="DECISION-A-estimator-adoption-2026-07-04.md"><code>DECISION-A-estimator-adoption-2026-07-04.md</code></a> (verdict + gate table + root cause + P1/P3), <a href="ISSUE-02-changepoint-posterior-decoder.md"><code>ISSUE-02-changepoint-posterior-decoder.md</code></a> (decoder, determinism-given-verdicts AC), <a href="ISSUE-03-turnbull-survival-prior.md"><code>ISSUE-03-turnbull-survival-prior.md</code></a> (fractional channel, EB prior, AC5 survival gate, C-caveats), <a href="ISSUE-04-decision-memo-2026-07-03.md"><code>ISSUE-04-decision-memo-2026-07-03.md</code></a> (D4 discharge, extended-panel re-anchor, undated-flip correction lineage). Artifact roots: <code>~/zasolar_data/geid_temporal/issue03_gates_20260704/</code>, <code>~/zasolar_data/geid_temporal/llm_endtoend_storebacked_20260704/</code>.</li>
+  </ul>
+
+</main>
+</body>
+</html>

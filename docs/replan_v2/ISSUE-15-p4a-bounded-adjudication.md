@@ -27,6 +27,13 @@ miscalibration.
 
 - [ ] Escalation set enumerable before any teacher call; size bound asserted
 - [ ] Hybrid vs teacher-full-stack interval agreement on the banked panel within the 0.911 band, undated-flip ≤ 0.05
+  (**correction, 2026-07-04, record hygiene:** this `≤0.05` was rounded from
+  the banked `0.046` constant, which is FPD's undated-flip, not sustained's/the
+  full-stack panel's — `fullstack_noscan_analyze.py`'s original table shared
+  one flip field across both estimator rows, see the ISSUE-04 memo's
+  [Correction](ISSUE-04-decision-memo-2026-07-03.md#correction-2026-07-04)).
+  Sustained's true banked undated-flip is 0.075; re-anchor this bar against
+  that (or the ISSUE-04 extended-panel 0.055) before using it as a live gate.
 - [ ] Per-stratum results no worse than the full-stack panel's per-stratum table
 - [ ] Escalation rate within the expected band on the panel cohort; monitor alarms on a synthetic miscalibration test
 - [ ] Transition-window frames are always teacher-adjudicated (no student-only transitions; test)

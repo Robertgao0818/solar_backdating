@@ -43,7 +43,8 @@ DELTA_METRICS = [
     "sustained_mode_hit",
     "year_mode_hit",
     "sustained_year_mode_hit",
-    "undated_flip_rate",
+    "fpd_undated_flip_rate",
+    "sustained_undated_flip_rate",
     "abstain_rate",
 ]
 
@@ -53,7 +54,8 @@ UNIT_METRICS = [
     "sustained_mode_hit",
     "year_mode_hit",
     "sustained_year_mode_hit",
-    "undated_flip_rate",
+    "fpd_undated_flip_rate",
+    "sustained_undated_flip_rate",
     "modal_fpd",
     "modal_fsd",
     "n_frame_rows",
@@ -100,7 +102,7 @@ def summarize_unit(profiles: dict, rows: dict, unit: tuple) -> dict:
     out["n_frame_rows"] = len(frame_rows)
 
     if n_reps:
-        fpd_list, fsd_list, year_list, syear_list, undated_list = [], [], [], [], []
+        fpd_list, fsd_list, year_list, syear_list, undated_list, sundated_list = [], [], [], [], [], []
         for _rep, datemap in sorted(reps.items()):
             profile = sorted(datemap.items())
             fpd, fsd, und = derive_install(profile)
@@ -109,6 +111,7 @@ def summarize_unit(profiles: dict, rows: dict, unit: tuple) -> dict:
             year_list.append("" if und or len(fpd) < 4 else fpd[:4])
             syear_list.append("" if fsd == "" else fsd[:4])
             undated_list.append(1 if und else 0)
+            sundated_list.append(1 if fsd == "" else 0)
 
         modal_fpd, iv_hit = _mode_hit(fpd_list)
         modal_fsd, fsd_hit = _mode_hit(fsd_list)
@@ -119,7 +122,8 @@ def summarize_unit(profiles: dict, rows: dict, unit: tuple) -> dict:
         out["sustained_mode_hit"] = round(fsd_hit, 3)
         out["year_mode_hit"] = round(yr_hit, 3)
         out["sustained_year_mode_hit"] = round(syr_hit, 3)
-        out["undated_flip_rate"] = round(sum(undated_list) / len(undated_list), 3)
+        out["fpd_undated_flip_rate"] = round(sum(undated_list) / len(undated_list), 3)
+        out["sustained_undated_flip_rate"] = round(sum(sundated_list) / len(sundated_list), 3)
         out["modal_fpd"] = modal_fpd
         out["modal_fsd"] = modal_fsd
 
@@ -171,7 +175,8 @@ def source_summary(per_unit_rows: list[dict], suffix: str) -> dict:
         "n_frame_rows_total": sum(n_frame_vals),
     }
     for m in ["interval_mode_hit", "sustained_mode_hit", "year_mode_hit",
-              "sustained_year_mode_hit", "undated_flip_rate", "abstain_rate",
+              "sustained_year_mode_hit", "fpd_undated_flip_rate",
+              "sustained_undated_flip_rate", "abstain_rate",
               "error_rate", "mean_pv_score", "mean_sequence_confidence"]:
         out[f"mean_{m}"] = _mean([r[f"{m}_{suffix}"] for r in per_unit_rows])
     return out
@@ -266,7 +271,7 @@ def main() -> int:
         L.append(
             f"| {unit_suffix(r)} | {_fmt(r['sustained_mode_hit_banked'])}/{_fmt(r['sustained_mode_hit_tight'])} "
             f"| {_fmt(r['sustained_year_mode_hit_banked'])}/{_fmt(r['sustained_year_mode_hit_tight'])} "
-            f"| {_fmt(r['undated_flip_rate_banked'])}/{_fmt(r['undated_flip_rate_tight'])} "
+            f"| {_fmt(r['sustained_undated_flip_rate_banked'])}/{_fmt(r['sustained_undated_flip_rate_tight'])} "
             f"| {_fmt(r['abstain_rate_banked'])}/{_fmt(r['abstain_rate_tight'])} "
             f"| {_fmt(r['modal_fsd_banked'])} | {_fmt(r['modal_fsd_tight'])} |"
         )
@@ -275,24 +280,27 @@ def main() -> int:
         f"{banked_summary.get('mean_sustained_mode_hit','')} (banked) "
         f"| {tight_summary.get('mean_sustained_year_mode_hit','')} vs "
         f"{banked_summary.get('mean_sustained_year_mode_hit','')} "
-        f"| {tight_summary.get('mean_undated_flip_rate','')} vs "
-        f"{banked_summary.get('mean_undated_flip_rate','')} "
+        f"| {tight_summary.get('mean_sustained_undated_flip_rate','')} vs "
+        f"{banked_summary.get('mean_sustained_undated_flip_rate','')} "
         f"| {tight_summary.get('mean_abstain_rate','')} vs {banked_summary.get('mean_abstain_rate','')} | | |"
     )
 
     L += [
         "", "## First-present-date estimator (FPD)", "",
-        "| unit | interval hit b/t | modal FPD banked | modal FPD tight |",
-        "|---|---|---|---|",
+        "| unit | interval hit b/t | undated-flip b/t | modal FPD banked | modal FPD tight |",
+        "|---|---|---|---|---|",
     ]
     for r in per_unit:
         L.append(
             f"| {unit_suffix(r)} | {_fmt(r['interval_mode_hit_banked'])}/{_fmt(r['interval_mode_hit_tight'])} "
+            f"| {_fmt(r['fpd_undated_flip_rate_banked'])}/{_fmt(r['fpd_undated_flip_rate_tight'])} "
             f"| {_fmt(r['modal_fpd_banked'])} | {_fmt(r['modal_fpd_tight'])} |"
         )
     L.append(
         f"| **mean** | {tight_summary.get('mean_interval_mode_hit','')} (tight) vs "
-        f"{banked_summary.get('mean_interval_mode_hit','')} (banked) | | |"
+        f"{banked_summary.get('mean_interval_mode_hit','')} (banked) "
+        f"| {tight_summary.get('mean_fpd_undated_flip_rate','')} vs "
+        f"{banked_summary.get('mean_fpd_undated_flip_rate','')} | | |"
     )
 
     L += ["", "## Deltas (tight minus banked, mean over units)", ""]

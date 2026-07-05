@@ -167,6 +167,10 @@ def main() -> int:
             "weighted headline valid: dominant stratum support "
             f"n={by_stratum.get('done_appears', {}).get('n', 0)} (>=8 required)",
             "dated-only variants reported alongside all-units per D8 rule 3",
+            "DIAGNOSTIC-ONLY caliber: mode-hit / year-mode-hit are hard-MAP "
+            "point-date metrics, retired as the production install-year caliber "
+            "(PRD-AMENDMENT-P1, ISSUE-22); production caliber = fractional/survival "
+            "year mass",
         ],
     }
     (a.out_dir / "d8_summary.json").write_text(json.dumps(summary, indent=2))
@@ -175,6 +179,9 @@ def main() -> int:
         w.writeheader(); w.writerows(per_unit)
 
     L = ["# ISSUE-04 extended panel — D8 estimator comparison", "",
+         "_Diagnostic-only caliber: hard-MAP point-date mode-hit metrics, retired as "
+         "the production install-year caliber per PRD-AMENDMENT-P1 (ISSUE-22); "
+         "production caliber = fractional/survival year mass._", "",
          f"- units: {len(per_unit)}  (done_appears n={by_stratum.get('done_appears', {}).get('n', 0)})",
          f"- weights from: {a.weights_manifest}", "",
          "## Overall (date-level mode-hit / year-level / undated-flip)", "",

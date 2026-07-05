@@ -236,17 +236,44 @@ days; ~42% of gaps ≤30 days) to avoid double-counting correlated errors. The
 cohort prior is the discrete-time hazard from a Turnbull NPMLE fit over all
 anchors' censoring intervals (ambiguous terminal statuses become censored
 observations bounded by the clamp date). Aggregation uses fractional counting
-of posterior mass, not midpoint imputation. A PAVA/isotonic single-changepoint
-fit is the mandatory falsification floor.
+of posterior mass, not midpoint imputation; the **cohort year-histogram
+deliverable and the survival curves are that fractional channel** (the
+headline reporting object, formalised in D19). A PAVA/isotonic
+single-changepoint fit is the mandatory falsification floor.
 
 **D3 — Estimator gates (all on banked data).** MAP mode-hit ≥ 0.911 and
 undated-flip ≤ 0.046 on the 10-rep panel (beat sustained on its own turf);
 per-stratum year-stability on the dominant stratum ≥ the naive first-present
 estimator (the sustained failure mode); HPD calibration proxy (rep-i's 90%
-interval contains rep-j's MAP ≈ 90%); year-histogram TVD within the
-established 0.037–0.063 band; survival-curve rep-to-rep TVD beats point-date
-TVD. Decision on cohort-wide adoption additionally requires the enlarged
+interval contains rep-j's MAP ≈ 90%); **the operative cohort
+reproducibility gate is the survival/fractional channel — survival-curve
+rep-to-rep TVD beats point-date TVD (D19); the hard-MAP year-histogram TVD
+0.037–0.063 band is demoted to a derived diagnostic, retired-with-cause.**
+Decision on cohort-wide adoption additionally requires the enlarged
 dominant-stratum panel (D4).
+
+> **Correction (2026-07-04, record hygiene only — this gate is already
+> superseded by the ISSUE-04 re-anchor, see D4/below):** `0.046` was never
+> sustained's own banked undated-flip; it is FPD's. `fullstack_noscan_analyze.py`
+> (the script behind the original banked `0.911/0.807/0.046` triple) computed one
+> shared `undated_flip_rate` from the FPD-derived `derive_install()` undated
+> flag and printed it under both the FPD and the sustained row of its table —
+> `panel_repair_d8_compare.py` later inherited the identical bug (see the
+> ISSUE-04 memo's [Correction](replan_v2/ISSUE-04-decision-memo-2026-07-03.md#correction-2026-07-04)).
+> Sustained's true banked-panel undated-flip (`estimator_harness.py`'s
+> per-estimator `report_sustained.md`) is **0.075**, not 0.046. "Beat sustained
+> on its own turf" on undated-flip was therefore never well-posed at 0.046; the
+> live gate is the ISSUE-04-reanchored extended-panel bar (mode-hit ≥0.882,
+> undated-flip ≤0.055, pass-at-parity).
+
+> **Amended (2026-07-04, D19 — deliverable caliber; substantive):** the
+> year-histogram TVD (hard-MAP) 0.037–0.063 band is **demoted to a derived
+> diagnostic and retired-with-cause**; the operative cohort reproducibility
+> gate is the **survival/fractional channel** (passes: AC5 survival mean 0.050
+> vs point-date 0.075, `beats_point_date: true`). Unlike the record-hygiene
+> Correction above, this **does** change the adoption verdict — see
+> [`PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md`](replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md)
+> and D19.
 
 **D4 — Sample repair (budget approved).** Enlarge the reliability panel's
 dominant stratum from 2 to ~8–10 units (targeted flash calls), and re-score
@@ -405,6 +432,41 @@ becomes an explicit, versioned, provenance-recorded render parameter. Any
 future geometry change is a deliberate cache-aware migration — never an
 accident of which builder ran.
 
+### Amendment 2026-07-04: cohort deliverable caliber (D19)
+
+DECISION-A (2026-07-04) ruled the changepoint decoder NO-GO cohort-wide
+solely on the D3 hard-MAP year-histogram TVD band (0.037–0.063), which failed
+on the sanctioned store-backed re-run (flat `[0.079,0.040,0.076]` mean 0.065;
+EB prior `[0.092,0.047,0.085]` mean 0.075) after the verdict-store and
+stronger-prior remediations were both refuted. Every panel-caliber gate and
+the relative survival-reproducibility gate passed. Pre-registered path P1
+(owner decision) redefines the headline deliverable; this entry lands it.
+
+**D19 — Cohort deliverable caliber = posterior-mass (fractional); operative
+gate = survival/fractional channel (owner decision 2026-07-05: Option A).**
+(i) The cohort year-histogram deliverable is the fractional posterior-mass
+channel (ISSUE-03 `eval/aggregate.py`), formalising D2's aggregation rule as
+the headline object. (ii) The operative cohort reproducibility gate is the
+survival/fractional channel — it passes and beats the incumbent (AC5:
+survival mean 0.050 vs point-date 0.075, `beats_point_date: true`; same-run
+`[0.0504/0.0596/0.0304]` mean 0.0468 vs point `[0.090/0.0314/0.0875]` mean
+0.0696; cross-check 3/3). (iii) The hard-MAP year histogram is a derived
+diagnostic; its 0.037–0.063 band is retired-with-cause (small-sample fit on 3
+pre-store pairs; production reference channel breached it at 0.068 on 1/3
+pairs; instability is hard-MAP argmax collapse, not the posterior). (iv)
+Production default switches to the changepoint decoder + EB/Turnbull prior
+(epoch-gap 45, EM emissions, `cohort_prior.json`; code `89496dd`/`1daa61d`);
+effective-date rule per the P1 amendment §4 — **Option A signed 2026-07-05**:
+effective at sign-off, with the P3 re-band as condition-subsequent
+verification under a pre-registered rollback trigger. (v) P3 band
+re-derivation is mandatory follow-up: ≥5 store-backed production-channel reps
+(≥10 pairs), pre-registered before decoding, fresh-per-rep stores, never
+tuned on the decoder (→ ISSUE-21). (vi) All already-passed panel gates are not
+re-litigated; D11 first-visible-appearance scope unchanged; the C5 2024-dip
+and grid-marginalisation caveats travel with every deliverable. Full
+normative text:
+[`replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md`](replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md).
+
 ## Testing Decisions
 
 A good test in this program exercises **external behavior at a seam** with
@@ -417,7 +479,13 @@ recorded or synthetic data — never implementation details, and (for Phases
   noise at known rates (exactness checks: known changepoint recovered, P(undated)
   correct on all-absent and all-present sequences, epoch collapsing invariant
   to duplicate frames). The D3 gates run as an offline evaluation script whose
-  outputs are asserted against thresholds — the gate IS the acceptance test.
+  outputs are asserted against thresholds — the gate IS the acceptance test;
+  **the operative cohort-reproducibility assertion is the survival/fractional
+  channel (D19), so `scripts/validation/issue03_gates.py`'s AC5 survival
+  assertion is the gate-bearing threshold and the retired hard-MAP
+  year-histogram TVD band is a reported diagnostic, not a pass/fail
+  assertion** (see §9.6 of
+  [the P1 amendment](replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md)).
 - **PresenceScorer seam**: fake-scorer injection, following the existing
   sequence-scoring unit tests that already inject a fake scorer callable —
   extend that prior art to the adaptive-scan and census-scan paths. Verdict
@@ -483,3 +551,12 @@ recorded or synthetic data — never implementation details, and (for Phases
   evidence base for D16–D18 and issues 17–19; verified findings are
   summarized in the amendment block above, full structured output archived
   in the session workflow journal.
+- Provenance (amendment): the 2026-07-04 cohort-deliverable-caliber amendment
+  (P1 + P3, D19) executes DECISION-A's pre-registered path P1; it redefines
+  the headline cohort deliverable as fractional posterior mass and the
+  operative gate as the survival channel, and schedules the P3 band
+  re-derivation. Owner signed **Option A** 2026-07-05; adoption effective at
+  sign-off. Evidence base:
+  [`replan_v2/DECISION-A-estimator-adoption-2026-07-04.md`](replan_v2/DECISION-A-estimator-adoption-2026-07-04.md),
+  ISSUE-02, ISSUE-03; full amendment in
+  [`replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md`](replan_v2/PRD-AMENDMENT-P1-posterior-mass-caliber-2026-07-04.md).
