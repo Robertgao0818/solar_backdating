@@ -1,0 +1,6 @@
+anchor,stratum,fs_year,prod_year,sustained_mode_hit,category,year_diff
+t1001,c_probe_2023,2019,2023,True,dated_vs_undated_mismatch,4
+t1002,c_probe_2023,2019,2023,True,dated_vs_undated_mismatch,4
+t1003,c_cal_present_pre2019,2018,2020,False,dated_vs_undated_mismatch,2
+t2999,c_findings_s3like,2021,2022,True,dated_vs_undated_mismatch,1
+t9998,c_probe_2023,2020,2020,True,some_other_category,0

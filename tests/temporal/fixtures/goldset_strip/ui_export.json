@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "sample_batch_id": "batch01",
+  "annotator_id": "A",
+  "exported_ts_utc": "2026-07-05T10:00:00Z",
+  "verdicts": [
+    {
+      "anchor_id": "c0000542",
+      "grid_id": "G0922",
+      "stratum": "done_appears_x_high_x_True",
+      "terminal_status": "done_appears",
+      "confidence": "high",
+      "any_contradiction": "True",
+      "verdict": "SHIFT",
+      "pipeline_interval_start": "2019-06-01",
+      "pipeline_interval_end": "2020-06-01",
+      "corrected_interval_start": "2019-09-01",
+      "corrected_interval_end": "2020-03-01",
+      "annotator_id": "A",
+      "is_overlap": true,
+      "is_dispute_forced": true,
+      "dispute_target_ids": [
+        "t00034036"
+      ],
+      "adjudication_seconds": 12.5,
+      "opened_ts_utc": "2026-07-05T09:59:00Z",
+      "submitted_ts_utc": "2026-07-05T09:59:12Z",
+      "strip_content_hash": "PLACEHOLDER_HASH",
+      "frames": [
+        {
+          "source": "scan_tm",
+          "role": "latest_absent",
+          "capture_date": "2019-06-01",
+          "version": 101,
+          "chip_path": "rerender/chips/c0000542/scan_2019-06-01_v101.png",
+          "chip_sha256": "deadbeef"
+        },
+        {
+          "source": "coj_2019",
+          "role": "reference",
+          "capture_date": "",
+          "version": null,
+          "chip_path": "rerender/chips/c0000542/coj_2019.png",
+          "chip_sha256": "cafef00d"
+        }
+      ],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "batch01",
+      "notes": "clear jump"
+    },
+    {
+      "anchor_id": "c0001985",
+      "grid_id": "G0930",
+      "stratum": "done_appears_x_high",
+      "terminal_status": "done_appears",
+      "confidence": "high",
+      "any_contradiction": "",
+      "verdict": "CONFIRM",
+      "pipeline_interval_start": "2019-01-01",
+      "pipeline_interval_end": "2020-01-01",
+      "corrected_interval_start": "",
+      "corrected_interval_end": "",
+      "annotator_id": "A",
+      "is_overlap": false,
+      "is_dispute_forced": false,
+      "dispute_target_ids": [],
+      "adjudication_seconds": 6.0,
+      "opened_ts_utc": "2026-07-05T10:00:00Z",
+      "submitted_ts_utc": "2026-07-05T10:00:06Z",
+      "strip_content_hash": "HASH2",
+      "frames": [],
+      "sampler_seed": 20260705,
+      "sample_batch_id": "batch01",
+      "notes": ""
+    },
+    {
+      "anchor_id": "c9999999",
+      "grid_id": "G0000",
+      "stratum": "x",
+      "terminal_status": "done_appears",
+      "confidence": "low",
+      "any_contradiction": "",
+      "verdict": "",
+      "pipeline_interval_start": "",
+      "pipeline_interval_end": "",
+      "annotator_id": "A",
+      "frames": [],
+      "sample_batch_id": "batch01"
+    }
+  ]
+}

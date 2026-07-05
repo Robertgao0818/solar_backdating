@@ -1,0 +1,3 @@
+anchor_id,chip_id,region_key,grid_id,centroid_lon,centroid_lat,chip_lon_min,chip_lat_min,chip_lon_max,chip_lat_max,n_targets,target_anchor_ids
+goldset_c0000001,chip_1,johannesburg,JNB01,28.01430,-26.18318,28.01412,-26.18335,28.01449,-26.18302,1,goldset_c0000001_t00000001
+goldset_c0000002,chip_2,johannesburg,JNB01,28.05000,-26.20000,28.04980,-26.20018,28.05020,-26.19982,1,goldset_c0000002_t00000002

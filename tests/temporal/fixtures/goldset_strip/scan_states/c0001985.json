@@ -1,0 +1,51 @@
+{
+  "anchor_id": "c0001985",
+  "region_key": "johannesburg",
+  "grid_id": "G0930",
+  "status": "done_appears",
+  "rounds": [
+    {
+      "round_id": 1,
+      "round_type": "initial",
+      "window_start_date": "2019-01-01",
+      "window_end_date": "2020-01-01",
+      "picks": [],
+      "results": [
+        {
+          "chip_index": 1,
+          "capture_date": "2019-01-01",
+          "version": 200,
+          "pv_present": false,
+          "confidence": 0.9,
+          "quality_flag": "usable",
+          "decision_source": "gemini_batch",
+          "evidence": "stub 2019-01-01",
+          "notes": "",
+          "chip_path": "/dead/2019-01-01_v200.tif",
+          "actual_zoom": 20
+        },
+        {
+          "chip_index": 1,
+          "capture_date": "2020-01-01",
+          "version": 201,
+          "pv_present": true,
+          "confidence": 0.9,
+          "quality_flag": "usable",
+          "decision_source": "gemini_batch",
+          "evidence": "stub 2020-01-01",
+          "notes": "",
+          "chip_path": "/dead/2020-01-01_v201.tif",
+          "actual_zoom": 20
+        }
+      ],
+      "completed": true,
+      "failed": false,
+      "notes": ""
+    }
+  ],
+  "next_action": null,
+  "started_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "spec_version": "phase0_v2",
+  "notes": ""
+}

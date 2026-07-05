@@ -1,0 +1,18 @@
+<!doctype html>
+data-anchor-id='c0000542'
+data-anchor-id='c0001985'
+data-verdict='CONFIRM'
+data-verdict='SHIFT'
+data-verdict='UNDATABLE'
+data-corrected='start'
+data-corrected='end'
+data:image/png;base64,
+id='export-btn'
+id='import-input'
+goldset_verdicts_
+latest_absent
+earliest_present
+CoJ 2019
+Wayback 2023-05-01
+dispute t00034036
+SHIFT verdict(s) missing corrected bracket

@@ -1,0 +1,4 @@
+anchor_id,grid_id,stratum,terminal_status,confidence,any_contradiction,pipeline_interval_start,pipeline_interval_end,latest_absent_date,earliest_present_date,scan_state_path,annotator_id,is_overlap,is_dispute_forced,dispute_target_ids,sampler_seed,sample_batch_id
+c0000542,G0922,done_appears_x_high_x_True,done_appears,high,True,2019-06-01,2020-06-01,2019-06-01,2020-06-01,,A,True,True,t00034036,20260705,batch01
+c0000542,G0922,done_appears_x_high_x_True,done_appears,high,True,2019-06-01,2020-06-01,2019-06-01,2020-06-01,,B,True,True,t00034036,20260705,batch01
+c0001985,G0930,done_appears_x_high,done_appears,high,,2019-01-01,2020-01-01,2019-01-01,2020-01-01,,A,False,False,,20260705,batch01
