@@ -11,6 +11,15 @@ Blocked by: ISSUE-09, ISSUE-10
 > runbook (locked: n=500, seed 20260705, `--page-size 75`, 20% overlap, 15 disputes
 > forced). Collision forensics + rebuild record:
 > [`ISSUE-11-prep-handoff-2026-07-05.md`](ISSUE-11-prep-handoff-2026-07-05.md).
+>
+> **Package built (2026-07-05 late):** `~/zasolar_data/geid_temporal/goldset_real_20260705/`
+> — 612 assignment rows (306/annotator: 100 double + 200 split + 6 forced disputes), all 15
+> disputes resolved onto 6 c-anchors; 3894 frames re-rendered (2868 recovered — scan_tm
+> 2310/2310 ok, fullstack 66/66 copied; 1026 CoJ-context frames source_missing = outside the
+> ISSUE-09 audit-cohort chip coverage, expected); 10 self-contained strip pages
+> (`--page-size 75`, 0 external refs; disputes land on `_p05` with fullstack rows + scale
+> caveat). Preflight PASS: c0000542 rescued (not UNDATABLE), c0009873 banner-only,
+> 54 UNDATABLE candidates in `strips/builder_report.csv`. Human adjudication can start.
 
 ## Parent
 
