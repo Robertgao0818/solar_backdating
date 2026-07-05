@@ -316,8 +316,17 @@ def target_crop_review_png_path(
     crop_context_multiplier: float,
     min_crop_size_m: float,
     min_output_px: int,
+    draw_marker: bool = True,
 ) -> Path:
-    """Return the deterministic single-target crop review PNG cache path."""
+    """Return the deterministic single-target crop review PNG cache path.
+
+    ``draw_marker=True`` (default) reproduces the pre-slice-4 path byte-for-byte
+    so existing marked PNGs stay valid. ``draw_marker=False`` inserts a
+    ``.nomarker`` segment before ``.png`` so the marker-free student variant
+    (PRD D4) coexists with the marked review PNG and caches per-variant. The
+    crop geometry (and therefore the content hash ``token``) is identical across
+    variants — only the drawn overlay differs.
+    """
     payload = {
         "chip_size_m": round(float(chip_size_m), 6),
         "crop_context_multiplier": round(float(crop_context_multiplier), 6),
@@ -338,7 +347,8 @@ def target_crop_review_png_path(
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     token = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
     safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", target_marker.target_label).strip("_") or "target"
-    return image_path.with_name(f"{image_path.stem}.target-{safe_label}-{token}.png")
+    variant = "" if draw_marker else ".nomarker"
+    return image_path.with_name(f"{image_path.stem}.target-{safe_label}-{token}{variant}.png")
 
 
 def _clamp_int(value: int, lower: int, upper: int) -> int:
@@ -552,12 +562,19 @@ def ensure_single_target_review_png(
     crop_context_multiplier: float = 3.0,
     min_crop_size_m: float = 24.0,
     min_output_px: int = 128,
+    draw_marker: bool = True,
 ) -> Path:
     """Create a target-centered review PNG for single-target sequence scoring.
 
     The source chip remains the provenance artifact. This PNG crops around the
     target offset, draws only that target's ring/cross/label, and upscales very
     small crops to keep the marker and roof texture legible for vision review.
+
+    ``draw_marker=True`` (default) is the LLM-review render: output path and
+    bytes are identical to the pre-slice-4 behaviour. ``draw_marker=False`` is
+    the PRD-D4 STUDENT render — same crop/upscale, but the ring/cross/label
+    overlay is skipped and the PNG lands at a distinct ``.nomarker.png`` path so
+    the two variants coexist and cache independently.
     """
     if chip_size_m <= 0:
         raise ValueError("chip_size_m must be positive")
@@ -575,6 +592,7 @@ def ensure_single_target_review_png(
         crop_context_multiplier=crop_context_multiplier,
         min_crop_size_m=min_crop_size_m,
         min_output_px=min_output_px,
+        draw_marker=draw_marker,
     )
     try:
         if (
@@ -621,16 +639,17 @@ def ensure_single_target_review_png(
             resampling = getattr(Image, "Resampling", Image).BICUBIC
             crop = crop.resize(new_size, resampling)
 
-        local_x = (target_x - left) * scale
-        local_y = (target_y - top) * scale
-        search_radius_px = short * radius_m / float(chip_size_m) * scale
-        _draw_single_target_marker_at(
-            crop,
-            x=local_x,
-            y=local_y,
-            target_label=target_marker.target_label,
-            search_radius_px=search_radius_px,
-        )
+        if draw_marker:
+            local_x = (target_x - left) * scale
+            local_y = (target_y - top) * scale
+            search_radius_px = short * radius_m / float(chip_size_m) * scale
+            _draw_single_target_marker_at(
+                crop,
+                x=local_x,
+                y=local_y,
+                target_label=target_marker.target_label,
+                search_radius_px=search_radius_px,
+            )
         png_path.parent.mkdir(parents=True, exist_ok=True)
         crop.save(png_path, format="PNG")
     return png_path

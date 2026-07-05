@@ -872,6 +872,7 @@ def render_subset(
     geometry_version: str = RERENDER_GEOMETRY_VERSION,
     output_root: Path,
     contain_footprint: bool = True,
+    draw_marker: bool = True,
     downloader: Callable[..., DownloadResult] = download_chip_with_zoom_ladder,
     renderer: Callable[..., Path] = ensure_single_target_review_png,
 ) -> RenderStats:
@@ -885,6 +886,15 @@ def render_subset(
     drop. The download is idempotent (skip-existing), so re-runs do not re-fetch.
     ``downloader`` / ``renderer`` default to the real GEHI seams and are injected
     with stubs in unit tests (no network, no GPU).
+
+    ``draw_marker`` (default ``True``, the slice-2 LLM-review render) is threaded
+    to the renderer: ``False`` produces the PRD-D4 marker-free STUDENT chip at a
+    distinct ``.nomarker.png`` path (the marked and marker-free variants coexist
+    beside the shared tif). Every provenance row additionally records ``marker``
+    (``"drawn"`` / ``"none"``) and ``label_arm`` (``"supervision"`` for
+    present/absent rows, ``"unusable"`` for quality-driven unusable rows) so the
+    student render manifest is self-describing; these extra keys are inert for the
+    slice-2 ``chip_render_provenance.csv`` writer, which declares neither column.
     """
     geom = resolve_chip_geometry(geometry_version)  # loud KeyError on unknown
     by_target_id, by_chip_id = load_chip_targets_lookup(chip_targets_path)
@@ -958,7 +968,10 @@ def render_subset(
             crop_context_multiplier=crop_mult,
             min_crop_size_m=geom.min_crop_size_m,
             min_output_px=geom.min_output_px,
+            draw_marker=draw_marker,
         )
+        label = str(row.get("label_3class", ""))
+        label_arm = "supervision" if label in ("present", "absent") else "unusable"
         stats.rendered += 1
         stats.provenance_rows.append(
             {
@@ -972,9 +985,53 @@ def render_subset(
                 "tif_path": str(dl.path),
                 "png_path": str(png),
                 "geometry_version": geometry_version,  # RECORDED PROVENANCE only
+                # slice-4 student-render provenance (inert for the slice-2 writer,
+                # which declares neither column): marker overlay + supervision arm.
+                "marker": "drawn" if draw_marker else "none",
+                "label_arm": label_arm,
             }
         )
     return stats
+
+
+# --------------------------------------------------------------------------- #
+# student-chip row selection (slice-4: marker-free + unusable-class supervision)
+# --------------------------------------------------------------------------- #
+def select_student_rows(
+    manifest_rows: Sequence[Mapping[str, object]],
+    subset_ids: Iterable[str],
+) -> list[dict[str, object]]:
+    """Select the manifest rows to re-render as marker-free STUDENT chips (D4).
+
+    A row is kept iff it is a subset anchor, is re-renderable (non-empty
+    ``version`` — census/label-only rows carry ``version=""`` and are excluded),
+    AND is one of:
+
+    - a present/absent supervision round, or
+    - a **quality-driven** ``unusable`` round (haze/cloud on a healthy anchor).
+
+    The ``done_ambiguous_*`` exclusion COMPOSES with the D12.iii rule: a
+    marker-misregistration-tainted series must never become ``unusable``-class
+    supervision (its whole observation series is untrustworthy), whereas
+    quality-driven unusable rows on non-ambiguous anchors are exactly what the
+    ``unusable`` class must learn. This is a superset of ``render-chips``'s
+    present/absent-only selection — the slice-2 render never covered the
+    unusable class.
+    """
+    subset = {str(a) for a in subset_ids}
+    out: list[dict[str, object]] = []
+    for r in manifest_rows:
+        if str(r.get("anchor_id", "")) not in subset:
+            continue
+        if str(r.get("version", "")) == "":
+            continue  # census / label-only rounds are not re-renderable
+        label = str(r.get("label_3class", ""))
+        terminal = str(r.get("terminal_status", ""))
+        if label in ("present", "absent"):
+            out.append(dict(r))
+        elif label == "unusable" and not terminal.startswith("done_ambiguous_"):
+            out.append(dict(r))
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1270,6 +1327,67 @@ def _cmd_render_chips(args: argparse.Namespace) -> None:
     )
 
 
+# slice-4 student-render provenance schema (marker + label_arm appended to the
+# slice-2 chip-provenance columns). Distinct from chip_render_provenance.csv:
+# these chips are marker-free (PRD D4) and cover the unusable class too.
+STUDENT_PROVENANCE_COLUMNS: tuple[str, ...] = (
+    "anchor_id", "chip_id", "capture_date", "version", "actual_zoom",
+    "download_status", "chip_sha256", "tif_path", "png_path",
+    "geometry_version", "marker", "label_arm",
+)
+
+
+def _cmd_render_student_chips(args: argparse.Namespace) -> None:
+    """Re-render the subset as marker-free STUDENT chips (PRD D4, slice-4).
+
+    Reads the frozen slice-2 manifest + subset list, selects present/absent
+    supervision rows AND quality-driven unusable rows (``select_student_rows``),
+    and re-renders them marker-free (``draw_marker=False``) through the same
+    idempotent GEHI download + scoring-crop machinery. Downloads land in the
+    SHARED ``chips/`` dir so present/absent tifs already on disk are reused
+    (``skipped_existing``); the marker-free PNGs are ``.nomarker.png`` siblings,
+    so nothing overwrites the slice-2 marked render. Writes ONLY the
+    ``student_chip_render_*`` outputs — the slice-2
+    ``chip_render_provenance.csv`` / ``chip_render_drops.json`` / ``README.md``
+    stay frozen.
+    """
+    out = Path(args.output_root)
+    subset_ids = json.loads((out / "chip_subset_anchors.json").read_text())
+    manifest = read_csv_rows(out / "label_manifest.csv")
+    subset_rows = select_student_rows(manifest, subset_ids)
+    render_stats = render_subset(
+        subset_rows,
+        chip_targets_path=args.chip_targets,
+        geometry_version=args.chip_geometry,
+        # SHARED chips/ dir: present/absent tifs re-render as skip-existing, the
+        # marker-free PNGs coexist as .nomarker.png siblings of the same tif.
+        output_root=out / "chips",
+        draw_marker=False,
+    )
+    write_csv_rows(
+        out / "student_chip_render_provenance.csv",
+        render_stats.provenance_rows,
+        STUDENT_PROVENANCE_COLUMNS,
+    )
+    (out / "student_chip_render_drops.json").write_text(
+        json.dumps(
+            {
+                "rendered": render_stats.rendered,
+                "dropped_unrecoverable": render_stats.dropped_unrecoverable,
+                "dropped_unresolved": render_stats.dropped_unresolved,
+                "drop_log": render_stats.drop_log,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(
+        f"student chips (marker-free) rendered {render_stats.rendered}; "
+        f"dropped_unrecoverable={render_stats.dropped_unrecoverable}; "
+        f"dropped_unresolved={render_stats.dropped_unresolved}"
+    )
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Build the dinov3-scorer distillation set (ISSUE-02).")
     sub = p.add_subparsers(dest="command", required=True)
@@ -1297,6 +1415,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     r.add_argument("--chip-targets", type=Path, default=CHIP_TARGETS_CSV)
     r.add_argument("--chip-geometry", default=RERENDER_GEOMETRY_VERSION)
     r.set_defaults(func=_cmd_render_chips)
+
+    s = sub.add_parser(
+        "render-student-chips",
+        help="re-render the subset MARKER-FREE (PRD D4) incl. unusable-class rounds",
+    )
+    s.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    s.add_argument("--chip-targets", type=Path, default=CHIP_TARGETS_CSV)
+    s.add_argument("--chip-geometry", default=RERENDER_GEOMETRY_VERSION)
+    s.set_defaults(func=_cmd_render_student_chips)
 
     return p.parse_args(argv)
 

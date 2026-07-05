@@ -37,6 +37,7 @@ from scripts.temporal.dinov3_scorer import (
     DECISION_SOURCE_OK,
     Dinov3PresenceScorer,
     _ChipVerdict,
+    load_head_bundle,
 )
 from scripts.temporal.presence_scorer import (
     Pick,
@@ -94,7 +95,8 @@ def test_get_scorer_dinov3_frozen_is_protocol_conforming() -> None:
     assert scorer.name == "dinov3_frozen"
     assert scorer.failure_decision_sources == frozenset({DECISION_SOURCE_FAILED})
     assert scorer.decision_sources == frozenset({DECISION_SOURCE_OK, DECISION_SOURCE_FAILED})
-    assert scorer.quality_flags == frozenset({"usable", "unusable", "missing_chip"})
+    # ISSUE-04: the calibrated abstain band can now emit "ambiguous".
+    assert scorer.quality_flags == frozenset({"usable", "ambiguous", "unusable", "missing_chip"})
 
 
 def test_dinov3_decision_sources_registered_in_module_vocab() -> None:
@@ -370,3 +372,521 @@ def test_dinov3_mapping_matches_gemini_mapped_scan_state(tmp_path: Path, monkeyp
         "DINOv3 observation-mapping diverged from the Gemini-mapped path: the "
         "mapping added/lost/reordered something downstream"
     )
+
+
+# ===========================================================================
+# ISSUE-04 — calibrated head-bundle wiring (Writer B)
+# ===========================================================================
+#
+# All the tests below stay CPU-only, weights-free and fast: the real backbone is
+# never built. The head-bundle contract (torch-free json sidecar + a torch .pt)
+# lets construction, sentinel resolution, calibration mapping, the fingerprint and
+# the integrity check all run without a single timm download. Only the two helpers
+# that genuinely need torch (load_head_bundle round-trip, embed_chips batched
+# forward against a fake encoder) are gated on torch/numpy being importable.
+
+import hashlib  # noqa: E402
+import json  # noqa: E402
+
+
+def _mods_available(*mods: str) -> bool:
+    return all(importlib.util.find_spec(m) is not None for m in mods)
+
+
+requires_torch = pytest.mark.skipif(
+    not _mods_available("torch", "numpy"), reason="torch/numpy not installed"
+)
+requires_numpy = pytest.mark.skipif(
+    not _mods_available("numpy"), reason="numpy not installed"
+)
+requires_pil = pytest.mark.skipif(
+    not _mods_available("PIL"), reason="PIL not installed"
+)
+
+# A valid bundle config (adopted when the ctor leaves the sentinels at None).
+_BUNDLE_CONFIG = {
+    "backbone_model_id": "vit_large_patch16_dinov3.sat493m",
+    "input_size": 256,
+    "center_pool_k": 3,
+    "upscale_policy": "bilinear",
+    "chip_render_variant": "marker_free_tight12",
+}
+_CALIB = {
+    "lo": 0.4,
+    "hi": 0.7,
+    "rule": "global_band",
+    "calib_anchors": 120,
+    "decided_agreement": 0.93,
+    "abstain_rate": 0.11,
+}
+
+
+def _write_bundle(
+    tmp_path: Path,
+    *,
+    stem: str = "head",
+    calibration: dict | None,
+    config: dict | None = None,
+    head_pt_sha256: str = "0" * 64,
+    pt_bytes: bytes | None = b"placeholder-pt-bytes",
+    write_sidecar: bool = True,
+    class_order: list | None = None,
+) -> Path:
+    """Write a head-bundle (<stem>.pt [+ <stem>.json]); return the .pt path.
+
+    When ``pt_bytes`` is not None a raw .pt file is written (opaque bytes are fine
+    for every test that stubs inference / never triggers ``load_head_bundle``).
+    ``write_sidecar=False`` produces a legacy checkpoint (no sidecar => meta None).
+    """
+    pt_path = tmp_path / f"{stem}.pt"
+    if pt_bytes is not None:
+        pt_path.write_bytes(pt_bytes)
+    if write_sidecar:
+        sidecar = {
+            "schema_version": 1,
+            "head_arch": "linear",
+            "class_order": (
+                class_order if class_order is not None else ["present", "absent", "unusable"]
+            ),
+            "calibration": calibration,
+            "config": config if config is not None else dict(_BUNDLE_CONFIG),
+            "provenance": {"note": "unit-test bundle"},
+            "head_pt_sha256": head_pt_sha256,
+        }
+        pt_path.with_suffix(".json").write_text(json.dumps(sidecar), encoding="utf-8")
+    return pt_path
+
+
+# ---------------------------------------------------------------------------
+# Calibrated band mapping — all four outcomes + pv_score == P(present)
+# ---------------------------------------------------------------------------
+
+
+@requires_numpy
+@pytest.mark.parametrize(
+    "probs,exp_present,exp_flag,exp_score",
+    [
+        ([0.95, 0.03, 0.02], True, "usable", 0.95),      # P(present) > hi
+        ([0.05, 0.93, 0.02], False, "usable", 0.05),     # P(present) < lo
+        ([0.55, 0.42, 0.03], None, "ambiguous", 0.55),   # lo <= P(present) <= hi
+        ([0.30, 0.10, 0.60], None, "unusable", 0.30),    # argmax == unusable
+    ],
+)
+def test_calibrated_band_mapping(
+    tmp_path, monkeypatch, probs, exp_present, exp_flag, exp_score
+) -> None:
+    import numpy as np
+
+    pt = _write_bundle(tmp_path, calibration=_CALIB)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    # Inference stubbed → the real encoder/head is never built (no .pt load).
+    monkeypatch.setattr(
+        scorer, "_infer_probs", lambda chip_path: np.asarray(probs, dtype=np.float64)
+    )
+    chip = tmp_path / "chip.png"
+    chip.write_bytes(b"exists")
+    obs = scorer.score(
+        [Pick(chip_path=str(chip), capture_date="2020-01-01", index=1)], config=None
+    )
+    assert len(obs) == 1
+    o = obs[0]
+    assert o.pv_present is exp_present
+    assert o.quality_flag == exp_flag
+    assert o.decision_source == DECISION_SOURCE_OK
+    # pv_score is P(present) in EVERY branch (including the unusable one).
+    assert o.pv_score == pytest.approx(exp_score)
+    assert scorer._encoder is None  # never built the backbone
+
+
+@requires_numpy
+def test_calibrated_band_boundaries_are_ambiguous(tmp_path, monkeypatch) -> None:
+    """p == lo and p == hi land in the abstain band (strict > hi / < lo)."""
+    import numpy as np
+
+    pt = _write_bundle(tmp_path, calibration=_CALIB)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    chip = tmp_path / "chip.png"
+    chip.write_bytes(b"exists")
+    for boundary in (_CALIB["lo"], _CALIB["hi"]):
+        monkeypatch.setattr(
+            scorer,
+            "_infer_probs",
+            lambda chip_path, b=boundary: np.asarray([b, 1 - b - 0.01, 0.01], dtype=np.float64),
+        )
+        o = scorer.score(
+            [Pick(chip_path=str(chip), capture_date="2020-01-01", index=1)], config=None
+        )[0]
+        assert o.pv_present is None
+        assert o.quality_flag == "ambiguous"
+
+
+@requires_numpy
+def test_uncalibrated_bundle_keeps_argmax_behavior(tmp_path, monkeypatch) -> None:
+    """A bundle whose calibration is null falls back to today's argmax mapping."""
+    import numpy as np
+
+    pt = _write_bundle(tmp_path, calibration=None)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    assert scorer._calibration is None
+    chip = tmp_path / "chip.png"
+    chip.write_bytes(b"exists")
+    # [0.30, 0.10, 0.60] → argmax==unusable regardless of any band; present-prob 0.30.
+    monkeypatch.setattr(
+        scorer, "_infer_probs", lambda chip_path: np.asarray([0.30, 0.10, 0.60], dtype=np.float64)
+    )
+    o = scorer.score(
+        [Pick(chip_path=str(chip), capture_date="2020-01-01", index=1)], config=None
+    )[0]
+    assert o.pv_present is None
+    assert o.quality_flag == "unusable"
+    assert o.pv_score == pytest.approx(0.30)
+    # A present-argmax chip maps to (True, "usable") with no abstain band applied.
+    monkeypatch.setattr(
+        scorer, "_infer_probs", lambda chip_path: np.asarray([0.51, 0.30, 0.19], dtype=np.float64)
+    )
+    o2 = scorer.score(
+        [Pick(chip_path=str(chip), capture_date="2020-01-01", index=1)], config=None
+    )[0]
+    assert o2.pv_present is True
+    assert o2.quality_flag == "usable"
+
+
+# ---------------------------------------------------------------------------
+# Sidecar adoption / conflict / missing-sidecar legacy behavior
+# ---------------------------------------------------------------------------
+
+
+def test_bundle_config_adopted_when_ctor_sentinels_none(tmp_path) -> None:
+    cfg = {
+        "backbone_model_id": "m",
+        "input_size": 128,
+        "center_pool_k": 5,
+        "upscale_policy": "bicubic",
+        "chip_render_variant": "v",
+    }
+    pt = _write_bundle(tmp_path, calibration=_CALIB, config=cfg)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    assert scorer.input_size == 128
+    assert scorer.center_pool_k == 5
+    assert scorer.upscale_policy == "bicubic"
+    assert scorer._calibration is not None
+
+
+def test_bundle_config_conflict_raises_input_size(tmp_path) -> None:
+    pt = _write_bundle(
+        tmp_path,
+        calibration=None,
+        config={**_BUNDLE_CONFIG, "input_size": 128},
+    )
+    with pytest.raises(ValueError, match="input_size"):
+        Dinov3PresenceScorer(device="cpu", head_checkpoint=pt, input_size=256)
+
+
+def test_bundle_config_conflict_raises_upscale_policy(tmp_path) -> None:
+    pt = _write_bundle(
+        tmp_path,
+        calibration=None,
+        config={**_BUNDLE_CONFIG, "upscale_policy": "bicubic"},
+    )
+    with pytest.raises(ValueError, match="upscale_policy"):
+        Dinov3PresenceScorer(device="cpu", head_checkpoint=pt, upscale_policy="bilinear")
+
+
+def test_explicit_ctor_arg_matching_bundle_is_accepted(tmp_path) -> None:
+    """An explicit ctor value equal to the bundle config is NOT a conflict."""
+    pt = _write_bundle(tmp_path, calibration=None, config={**_BUNDLE_CONFIG, "center_pool_k": 3})
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt, center_pool_k=3)
+    assert scorer.center_pool_k == 3
+
+
+def test_bundle_config_adopts_backbone_model_id(tmp_path) -> None:
+    """A bundle recording a non-default backbone is adopted when the ctor leaves
+    backbone_model_id unset — the head is scored on the backbone it was trained on,
+    and the fingerprint reports THAT backbone (not the module default). Symmetric
+    with the geometry keys, per the head-bundle contract v1 config."""
+    cfg = {**_BUNDLE_CONFIG, "backbone_model_id": "vit_small_patch14_dinov2.other"}
+    pt = _write_bundle(tmp_path, calibration=_CALIB, config=cfg)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    assert scorer.backbone_model_id == "vit_small_patch14_dinov2.other"
+    fp = scorer.prompt_config_fingerprint("batch", None)
+    assert fp["backbone_model_id"] == "vit_small_patch14_dinov2.other"
+
+
+def test_bundle_config_conflict_raises_backbone_model_id(tmp_path) -> None:
+    """An explicit backbone disagreeing with the bundle's is a construction error —
+    the same adopt-or-conflict guard the geometry keys already get."""
+    pt = _write_bundle(
+        tmp_path,
+        calibration=None,
+        config={**_BUNDLE_CONFIG, "backbone_model_id": "some_other_backbone"},
+    )
+    with pytest.raises(ValueError, match="backbone_model_id"):
+        Dinov3PresenceScorer(
+            device="cpu",
+            head_checkpoint=pt,
+            backbone_model_id="vit_large_patch16_dinov3.sat493m",
+        )
+
+
+def test_explicit_backbone_matching_bundle_is_accepted(tmp_path) -> None:
+    pt = _write_bundle(tmp_path, calibration=None, config={**_BUNDLE_CONFIG, "backbone_model_id": "bb"})
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt, backbone_model_id="bb")
+    assert scorer.backbone_model_id == "bb"
+
+
+def test_bundle_wrong_class_order_raises(tmp_path) -> None:
+    """Contract v1 fixes the logit order (present/absent/unusable); _observe maps
+    by index. A bundle sidecar declaring any other order would be silently
+    mis-mapped on every verdict, so construction must reject it (torch-free)."""
+    pt = _write_bundle(
+        tmp_path, calibration=_CALIB, class_order=["absent", "present", "unusable"]
+    )
+    with pytest.raises(ValueError, match="class_order"):
+        Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+
+
+def test_bundle_correct_class_order_is_accepted(tmp_path) -> None:
+    """The contract order passes the guard (regression: guard must not false-positive)."""
+    pt = _write_bundle(
+        tmp_path, calibration=_CALIB, class_order=["present", "absent", "unusable"]
+    )
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    assert scorer._calib_lo is not None
+
+
+def test_no_bundle_backbone_resolves_to_default(tmp_path) -> None:
+    scorer = Dinov3PresenceScorer(device="cpu")
+    assert scorer.backbone_model_id == "vit_large_patch16_dinov3.sat493m"
+
+
+def test_missing_sidecar_is_legacy_behavior(tmp_path) -> None:
+    pt = _write_bundle(tmp_path, calibration=None, write_sidecar=False)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    assert scorer._head_meta is None
+    assert scorer._calibration is None
+    # Sentinels resolve to module defaults with no bundle to read.
+    assert scorer.input_size == 256
+    assert scorer.center_pool_k == 3
+    assert scorer.upscale_policy == "bilinear"
+    fp = scorer.prompt_config_fingerprint("batch", None)
+    assert fp["head"] == f"checkpoint:{pt}"
+    assert "head_sha256" not in fp
+    assert "calibration" not in fp
+
+
+# ---------------------------------------------------------------------------
+# upscale_policy validation + PIL resampling selection
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_upscale_policy_raises() -> None:
+    with pytest.raises(ValueError, match="upscale_policy"):
+        Dinov3PresenceScorer(device="cpu", upscale_policy="nearest")
+
+
+def test_valid_upscale_policies_accepted() -> None:
+    assert Dinov3PresenceScorer(device="cpu", upscale_policy="bilinear").upscale_policy == "bilinear"
+    assert Dinov3PresenceScorer(device="cpu", upscale_policy="bicubic").upscale_policy == "bicubic"
+
+
+@requires_pil
+def test_pil_resample_selects_policy() -> None:
+    from PIL import Image
+
+    assert Dinov3PresenceScorer(device="cpu", upscale_policy="bilinear")._pil_resample() == Image.BILINEAR
+    assert Dinov3PresenceScorer(device="cpu", upscale_policy="bicubic")._pil_resample() == Image.BICUBIC
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint: always upscale_policy; bundle adds head_sha256 + calibration
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_placeholder_has_upscale_policy_no_bundle_keys() -> None:
+    scorer = Dinov3PresenceScorer(device="cpu")
+    fp = scorer.prompt_config_fingerprint("batch", None)
+    assert fp["upscale_policy"] == "bilinear"
+    assert fp["head"] == f"placeholder_seed:{scorer.head_seed}"
+    assert "head_sha256" not in fp
+    assert "calibration" not in fp
+    assert "device" not in fp  # stays device-independent
+
+
+def test_fingerprint_bundle_carries_head_sha256_and_calibration(tmp_path) -> None:
+    pt = _write_bundle(tmp_path, calibration=_CALIB, head_pt_sha256="cafef00d")
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    fp = scorer.prompt_config_fingerprint("batch", None)
+    assert fp["upscale_policy"] == "bilinear"  # adopted from bundle config
+    assert fp["head_sha256"] == "cafef00d"
+    assert fp["calibration"] == {"lo": 0.4, "hi": 0.7}
+    assert "device" not in fp
+
+
+def test_fingerprint_bundle_null_calibration(tmp_path) -> None:
+    pt = _write_bundle(tmp_path, calibration=None, head_pt_sha256="beadfeed")
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    fp = scorer.prompt_config_fingerprint("batch", None)
+    assert fp["head_sha256"] == "beadfeed"
+    assert fp["calibration"] is None
+
+
+# ---------------------------------------------------------------------------
+# sha256 integrity check (torch-free; raises before the backbone build)
+# ---------------------------------------------------------------------------
+
+
+def test_head_bundle_sha256_mismatch_raises_naming_both(tmp_path) -> None:
+    content = b"real-head-bytes"
+    pt = _write_bundle(tmp_path, calibration=None, head_pt_sha256="0" * 64, pt_bytes=content)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    with pytest.raises(ValueError) as ei:
+        scorer._ensure_model()  # integrity check fires before any timm/torch import
+    msg = str(ei.value)
+    actual = hashlib.sha256(content).hexdigest()
+    assert actual in msg  # names the computed hash
+    assert "0" * 64 in msg  # names the expected (sidecar) hash
+    assert scorer._encoder is None  # never reached the backbone build
+
+
+def test_head_bundle_sha256_match_passes(tmp_path) -> None:
+    content = b"real-head-bytes"
+    good = hashlib.sha256(content).hexdigest()
+    pt = _write_bundle(tmp_path, calibration=None, head_pt_sha256=good, pt_bytes=content)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    scorer._verify_head_integrity()  # torch-free, must not raise
+
+
+def test_legacy_checkpoint_skips_integrity_check(tmp_path) -> None:
+    """No sidecar → nothing to verify; _verify_head_integrity is a no-op."""
+    pt = _write_bundle(tmp_path, calibration=None, write_sidecar=False)
+    scorer = Dinov3PresenceScorer(device="cpu", head_checkpoint=pt)
+    scorer._verify_head_integrity()  # must not raise (meta None)
+
+
+# ---------------------------------------------------------------------------
+# load_head_bundle helper — real torch round-trip (bundle + legacy)
+# ---------------------------------------------------------------------------
+
+
+@requires_torch
+def test_load_head_bundle_reads_state_dict_and_meta(tmp_path) -> None:
+    import torch
+    from torch import nn
+
+    head = nn.Linear(8, 3)
+    pt = tmp_path / "head.pt"
+    torch.save(
+        {"schema_version": 1, "head_arch": "linear", "state_dict": head.state_dict()}, pt
+    )
+    _write_bundle(
+        tmp_path, calibration=_CALIB, head_pt_sha256="x", pt_bytes=None
+    )  # writes only the sidecar next to head.pt
+    state, meta = load_head_bundle(pt)
+    assert set(state.keys()) == {"weight", "bias"}
+    assert state["weight"].shape == (3, 8)
+    assert meta is not None
+    assert meta["head_arch"] == "linear"
+    assert meta["calibration"]["lo"] == 0.4
+
+
+@requires_torch
+def test_load_head_bundle_legacy_raw_state_dict_meta_none(tmp_path) -> None:
+    import torch
+    from torch import nn
+
+    head = nn.Linear(8, 3)
+    pt = tmp_path / "legacy.pt"
+    torch.save(head.state_dict(), pt)  # raw state_dict, no wrapper, no sidecar
+    state, meta = load_head_bundle(pt)
+    assert set(state.keys()) == {"weight", "bias"}
+    assert meta is None
+
+
+# ---------------------------------------------------------------------------
+# embed_chips — batched frozen forward (fake encoder, no weights)
+# ---------------------------------------------------------------------------
+
+
+class _FakeEncoder:
+    """A stand-in encoder: patch tokens carry the per-chip input mean, so the
+    center-pooled embedding for chip i is a constant row we can assert on."""
+
+    num_features = 8
+    num_prefix_tokens = 1
+
+    def forward_features(self, batch):  # batch: [B, 3, H, W]
+        import torch
+
+        b = batch.shape[0]
+        sig = batch.reshape(b, -1).mean(dim=1).reshape(b, 1, 1)  # [B,1,1]
+        patch = sig * torch.ones(b, 16, self.num_features)  # 4x4 grid
+        prefix = torch.zeros(b, self.num_prefix_tokens, self.num_features)
+        return torch.cat([prefix, patch], dim=1)  # [B, 1+16, C]
+
+
+def _install_fake_encoder(scorer, monkeypatch) -> None:
+    def fake_ensure() -> None:
+        scorer._encoder = _FakeEncoder()
+
+    monkeypatch.setattr(scorer, "_ensure_model", fake_ensure)
+
+
+@requires_torch
+def test_embed_chips_shape_dtype_order_and_batching(tmp_path, monkeypatch) -> None:
+    import numpy as np
+    import torch
+
+    scorer = Dinov3PresenceScorer(device="cpu", center_pool_k=3)
+    _install_fake_encoder(scorer, monkeypatch)
+
+    def fake_load(path):
+        idx = int(str(path).split("_")[-1].split(".")[0])
+        return torch.full((1, 3, 4, 4), float(idx + 1))  # per-chip constant
+
+    monkeypatch.setattr(scorer, "_load_chip_tensor", fake_load)
+
+    paths = [f"/x/chip_{i}.png" for i in range(5)]
+    out = scorer.embed_chips(paths, batch_size=2)  # 3 batches: 2,2,1
+
+    assert isinstance(out, np.ndarray)
+    assert out.dtype == np.float32
+    assert out.shape == (5, 8)
+    # Order preserved across batch boundaries: row i is a constant (i+1) vector.
+    for i in range(5):
+        assert np.allclose(out[i], float(i + 1)), out[i]
+
+
+@requires_torch
+def test_embed_chips_raises_on_unreadable_chip(tmp_path, monkeypatch) -> None:
+    """Training-time strictness: embed_chips raises (contrast with _observe abstain)."""
+    scorer = Dinov3PresenceScorer(device="cpu")
+    _install_fake_encoder(scorer, monkeypatch)
+
+    def bad_load(path):
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(scorer, "_load_chip_tensor", bad_load)
+    with pytest.raises(FileNotFoundError):
+        scorer.embed_chips(["/x/missing.png"])
+
+
+@requires_torch
+def test_load_chip_tensor_normalizes_on_model_device(tmp_path, monkeypatch) -> None:
+    """Regression (slice 4, found on the first real CUDA run): _mean/_std live on
+    self.device, so normalization must happen AFTER the chip tensor moves there.
+    The old order (normalize on CPU, then .to(device)) raised a cross-device
+    RuntimeError on any CUDA scorer. torch's 'meta' device reproduces the
+    mismatch CPU-only: cpu_tensor - meta_tensor raises, meta - meta does not."""
+    import torch
+    from PIL import Image
+
+    png = tmp_path / "chip.png"
+    Image.new("RGB", (8, 8), (120, 90, 60)).save(png)
+
+    scorer = Dinov3PresenceScorer(device="meta", input_size=16, center_pool_k=1)
+    scorer._mean = torch.zeros(3, 1, 1, device="meta")
+    scorer._std = torch.ones(3, 1, 1, device="meta")
+
+    out = scorer._load_chip_tensor(str(png))  # old order: RuntimeError here
+    assert out.device.type == "meta"
+    assert tuple(out.shape) == (1, 3, 16, 16)
