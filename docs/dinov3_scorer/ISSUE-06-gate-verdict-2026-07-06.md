@@ -58,6 +58,32 @@ arithmetic so no discretion remains at verdict time:
   in gate and ceiling; the verdict must also report the **decoded-only** subset
   as a diagnostic split so this inflation is visible.
 
+## LOCKED — student input contract + render-drop policy (added 2026-07-06, still pre-gate-2)
+
+Recon on the banked chips found a two-axis input mismatch the prep doc missed:
+banked rep chips are `chip_geom_v1_banked96` renders **with** the yellow
+review marker (the teacher's verdicts narrate the marker), while both heads
+were trained on `chip_geom_v2_tight12` **nomarker** renders. Scoring banked
+chips directly would be out-of-distribution and corrupt the gate. Locked
+handling:
+
+- **Student input** = per-frame re-render of the banked georeferenced source at
+  `chip_geom_v2_tight12`, `draw_marker=False`, using the same renderer chain the
+  distillation set used (`ensure_single_target_review_png` +
+  `resolve_chip_geometry`, per `build_distillation_set.py`). Teacher verdicts
+  stay as banked (each pipeline under its own input contract — the marked arm
+  is D4-forbidden for the student anyway).
+- **Render-drop policy (primary caliber):** a frame that cannot be re-rendered
+  is dropped from **both** pipelines' observation sequences for that unit
+  (like-for-like frame sets within student-vs-teacher); drop counts + affected
+  anchors reported. The teacher ceiling stays on full banked frame sets (its
+  own variance already includes frame-set differences between reps).
+- **Pollution stop-rule:** if re-render drops exceed **2% of frames** on either
+  backbone's pass, STOP — do not ship gate-2 numbers; reassess the render path
+  first and record the reassessment here.
+- Diagnostic split reported alongside: agreement for anchors with ≥1 dropped
+  frame vs none (mirrors the R3 unusable split).
+
 ## LOCKED — decoder-baseline honesty chain (carried verbatim, per prep)
 
 > The changepoint decoder's **hard-MAP** year-histogram TVD was **NOT MET** on
