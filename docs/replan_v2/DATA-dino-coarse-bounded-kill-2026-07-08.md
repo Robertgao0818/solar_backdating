@@ -4,9 +4,23 @@ Status: final verdict for the DINO-coarse rescue side-investigation opened in
 session 1 (`pilot_dino_rescue_2026-07-08.py`, NO-GO 1.2% rescue) and revised
 in session 2 (`diagnose_dino_positive_control_2026-07-08.py`, instrument
 check — ruled out both cheap bug hypotheses, left fix candidates #3/#4
-untested). This memo closes the line. Does not affect the shipped
-`chip_geom_v3_tight_scaled` widening-only release, which was never gated on
-this investigation.
+untested). This memo closes the line.
+
+**Correction (2026-07-08, later same day):** an earlier draft of this memo
+stated `chip_geom_v3_tight_scaled` "ships widening-only" — **false**, checked
+directly against `chip_geometry.py`'s `_REGISTRY`, which contains only
+`chip_geom_v1_banked96` and `chip_geom_v2_tight12`. `chip_geom_v3_tight_scaled`
+is a *foreseen name only* (comment in `chip_geometry.py`, "a future
+size-stratified follow-up is a second named fixed version") for one of two
+still-**undecided** options recorded in `TRACKER.md`'s slice-23 note: (A)
+register a size-stratified geometry version under that foreseen name, or (B)
+add per-vintage local re-centering as a new named `geometry_version`. This
+memo's DINO-coarse pilot was testing option (B) — its KILL closes off (B) as
+a DINO-based approach specifically, which makes (A) the more likely remaining
+path, but (A) is **not built or shipped**; it remains an open TRACKER item.
+Nothing downstream is currently shipping any correction for the tight12
+contamination this line was meant to fix — see `TRACKER.md`'s slice-23 note
+and `DATA-gehi-displacement-audit-2026-07-06.md` for the still-open problem.
 
 Pre-registration (verbatim mandate, session 3): test fix #4 (finer
 `input_size`, ~1.2m/cell) and a DINOv3 Gram-anchored, `sat493m`
@@ -89,8 +103,11 @@ relitigate — Arm B matches the baseline's tolerance exactly (5.599m, same
 37×37 grid) and still doesn't move the number.
 
 Business NO-GO (session 1) is unaffected either way — it was already settled
-independent of this experiment. `chip_geom_v3_tight_scaled` ships
-widening-only, unconditionally.
+independent of this experiment. See the correction note in the header: this
+KILL closes off DINO-based per-vintage recentering (option B of the still-open
+tight12-contamination decision in `TRACKER.md` slice 23); it does not itself
+ship anything, and the size-stratified-widening alternative (option A,
+foreseen name `chip_geom_v3_tight_scaled`) remains unbuilt and undecided.
 
 ## 5. Why it failed — directional findings (diagnostic value, not further scope)
 
