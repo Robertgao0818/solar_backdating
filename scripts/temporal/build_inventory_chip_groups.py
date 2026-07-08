@@ -5,6 +5,19 @@ The upstream ZAsolar inventory remains the authoritative set of current PV
 prediction footprints. This script creates a temporal-pipeline bridge: nearby
 inventory polygons are packed into fixed-size GEHI/Gemini chip groups so one
 historical image stack can cover several adjacent PV detections.
+
+Each target carries two source-identity columns in both output CSVs (and the QA
+GeoPackages):
+
+- ``source_feature_id`` = 0-based positional index over the source read order.
+  This is the legacy key shipped with the 2026-06-01 manifests and the
+  goldset/scan corpus. Join it back to the source GPKG with ``.iloc`` (row
+  position), NOT with ``fid``.
+- ``source_fid`` = native GPKG FID of the source feature (1-based; may be
+  non-contiguous after edits). Join it with ``fid`` / the QGIS ``$id`` field.
+
+Both IDs are assigned before the optional ``--min-confidence`` filter, so kept
+rows keep stable IDs regardless of filtering.
 """
 
 from __future__ import annotations
@@ -56,6 +69,7 @@ GROUP_ANCHOR_FIELDS = [
     "grid_id",
     "source_annotation_path",
     "source_feature_id",
+    "source_fid",
     "quality_tier",
     "anchor_policy",
     "centroid_lon",
@@ -88,6 +102,7 @@ TARGET_FIELDS = [
     "grid_id",
     "source_inventory_path",
     "source_feature_id",
+    "source_fid",
     "source_grid",
     "target_index",
     "target_label",
@@ -114,6 +129,7 @@ TARGET_FIELDS = [
 @dataclass(frozen=True)
 class Target:
     source_idx: int
+    source_fid: int
     anchor_id: str
     region_key: str
     grid_id: str
@@ -272,7 +288,7 @@ def _load_inventory(
 ) -> gpd.GeoDataFrame:
     if not path.exists():
         raise SystemExit(f"Inventory not found: {path}")
-    kwargs: dict[str, Any] = {}
+    kwargs: dict[str, Any] = {"fid_as_index": True}
     if layer:
         kwargs["layer"] = layer
     gdf = gpd.read_file(path, **kwargs)
@@ -281,6 +297,10 @@ def _load_inventory(
     if gdf.crs is None:
         raise SystemExit(f"Inventory CRS is missing: {path}")
     gdf = gdf.to_crs(metric_crs)
+    # source_fid = native GPKG fid (join with fid / QGIS $id); source_feature_id
+    # = 0-based positional index over read order (legacy key, join with .iloc).
+    # Both assigned before --min-confidence so kept rows keep stable IDs.
+    gdf["__source_fid"] = gdf.index.to_numpy()
     gdf["__source_feature_id"] = np.arange(len(gdf), dtype=int)
     if min_confidence is not None:
         score_col = "confidence" if "confidence" in gdf.columns else "score"
@@ -317,11 +337,13 @@ def make_targets(
         width = _bounds_width(bounds)
         height = _bounds_height(bounds)
         source_idx = int(row.get("__source_feature_id", idx))
+        source_fid = int(row.get("__source_fid", idx))
         source_grid = str(row.get("source_grid", "") or row.get("grid_id", "") or "").strip()
         grid_id = source_grid or "unknown"
         targets.append(
             Target(
                 source_idx=source_idx,
+                source_fid=source_fid,
                 anchor_id=f"{token}_t{source_idx + 1:08d}",
                 region_key=region_key,
                 grid_id=grid_id,
@@ -487,6 +509,7 @@ def build_manifest_rows(
                 "grid_id": representative_grid,
                 "source_annotation_path": str(inventory_path),
                 "source_feature_id": ";".join(str(m.source_idx) for m in members[:20]),
+                "source_fid": ";".join(str(m.source_fid) for m in members[:20]),
                 "quality_tier": "",
                 "anchor_policy": "inventory_proximity_fixed_chip_group",
                 "centroid_lon": f"{center_lon:.10f}",
@@ -526,6 +549,7 @@ def build_manifest_rows(
                     "grid_id": target.grid_id,
                     "source_inventory_path": str(inventory_path),
                     "source_feature_id": target.source_idx,
+                    "source_fid": target.source_fid,
                     "source_grid": target.source_grid,
                     "target_index": target_index,
                     "target_label": f"T{target_index:02d}",
@@ -626,6 +650,18 @@ Generated from `{summary['source_inventory_path']}`.
 entrypoints because `anchor_id == chip_id` and each row has a chip bbox.
 `chip_targets.csv` maps each original inventory polygon to its group and marker
 offset for multi-target Gemini review.
+
+## Source-identity columns
+
+Both CSVs (and the QA GeoPackages) carry two keys back to the source inventory:
+
+- `source_feature_id` = 0-based positional index over the source read order.
+  Legacy key (shipped with the 2026-06-01 manifests + goldset/scan corpus).
+  Join with `.iloc` (row position), NOT with `fid`.
+- `source_fid` = native GPKG FID (1-based; may be non-contiguous after edits).
+  Join with `fid` / the QGIS `$id` field.
+
+Group rows carry `;`-joined lists of both (first 20 members).
 """
     (output_dir / "README.md").write_text(readme, encoding="utf-8")
 
