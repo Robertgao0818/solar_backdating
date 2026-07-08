@@ -49,6 +49,7 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 20 | [Cohort deliverable caliber amendment (D19)](ISSUE-20-deliverable-caliber-amendment.md) | 0 | done | — |
 | 21 | [P3 band re-derivation reps](ISSUE-21-p3-band-rederivation.md) | 0 | done | 20, 7 |
 | 22 | [D19 production switch (remaining §8 code items)](ISSUE-22-d19-production-switch.md) | 0 | done | 20 |
+| 23 | [GEHI displacement + tight12 contamination audit](DATA-gehi-displacement-audit-2026-07-06.md) | 3 | done | 19 |
 
 Unblocked start set: **11** (human — ISSUE-10 landed 2026-07-05 with a
 10-anchor dry run adjudicated, n=500 recommended; precondition: extend
@@ -73,7 +74,25 @@ audit_miss_2015; the 2015 layer is downweighted (~5% FN), not voided, and
 2023 stays the clean primary layer
 (`~/zasolar_data/geid_temporal/coj_audit_cohort_20260704/gate_a_2015_human_adjudication.{csv,md}`).
 The 8,407-bit `human_queue.csv` is ready for the gold-set channel. Done so
-far: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22.
+far: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22, 23.
+Slice 23 note (2026-07-06/07): the displacement audit measured GEHI-vs-Vexcel
+cross-vintage/absolute misregistration on the 792-anchor zero-download corpus
+(788 distill decision-set + 4 panel_repair dense stacks; 15,501 rows,
+`EXIT=0`). Median absolute offset against the census/crop frame is <1 m, but
+tight12 contamination is material and size-concentrated: medium/large
+installs (footprint ≥40 m²) lose >50% of the panel footprint from the crop in
+~13–15% of frames (~4% full loss), while `chip_geom_v1_banked96` is
+essentially immune (0% lose>50% at every PSR reliability cut). This **revisits
+ISSUE-19's closed geometry decision with new evidence**: before the Phase-3
+re-render runs on medium/large-footprint anchors, either register a
+size-stratified geometry version (the registry's own foreseen
+`chip_geom_v3_tight_scaled`) or add per-vintage local re-centering as a new
+named `geometry_version` — never a hotfix to cached tight12 rows or the frozen
+96 m builder (D18). Also implements the `best_offset_m`/`alignment_score`
+fields the Phase-0 architecture doc asked for and nothing had shipped
+(`per_chipdate_offsets.csv`, keyed `chip_id+capture_date+ref_kind`, joinable
+without touching the frozen builder). Full findings:
+[DATA-gehi-displacement-audit-2026-07-06.md](DATA-gehi-displacement-audit-2026-07-06.md).
 ISSUE-19 note (2026-07-04): Phase-3 re-render geometry decided —
 `chip_geom_v2_tight12` (ISSUE-04 tight-crop arm, 0.5/12 m/256 px) is the
 re-render default, `chip_geom_v1_banked96` stays the frozen legacy default;
