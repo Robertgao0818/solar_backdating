@@ -50,11 +50,11 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 21 | [P3 band re-derivation reps](ISSUE-21-p3-band-rederivation.md) | 0 | done | 20, 7 |
 | 22 | [D19 production switch (remaining §8 code items)](ISSUE-22-d19-production-switch.md) | 0 | done | 20 |
 | 23 | [GEHI displacement + tight12 contamination audit](DATA-gehi-displacement-audit-2026-07-06.md) | 3 | done | 19 |
-| 24 | [Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock registration](ISSUE-24-learned-feature-matching.md) | 3 | ready-for-agent | — |
+| 24 | [Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock registration](ISSUE-24-learned-feature-matching.md) | 3 | done — KILL | — |
 
-Slice 24 note (2026-07-08): opened to replace the DINO-coarse dense-token
-matcher (killed same day — best 39.4% recovery on the 137-row positive
-control, vs. a pre-registered 70–80% bar; see
+Slice 24 note (2026-07-08, updated 2026-07-09): opened to replace the
+DINO-coarse dense-token matcher (killed same day — best 39.4% recovery on
+the 137-row positive control, vs. a pre-registered 70–80% bar; see
 [DATA-dino-coarse-bounded-kill-2026-07-08.md](DATA-dino-coarse-bounded-kill-2026-07-08.md))
 with a purpose-built learned correspondence matcher (SuperPoint+LightGlue
 first, LoFTR as a fallback arm) on the same 2,785-row/679-anchor PSR<12
@@ -63,6 +63,13 @@ pre-registered pilot from the start — reuses the same 137-row positive
 control and kill-bar discipline the DINO line only adopted in its third
 session. Unrelated to the still-untested "arm 0"/"arm 1" non-learned levers
 (search-window widening / weak-lock calibration) flagged in the same memo.
+
+**Closed 2026-07-09, KILL**: SuperPoint+LightGlue reached 68.6% (94/137,
++29.2pp over the DINO ceiling but 1.4pp under the pre-registered 70% bar);
+LoFTR (arm 2, triggered by arm 1's miss) reached 60.6% (83/137). Best-tested
+config across both arms still misses the bar. Weak-lock probe not run (gated
+behind GO). See
+[DATA-learned-matching-bounded-pilot-2026-07-09.md](DATA-learned-matching-bounded-pilot-2026-07-09.md).
 
 Unblocked start set: **11** (human — ISSUE-10 landed 2026-07-05 with a
 10-anchor dry run adjudicated, n=500 recommended; precondition: extend

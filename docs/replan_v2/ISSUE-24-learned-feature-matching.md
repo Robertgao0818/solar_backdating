@@ -1,6 +1,8 @@
 # ISSUE-24: Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock GEHI↔Vexcel registration
 
-Status: ready-for-agent
+Status: done — KILL (2026-07-09). SuperPoint+LightGlue 68.6% (94/137, best
+arm), LoFTR 60.6% (83/137); both under the pre-registered 70% bar. See
+[`DATA-learned-matching-bounded-pilot-2026-07-09.md`](DATA-learned-matching-bounded-pilot-2026-07-09.md).
 Phase: 3 — Registration / chip geometry
 Blocked by: — (population + tooling precursor: ISSUE-23, done)
 
