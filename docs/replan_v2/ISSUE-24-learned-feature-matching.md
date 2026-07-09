@@ -9,7 +9,15 @@ aliasing on repetitive rowhouse fabric) triggered a pre-registered, blinded
 Gemini-judge GT re-adjudication of the 43 disagreement rows, corrected
 recovery to 109/137 (79.6%), clearing the bar — see
 [`DATA-learned-matching-gt-readjudication-2026-07-09.md`](DATA-learned-matching-gt-readjudication-2026-07-09.md).
-Step 6 weak-lock probe is unlocked but not run.
+Step 6 weak-lock probe executed 2026-07-10: bounded n=150 characterization
+(no GO/KILL bar applies), 91.3% (137/150) of sampled weak-lock rows carry
+at least one independent validation signal (phase-correlation cross-check
+or blinded-Gemini-judge confirmation), 8.7% (13/150) remain dark — see
+[`DATA-weaklock-probe-2026-07-10.md`](DATA-weaklock-probe-2026-07-10.md).
+Non-binding recommendation there: not production-ready as-is, no further
+matcher tuning warranted, GT-labeled follow-up and the dark-slice audit are
+the natural next steps if anyone picks this up. ISSUE-24 has no remaining
+open acceptance items.
 Phase: 3 — Registration / chip geometry
 Blocked by: — (population + tooling precursor: ISSUE-23, done)
 
@@ -84,21 +92,23 @@ looking at results):
 
 ## Acceptance criteria
 
-- [ ] Kill bar written and committed **before** running anything (default:
+- [x] Kill bar written and committed **before** running anything (default:
       reuse 70–80% recovery on the 137-row positive control, consistent
       with the DINO precedent; deviate only with explicit justification)
-- [ ] Cost profiled on a small subsample before any full-population run
-- [ ] Full 137-row positive-control result reported with an explicit
+- [x] Cost profiled on a small subsample before any full-population run
+- [x] Full 137-row positive-control result reported with an explicit
       GO/KILL verdict against the pre-registered bar, and a RANSAC-inlier
       (or equivalent) confidence distribution reported alongside recovery
       rate, not recovery rate alone
-- [ ] If GO: a second bounded test on a subsample of the actual PSR<12
+- [x] If GO: a second bounded test on a subsample of the actual PSR<12
       weak-lock population — explicitly not a full 2,785-row commitment in
-      this same slice
-- [ ] Written verdict memo (`DATA-*.md`, same structure as
+      this same slice (Step 6, executed 2026-07-10, n=150,
+      characterization-only per its own pre-registration — no GO/KILL bar,
+      see `DATA-weaklock-probe-2026-07-10.md`)
+- [x] Written verdict memo (`DATA-*.md`, same structure as
       `DATA-dino-coarse-bounded-kill-2026-07-08.md`) produced regardless of
       GO/KILL outcome
-- [ ] Existing S1/S2/S3 signals, the frozen 96m builder, and the chip
+- [x] Existing S1/S2/S3 signals, the frozen 96m builder, and the chip
       geometry registry are unmodified
 
 ## Out of scope / do not conflate

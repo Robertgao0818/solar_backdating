@@ -1,6 +1,10 @@
 # Data memo: Step-6 weak-lock characterization probe (SuperPoint+LightGlue) (2026-07-10)
 
-Status: pre-registered, not yet run.
+Status: executed 2026-07-10. Characterization complete — no GO/KILL verdict
+(none applies; see Framing). 137/150 (91.3%) of the sampled weak-lock rows
+now carry at least one positive validation signal (phase-correlation
+cross-agreement or a blinded-Gemini-confirmed better registration); 13/150
+(8.7%) remain unvalidated ("dark").
 
 Parent: [`ISSUE-24-learned-feature-matching.md`](ISSUE-24-learned-feature-matching.md)
 (Step 6, unlocked by the GT re-adjudication GO) and
@@ -175,14 +179,137 @@ number below.
 
 ## 3. Results
 
-_Filled in after the run._
+Run 2026-07-10, `git` commit `35ead0b` (pre-registration) precedes every
+matcher/Gemini call in this section. Self-check reproduced the frozen
+pilot's own numbers exactly (`(dy_px,dx_px) = (6.973, -4.022)` vs. known
+`(7,-4)`, error 0.035px, `n_matches=1697 n_inliers=1695`) -> **PASS**.
+Outputs: `~/zasolar_data/geid_temporal/weaklock_probe_2026-07-10/`
+(`self_check/`, `calibration_sweep.csv`, `probe_150_results.csv`,
+`competence_gate_results.csv`, `judge_results.csv`, `overlays/`,
+`summary.txt`).
+
+### 3.1 Calibration re-sweep (137-row positive control, corrected labels)
+
+Corrected recovery (94 agreement + 15 `est`-correct of the 43): **109/137
+(79.6%)**, matching the re-adjudication memo's own number exactly (cross-check
+that the join between `pilot_results.csv` and `readjudication_43_results.csv`
+is correct). Full sweep in `calibration_sweep.csv` (137 threshold rows). At
+every `n_inliers` cut with coverage >=50%, precision under corrected labels
+tops out at **86.96%** (`t=255`, n=69) — never reaches the 90% bar. At full
+coverage (`t=1`), precision is 79.6% (the base rate, as expected). **No
+threshold clears >=90% precision at >=50% coverage** -> per the
+pre-registration, the "confident lock" cut is **not** defined by `n_inliers`
+in this probe; `n_inliers`/`inlier_ratio` are reported descriptively only,
+and the two independent validation signals (cross-validation, judge) below
+carry the characterization.
+
+### 3.2 Probe population (n=150, seed=0, `psr<12`)
+
+**(a) Attempt/lock rate**: 150/150 (100%) rows had ref+mov successfully
+built (zero missing-anchor / missing-Vexcel / missing-mov / reprojection
+failures) and 150/150 (100%) produced a nonzero-match SuperPoint+LightGlue
+fit. No data-availability problem on this population — unlike the
+DINO-coarse line's earlier population gaps, tile/annotation coverage is not
+the bottleneck here. Wall time: 71s for 150 rows (0.47s/row), consistent
+with (slightly above, single-process cold-start amortized) the pilot's own
+0.318s/row on the 137-row control.
+
+**(b) Cross-validation vs. phase-correlation's own (untrusted) point
+estimate**: **133/150 (88.7%)** of rows have
+`hypot(est_dx_m-phasecorr_dx_m, est_dy_m-phasecorr_dy_m) <= ~5.6m`. Two
+independent, individually-distrusted estimators agreeing this often on a
+population phase-correlation itself flagged as low-confidence is a strong
+signal — consistent with (not identical to, since this population's own PSR
+gate differs) the parent pilot's exemption logic for its 94 agreement rows.
+
+**(c) Offset-magnitude distribution**: `est_offset_m` p50=0.861m,
+p90=2.879m, max=26.009m (n=150). The trusted S3(Vexcel) reference
+population (psr>=12 gate) has p50=0.96m, p90=3.81m — the weak-lock probe's
+central tendency (p50, p90) is **not** heavier than the trusted population's;
+if anything slightly lighter at both quantiles. The tail is the one place
+this population looks different: 2/150 rows exceed 10m, 1/150 exceeds 20m
+(max 26.0m) — a small number of likely-genuine mismatches, not a
+systematically heavier distribution.
+
+**Near-zero-correction class**: 123/150 (82.0%) rows have
+`est_offset_m < 2.0m` — SuperPoint+LightGlue estimates these chips need
+little or no correction. Of these, 111/123 (90.2%) cross-validate against
+phase-correlation's own near-zero-or-small estimate; 12/123 (9.8%) do not
+(both estimators are individually noisiest at small true offsets, so some
+disagreement here is expected rather than alarming).
+
+**(d) Blinded Gemini judge — up to 40 items, `est_offset_m>=2.0m`**: only
+**27/150 (18.0%)** rows qualified (fewer than the pre-registered 40 cap, so
+all 27 were judged, per the pre-registration's "fewer if <40 eligible"
+clause). **Competence gate: 8/10 -> PASS** — the fresh seed=0 draw from the
+94 agreement rows reproduced the identical 10 chip/date pairs as the
+2026-07-09 re-adjudication's own competence gate (verified: 10/10 overlap)
+and scored identically (8/10, same 2 `neither`-miss items, same conservative
+under-identification failure direction) — exactly the outcome flagged as
+expected, not a bug, in the pre-registration (§1.5). **SuperPoint+LightGlue-aligned
+judged better: 23/27 (85.2%)**. Category counts: `sp_lg`=23, `unshifted`=3,
+`neither`=1, `abstain`=0. Judge confidence tightly banded (p25/p50/p75 =
+0.70/0.70/0.75), same compressed range the re-adjudication observed. Of the
+27 judged rows, 22/27 (81.5%) also cross-validate against phase-correlation
+(metric b); 19/27 have **both** signals positive simultaneously.
+
+### 3.3 Combined validation coverage
+
+Treating a row as "validated" if it has cross-validation agreement (b) OR a
+judge-confirmed better registration (d, only computable for the 27
+judge-eligible rows) — **137/150 (91.3%)** of the sampled weak-lock rows
+carry at least one positive independent signal. The remaining **13/150
+(8.7%)** are "dark": 12 are near-zero-correction rows where SuperPoint+LightGlue's
+small estimate does not cross-validate against phase-correlation's own
+small estimate (plausible mutual noise at small offsets, not necessarily a
+matcher failure), and 1 is a judge-eligible row the judge explicitly rejected
+(`neither`/`unshifted`) — a genuine candidate miss.
 
 ## 4. Honest characterization
 
-_Filled in after the run._
+On this bounded 150-row sample of the 2,785-row PSR<12 weak-lock population,
+SuperPoint+LightGlue attempts and locks every row (100%), and **91.3% (137/150)
+of rows now carry at least one independent validation signal** that its
+estimate is directionally trustworthy — either agreement with
+phase-correlation's own (individually distrusted) point estimate, or a
+blinded Gemini judge confirming the SuperPoint+LightGlue-aligned overlay
+resolves structure-edge ghosting better than doing nothing. The offset
+magnitudes it produces are not systematically larger than the trusted
+population's own reference distribution at the center, though a small
+(2/150) heavy tail exists. **What remains genuinely dark is a specific,
+small slice: 8.7% (13/150) of rows, dominated by near-zero corrections that
+don't cross-validate against phase-correlation** rather than large,
+confidently-wrong estimates — there is no evidence in this probe of
+SuperPoint+LightGlue systematically producing large, unvalidated,
+confidently-wrong locks on this population. `n_inliers` itself, however,
+is **not** a usable stand-alone confidence signal here (§3.1) — any future
+use of this matcher on the weak-lock population needs the cross-validation
+and/or judge signals, not a bare `n_inliers` cut, to separate trustworthy
+rows from the dark 8.7%.
 
 ## 5. Recommendation (non-binding)
 
-_Filled in after the run — explicitly not a production commitment; any
-next step listed here is a candidate for a future issue, not a decision
-made by this memo._
+This is a characterization result, not a production decision — the options
+below are candidates for a future issue, not a commitment made here:
+
+- **Do not wire this into production as-is.** 91.3% validated-signal
+  coverage on a 150-row bounded sample is encouraging but this probe
+  deliberately used two *self*-referential validation signals (an untrusted
+  estimator cross-check, and an LLM judge whose own competence gate tops out
+  at 8/10) — neither is a substitute for held-out human-labeled GT at
+  production scale.
+- **If pursued further**: (a) a proper GT-labeled subsample of the
+  weak-lock population (even 30-50 rows) would let this probe's
+  cross-validation + judge signals be checked against real ground truth
+  instead of each other; (b) the "dark" 12 near-zero-uncorroborated rows are
+  a natural target for a small follow-up — are they genuinely near-zero
+  offsets, or is one/both estimators failing quietly at small magnitudes;
+  (c) Arm 0 / Arm 1 (widen phase-correlation's own search window;
+  calibrate-correct the PSR 8-12 band) remain untested and orthogonal, per
+  ISSUE-24's own out-of-scope note — still available to whoever picks up
+  weak-lock recall work next, independent of this probe's outcome.
+- **Not recommended**: further hyperparameter tuning of SuperPoint+LightGlue
+  itself on this population — this probe found no evidence of a specific,
+  fixable failure mode (like the phase-correlation-aliasing bug the parent
+  pilot found) that would motivate it; the 8.7% dark slice looks like
+  ordinary estimator noise at small true offsets, not a bug.

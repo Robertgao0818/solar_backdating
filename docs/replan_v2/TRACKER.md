@@ -50,7 +50,7 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 21 | [P3 band re-derivation reps](ISSUE-21-p3-band-rederivation.md) | 0 | done | 20, 7 |
 | 22 | [D19 production switch (remaining §8 code items)](ISSUE-22-d19-production-switch.md) | 0 | done | 20 |
 | 23 | [GEHI displacement + tight12 contamination audit](DATA-gehi-displacement-audit-2026-07-06.md) | 3 | done | 19 |
-| 24 | [Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock registration](ISSUE-24-learned-feature-matching.md) | 3 | done — KILL overturned → GO | — |
+| 24 | [Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock registration](ISSUE-24-learned-feature-matching.md) | 3 | done — KILL overturned → GO; Step-6 probe executed (characterization, 91.3% validated) | — |
 
 Slice 24 note (2026-07-08, updated 2026-07-09): opened to replace the
 DINO-coarse dense-token matcher (killed same day — best 39.4% recovery on
@@ -85,8 +85,9 @@ est-correct, 13/43 known-correct, 15/43 neither — corrected recovery
 109/137 (79.6%), clearing the 70% bar. See
 [DATA-learned-matching-gt-readjudication-2026-07-09.md](DATA-learned-matching-gt-readjudication-2026-07-09.md).
 Step 6 weak-lock probe is now unlocked but not run (out of scope for the
-re-adjudication). Side effects on sibling memos (dated correction notes,
-bodies unmodified): the DINO-coarse KILL
+re-adjudication; see the executed-probe note below). Side effects on
+sibling memos (dated correction notes, bodies unmodified): the DINO-coarse
+KILL
 ([DATA-dino-coarse-bounded-kill-2026-07-08.md](DATA-dino-coarse-bounded-kill-2026-07-08.md))
 is not reopened but its 39.4% figure is now flagged as understated (same
 contaminated-GT population); the ISSUE-23 displacement audit
@@ -95,6 +96,30 @@ flags its narrow `≥5m`-offset trusted-lock tail (137/5,019 = 2.7% of the
 `psr>=12` cut) as a suspect class for reuse as a positive control elsewhere;
 its own trusted-table medians (computed over the full `psr>=12` population,
 not the `≥5m` tail) are unaffected.
+
+**Step 6 weak-lock probe executed 2026-07-10, characterization only (no
+GO/KILL bar applies)**: bounded seed=0 n=150 sample of the 2,785-row
+PSR<12 population. Calibration re-sweep of `n_inliers` against
+corrected 137-row labels found no threshold clears 90% precision at 50%
+coverage (max 86.96% at t=255/n=69) — `n_inliers` is descriptive only here,
+not a usable stand-alone confidence cut. Attempt/lock rate 150/150 (100%,
+zero missing-data). Cross-validation vs. phase-correlation's own untrusted
+estimate: 133/150 (88.7%). Offset-magnitude central tendency (p50=0.861m,
+p90=2.879m) not heavier than the trusted S3(Vexcel) reference
+(p50=0.96m, p90=3.81m); small tail (2/150 >10m, max 26.0m). Blinded Gemini
+judge on the 27/150 rows with `est_offset_m>=2m` (competence gate 8/10,
+reproducing the re-adjudication's own 10 items and score exactly):
+SuperPoint+LightGlue-aligned judged better on 23/27 (85.2%). Combined
+(cross-validation OR judge): **137/150 (91.3%) of sampled rows carry at
+least one independent validation signal**; 13/150 (8.7%) remain dark,
+mostly uncorroborated near-zero corrections rather than confidently-wrong
+large estimates. Non-binding recommendation: not production-ready as-is
+(both validation signals are self-referential, no held-out GT was used);
+no further matcher tuning warranted (no specific fixable failure mode
+found); a small GT-labeled follow-up and an audit of the 12
+near-zero-dark rows are the natural next steps if picked up. See
+[DATA-weaklock-probe-2026-07-10.md](DATA-weaklock-probe-2026-07-10.md).
+ISSUE-24 has no remaining open acceptance items.
 
 Unblocked start set: **11** (human — ISSUE-10 landed 2026-07-05 with a
 10-anchor dry run adjudicated, n=500 recommended; precondition: extend
