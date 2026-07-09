@@ -50,7 +50,7 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 21 | [P3 band re-derivation reps](ISSUE-21-p3-band-rederivation.md) | 0 | done | 20, 7 |
 | 22 | [D19 production switch (remaining §8 code items)](ISSUE-22-d19-production-switch.md) | 0 | done | 20 |
 | 23 | [GEHI displacement + tight12 contamination audit](DATA-gehi-displacement-audit-2026-07-06.md) | 3 | done | 19 |
-| 24 | [Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock registration](ISSUE-24-learned-feature-matching.md) | 3 | done — KILL | — |
+| 24 | [Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock registration](ISSUE-24-learned-feature-matching.md) | 3 | done — KILL overturned → GO | — |
 
 Slice 24 note (2026-07-08, updated 2026-07-09): opened to replace the
 DINO-coarse dense-token matcher (killed same day — best 39.4% recovery on
@@ -70,6 +70,31 @@ LoFTR (arm 2, triggered by arm 1's miss) reached 60.6% (83/137). Best-tested
 config across both arms still misses the bar. Weak-lock probe not run (gated
 behind GO). See
 [DATA-learned-matching-bounded-pilot-2026-07-09.md](DATA-learned-matching-bounded-pilot-2026-07-09.md).
+
+**Overturned 2026-07-10, KILL → GO**: post-verdict diagnostics found 30 of
+the 43 SuperPoint+LightGlue failure rows are "zero-pinned" — the matcher's
+near-zero estimate vs. this pilot's own `≥5m`-filtered phase-correlation
+GT — and a disclosed human peek at 10 of those rows found the near-zero
+estimate was often the alignment that actually registered the buildings,
+i.e. the GT itself is aliased on repetitive rowhouse fabric (a
+broken-instrument finding about the referee, not an ablation of the
+matcher under test). A pre-registered, blinded Gemini-judge re-adjudication
+of all 43 disagreement rows (gated behind a synthetic ground-truth
+competence check, 8/10, and a human-consistency check, 6/10) found 15/43
+est-correct, 13/43 known-correct, 15/43 neither — corrected recovery
+109/137 (79.6%), clearing the 70% bar. See
+[DATA-learned-matching-gt-readjudication-2026-07-09.md](DATA-learned-matching-gt-readjudication-2026-07-09.md).
+Step 6 weak-lock probe is now unlocked but not run (out of scope for the
+re-adjudication). Side effects on sibling memos (dated correction notes,
+bodies unmodified): the DINO-coarse KILL
+([DATA-dino-coarse-bounded-kill-2026-07-08.md](DATA-dino-coarse-bounded-kill-2026-07-08.md))
+is not reopened but its 39.4% figure is now flagged as understated (same
+contaminated-GT population); the ISSUE-23 displacement audit
+([DATA-gehi-displacement-audit-2026-07-06.md](DATA-gehi-displacement-audit-2026-07-06.md))
+flags its narrow `≥5m`-offset trusted-lock tail (137/5,019 = 2.7% of the
+`psr>=12` cut) as a suspect class for reuse as a positive control elsewhere;
+its own trusted-table medians (computed over the full `psr>=12` population,
+not the `≥5m` tail) are unaffected.
 
 Unblocked start set: **11** (human — ISSUE-10 landed 2026-07-05 with a
 10-anchor dry run adjudicated, n=500 recommended; precondition: extend

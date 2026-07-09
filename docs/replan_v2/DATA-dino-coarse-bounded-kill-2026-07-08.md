@@ -22,6 +22,21 @@ Nothing downstream is currently shipping any correction for the tight12
 contamination this line was meant to fix — see `TRACKER.md`'s slice-23 note
 and `DATA-gehi-displacement-audit-2026-07-06.md` for the still-open problem.
 
+**Correction (2026-07-10): this memo's 39.4% recovered rate was measured
+against a GT positive control now known to be partially contaminated.** A
+GT re-adjudication for the sibling ISSUE-24 learned-matching pilot
+(`DATA-learned-matching-gt-readjudication-2026-07-09.md`) found that the
+same 137-row `psr>=12 & best_offset_m>=5.0` positive control's phase-
+correlation GT is aliased (locks onto the wrong nearby rowhouse unit) on a
+material share of rows. **This memo's KILL verdict is NOT reopened** —
+SuperPoint+LightGlue (a different, purpose-built mechanism) dominates
+DINO-coarse's dense-token-argmax approach regardless of the GT contamination,
+and no new hypothesis about DINO-coarse itself has been raised — but the
+39.4% figure is understated: an unknown share of DINO-coarse's own
+"failures" against this GT may be additional zero-pinned-style aliasing
+artifacts rather than genuine DINO-coarse misses. This is recorded for
+comparability, not as grounds to re-run or re-ablate the DINO-coarse line.
+
 Pre-registration (verbatim mandate, session 3): test fix #4 (finer
 `input_size`, ~1.2m/cell) and a DINOv3 Gram-anchored, `sat493m`
 satellite-domain-matched backbone, on the same 137-row positive control used

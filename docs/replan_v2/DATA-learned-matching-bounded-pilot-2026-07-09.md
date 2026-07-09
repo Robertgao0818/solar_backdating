@@ -13,6 +13,24 @@ which itself follows the bounded-pilot discipline established by
 (the DINO-coarse dense-patch-token line, closed KILL at 39.4% recovered on
 the same positive control this pilot reuses).
 
+**Correction (2026-07-10): this verdict is OVERTURNED, KILL → GO.**
+Post-verdict diagnostics found that 30 of the 43 failure rows are
+"zero-pinned" (SuperPoint+LightGlue estimates a near-zero offset while this
+memo's own positive-control GT — phase-correlation's `≥5m`-filtered
+"known" offset — claims a large one). A disclosed human peek at 10 sampled
+zero-pinned rows found the near-zero estimate was often the alignment that
+actually registered the buildings, and phase-correlation's own GT was the
+misaligned one (aliasing on repetitive rowhouse fabric, which the `≥5m`
+population filter selectively enriches for) — a broken-instrument finding
+about the referee, not an ablation of SuperPoint+LightGlue. A pre-registered,
+blinded Gemini-judge re-adjudication of all 43 disagreement rows (gated
+behind a synthetic ground-truth competence check and a human-consistency
+check) found 15/43 rows est-correct, correcting recovery to 109/137 (79.6%,
+above the 70% bar). Full protocol and results:
+[`DATA-learned-matching-gt-readjudication-2026-07-09.md`](DATA-learned-matching-gt-readjudication-2026-07-09.md).
+This memo's body below is left unmodified as the original record of the
+(now-superseded) KILL verdict and its reasoning at the time.
+
 ## Pre-registration (fixed before any matcher run)
 
 - **Population**: `ref_kind=="S3_vexcel" & psr>=12 & best_offset_m>=5.0` from

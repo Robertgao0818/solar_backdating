@@ -11,6 +11,24 @@ below are read directly off `per_chipdate_offsets.csv` (15,501 rows) /
 `gehi_vs_vexcel_bias.csv` (753 rows) / `contamination_summary.csv` in that
 directory — re-run `summarize_gehi_displacement.py` to reproduce.
 
+**Correction (2026-07-10): the strict trusted-lock class is now a suspect
+class for a specific sub-population.** A GT re-adjudication for ISSUE-24
+(`DATA-learned-matching-gt-readjudication-2026-07-09.md`) found that within
+the `ref_kind=="S3_vexcel" & psr>=12 & best_offset_m>=5.0` trusted-lock
+class (137 rows — 2.7% of the `psr>=12` strict cut's n=5,019 in §4's
+contamination table), a material share of phase-correlation's own "locks"
+are aliased onto the wrong nearby rowhouse/townhouse unit rather than the
+anchor's own roof, discovered via blinded human+Gemini visual re-inspection.
+This affects only that narrow `≥5m`-offset slice used as a positive control
+elsewhere (DINO-coarse and learned-matching pilots) — it does **not**
+reopen or revise this audit's own trusted-table medians (§3, S3 signal:
+p50=0.96m, p90=3.81m at the PSR≥8 default gate; by-area-bucket z20 medians
+in §3 unaffected), which are computed over the full `psr>=12` population
+(n=5,019), not filtered to the `≥5m`-offset tail where the aliasing
+concentrates. Flagged here as a caveat on reusing this narrow tail as a
+"trusted" positive control elsewhere, not a correction to this memo's own
+findings.
+
 ## 0. Why this exists
 
 Every GEHI vintage chip for one anchor shares the identical nominal

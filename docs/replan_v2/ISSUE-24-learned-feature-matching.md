@@ -1,8 +1,15 @@
 # ISSUE-24: Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock GEHI↔Vexcel registration
 
-Status: done — KILL (2026-07-09). SuperPoint+LightGlue 68.6% (94/137, best
-arm), LoFTR 60.6% (83/137); both under the pre-registered 70% bar. See
-[`DATA-learned-matching-bounded-pilot-2026-07-09.md`](DATA-learned-matching-bounded-pilot-2026-07-09.md).
+Status: done — KILL overturned on GT re-adjudication → GO (2026-07-10).
+Original pilot (2026-07-09): SuperPoint+LightGlue 68.6% (94/137), LoFTR
+60.6% (83/137), both under the pre-registered 70% bar
+([`DATA-learned-matching-bounded-pilot-2026-07-09.md`](DATA-learned-matching-bounded-pilot-2026-07-09.md),
+correction note added). A broken-instrument discovery (phase-correlation GT
+aliasing on repetitive rowhouse fabric) triggered a pre-registered, blinded
+Gemini-judge GT re-adjudication of the 43 disagreement rows, corrected
+recovery to 109/137 (79.6%), clearing the bar — see
+[`DATA-learned-matching-gt-readjudication-2026-07-09.md`](DATA-learned-matching-gt-readjudication-2026-07-09.md).
+Step 6 weak-lock probe is unlocked but not run.
 Phase: 3 — Registration / chip geometry
 Blocked by: — (population + tooling precursor: ISSUE-23, done)
 

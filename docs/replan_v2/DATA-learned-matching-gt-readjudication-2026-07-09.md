@@ -1,6 +1,13 @@
 # Data memo: GT re-adjudication of the ISSUE-24 learned-matching pilot's 43 disagreement rows via Gemini judge (2026-07-09)
 
-Status: pre-registration committed; results pending.
+Status: final verdict. **GO — corrected recovery 109/137 (79.6%) clears the
+pre-registered 70% bar.** Both gates (10-item synthetic competence gate,
+human-consistency gate on the 10 disclosed-peek rows) passed. This
+**overturns** the original KILL in
+[`DATA-learned-matching-bounded-pilot-2026-07-09.md`](DATA-learned-matching-bounded-pilot-2026-07-09.md)
+via a dated correction note there (that memo's body is left unmodified, per
+house style). ISSUE-24's Step 6 weak-lock probe is now unlocked but **not
+run by this memo** — out of scope here.
 
 Parent: [`DATA-learned-matching-bounded-pilot-2026-07-09.md`](DATA-learned-matching-bounded-pilot-2026-07-09.md)
 (the KILL verdict being re-adjudicated) and
@@ -195,5 +202,99 @@ Gemini responses are committed.
 
 ## 3. Results
 
-_Pending — filled in after the script runs, following the gate order in §1
-(competence gate → 43 real items → human-consistency gate → recompute)._
+Full run: pre-registration commit `2259593`, script run 2026-07-09 23:44–23:49
+(local), `~/zasolar_data/geid_temporal/gt_readjudication_2026-07-09/`
+(`competence_gate_results.csv`, `readjudication_43_results.csv`,
+`summary.txt`, `overlays/`).
+
+### 3.1 Gateway smoke test
+
+PASS — a trivial `{"ok": true}` round-trip returned `finishReason=STOP`,
+`modelVersion=gemini-3-flash-a`, before any real item was rendered or sent.
+
+### 3.2 Competence gate (10 synthetic ground-truth-known controls)
+
+**8/10 correct → PASS** (bar ≥8/10). The 2 misses were both `"neither"`
+verdicts on items where one slot was in fact correct by construction — in
+neither miss did the judge actively pick the fake (wrong-by-13m) slot. That
+is the conservative failure direction: the judge's error mode here is
+under-identification ("I can't tell, call it neither"), not
+over-identification (confidently endorsing a decoy). Combined with the
+fail-closed rule that `"neither"` counts as NOT recovered on the real 43,
+this means the judge's known bias works *against* a false GO, not for one —
+if anything, some genuine est-correct or known-correct rows in the 43 are
+likely mis-called `"neither"` and undercounted in the recompute below.
+
+### 3.3 Human-consistency gate
+
+**6/10 PASS** — Gemini's majority verdict on the same 10 rows the human
+disclosed-peeked before this protocol was written is est-correct (6 est / 4
+not-est), consistent with the human's aggregate "majority est-correct" read.
+Gate not contradicted; recompute proceeds.
+
+### 3.4 43-row category counts
+
+| category | n | share |
+|---|---:|---:|
+| est (SuperPoint+LightGlue judged correct) | 15 | 34.9% |
+| known (phase-correlation judged correct) | 13 | 30.2% |
+| neither | 15 | 34.9% |
+| abstain | 0 | 0.0% |
+
+By area bucket (est / known / neither, n in parens): a_xs(<15) 6/3/7 (16),
+b_sm(15–40) 3/6/5 (14), c_md(40–100) 1/4/1 (6), d_lg(≥100) 5/0/2 (7).
+Small-n caveat applies to every bucket. Confidence (0–1) by category: est
+mean 0.757 (0.70–0.80), known mean 0.731 (0.70–0.80), neither mean 0.693
+(0.60–0.75) — compressed into a narrow band overall, but ordered in the
+expected direction.
+
+### 3.5 Recompute and re-ruling
+
+**Primary** (denominator 137, rule 7): corrected recovered = 94 (agreement,
+exempt) + 15 (est-correct on the 43) = **109/137 = 79.6%**. GO bar ≥96/137
+(70%). **109 ≥ 96 → GO.** This **overturns** the original KILL.
+
+**Secondary** (report-only): dropping the 15 `"neither"` rows from the
+denominator, 109/(137−15) = 109/122 = **89.3%**.
+
+### 3.6 Directional findings
+
+- The zero-pinned-failure / phase-correlation-aliasing hypothesis is
+  confirmed on new, blinded data, not just the disclosed 10-row human peek:
+  15/43 (34.9%) of the original "failures" are cases where
+  SuperPoint+LightGlue's estimate is the alignment that actually registers
+  the buildings, and phase-correlation's own claimed GT is the misaligned
+  one.
+- 13/43 (30.2%) go the other way — phase-correlation's offset is confirmed
+  correct and SuperPoint+LightGlue's estimate is genuinely wrong on that
+  row. The aliasing artifact does not absorb the entire KILL: SuperPoint+
+  LightGlue has real, if smaller, failure modes on this population beyond
+  the contaminated-GT rows.
+- 15/43 (34.9%) are `"neither"`. Given the competence gate's own bias
+  (§3.2 — both misses were `"neither"`-on-a-valid-case, never a
+  wrong-slot pick), this bucket likely contains some genuine est-correct
+  or known-correct rows the judge under-called. Under the pre-registered
+  fail-closed rule they are counted NOT recovered regardless, so the
+  109/137 (79.6%) headline is a conservative floor, not an inflated number.
+- By area bucket, est-correct concentrates at the small end (a_xs 6/16 —
+  smallest, most repetitive-rowhouse-prone installations, consistent with
+  the aliasing mechanism) and the large end (d_lg 5/7, with 0/7 judged
+  known-correct in that bucket — SuperPoint+LightGlue's dense corner
+  detection has the most structure to work with on large roofs).
+  Small-n, descriptive only.
+- No retuning of the matcher itself (RANSAC threshold, keypoint cap,
+  confidence filtering) was done anywhere in this re-adjudication — it only
+  relitigates the referee (phase-correlation GT) on the 43-row disagreement
+  set, per the pre-registered scope and the parent KILL memo's own "no
+  further ablation without a new hypothesis" discipline.
+
+## 4. Verdict
+
+**GO.** SuperPoint+LightGlue's corrected recovery on the 137-row positive
+control is 109/137 (79.6%), clearing the pre-registered 70% bar, with the
+human-consistency gate confirming the direction of the disclosed pre-protocol
+peek rather than contradicting it. ISSUE-24's Step 6 weak-lock probe
+(bounded PSR<12 subsample, pre-registered in the parent pilot memo's
+"Weak-lock probe (only if GO)" clause) is now unlocked but **not run by this
+memo** — reported as unlocked only, out of scope here per the execution
+brief.
