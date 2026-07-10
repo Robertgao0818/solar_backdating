@@ -83,6 +83,27 @@ The storyline plan already conditions on this: "verdict 以 banked96 几何为�
    flash-tier model, plus GEHI download quota for ~1,200 targets × sequence.
    Concurrency/quota check (账号×槽位) is a kickoff AC, not an afterthought.
 
+## Stage-B execution gate (2026-07-10)
+
+Manifest freeze, the real adaptive API smoke, and the full-manifest initial
+imagery prefetch are complete. See
+[`DATA-issue25-stage-b-smoke-2026-07-10.md`](DATA-issue25-stage-b-smoke-2026-07-10.md).
+Both imagery-source paths completed 20/20 targets without a crash. All 97
+hosted API chunks passed schema on their first attempt with no empty/truncated
+response or retry. Wayback separately had a 37% initial imagery retrieval
+failure rate (53/138 adaptive observations), all caused by GEHI producing no
+file after the z19→z18 ladder; these are not Gemini failures, and the smoke
+does not distinguish source coverage from exporter/downloader behaviour. The
+full initial prefetch then completed 6,000/6,000 TM candidates and 6,000/6,000
+Wayback attempts; Wayback produced 3,726 valid TIFFs and 2,274 (37.9%) of the
+same zero-tile retrieval failures.
+
+**Stage C is stopped at the human gate:** approve the pre-registered
+`~100–120k` Gemini-round budget before full scoring. The smoke-proven kickoff
+is `workers=40`, `qps=20`, both round models fixed to
+`gemini-3.1-flash-lite`, target routing salt, and no verdict store. Projected
+new imagery storage is 11.12 GiB; reserve 14 GiB including headroom.
+
 ## Downstream on adoption
 
 - Panel v2 full rescan runs on the winning geometry + frozen model.
@@ -96,6 +117,7 @@ The storyline plan already conditions on this: "verdict 以 banked96 几何为�
 
 - [x] Sample manifest + grid→zone lookup committed (freeze point)
 - [x] 20-target smoke calibration report; model frozen
+- [x] Stage-B full-manifest initial imagery prefetch + API/schema smoke report
 - [ ] Stage-1 per-arm × per-bucket self-consistency table
 - [ ] B0 model-bridge table (model effect isolated from geometry effect)
 - [ ] Verdict per R1 + DATA memo; CoJ disagreement queue exported
