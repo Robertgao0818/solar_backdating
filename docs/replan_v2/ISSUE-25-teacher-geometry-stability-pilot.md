@@ -1,9 +1,12 @@
 # ISSUE-25 — Teacher chip-geometry & stability pilot (from-scratch 24/48/96)
 
-Status: ready-for-human
+Status: ready-for-agent
 Phase: 2/4 (feeds Panel v2 rescan geometry + the ESSD reliability story)
-Blocked by: — (parallel to the anchor-pair student pilot, which holds the
-teacher fixed: [`../dinov3_scorer/DATA-anchor-pair-pilot-prereg-2026-07-10.md`](../dinov3_scorer/DATA-anchor-pair-pilot-prereg-2026-07-10.md))
+Blocked by: — (parallel to the student pairing line, which holds the
+teacher fixed: v1
+[`../dinov3_scorer/DATA-anchor-pair-pilot-prereg-2026-07-10.md`](../dinov3_scorer/DATA-anchor-pair-pilot-prereg-2026-07-10.md)
+closed scope-limited KILL; live frame-level bet is pairing-v2
+[`../dinov3_scorer/DATA-anchor-pair-v2-prereg-2026-07-10.md`](../dinov3_scorer/DATA-anchor-pair-v2-prereg-2026-07-10.md))
 
 ## Motivation
 
@@ -98,11 +101,13 @@ full initial prefetch then completed 6,000/6,000 TM candidates and 6,000/6,000
 Wayback attempts; Wayback produced 3,726 valid TIFFs and 2,274 (37.9%) of the
 same zero-tile retrieval failures.
 
-**Stage C is stopped at the human gate:** approve the pre-registered
-`~100–120k` Gemini-round budget before full scoring. The smoke-proven kickoff
-is `workers=40`, `qps=20`, both round models fixed to
-`gemini-3.1-flash-lite`, target routing salt, and no verdict store. Projected
-new imagery storage is 11.12 GiB; reserve 14 GiB including headroom.
+**Stage C progress (2026-07-11):** Stage-1 (15/15 arm-reps) + B0 (5 reps) +
+full test suite completed. Winner policy confirmed as
+`routed_A24_A48_cut40` (Amendment 2026-07-11). Stage-2 precision extension
+(800 targets × routed A24/A48 × 5 reps) is the remaining scoring block; kickoff
+parameters remain `workers=40`, `qps=20`, model `gemini-3.1-flash-lite`, target
+routing salt, no verdict store. Launch requires
+`stage_c/.stage2_winner_confirmed` (already written).
 
 ## Downstream on adoption
 
@@ -118,12 +123,95 @@ new imagery storage is 11.12 GiB; reserve 14 GiB including headroom.
 - [x] Sample manifest + grid→zone lookup committed (freeze point)
 - [x] 20-target smoke calibration report; model frozen
 - [x] Stage-B full-manifest initial imagery prefetch + API/schema smoke report
-- [ ] Stage-1 per-arm × per-bucket self-consistency table
-- [ ] B0 model-bridge table (model effect isolated from geometry effect)
+- [x] Stage-1 per-arm × per-bucket self-consistency table
+- [x] B0 model-bridge table (model effect isolated from geometry effect)
+- [x] Stage-1 routed counterfactual amendment frozen before Stage-2
+- [ ] Stage-2 precision extension under the confirmed winner policy
 - [ ] Verdict per R1 + DATA memo; CoJ disagreement queue exported
+
+## Amendment 2026-07-11 — single-threshold area-routed Stage-2 geometry
+
+**Status: ADOPTED (human confirmation for Stage-2 winner policy).**  
+**Does not rewrite Stage-1.** Stage-1 remains the pre-registered three-arm
+bake-off. This amendment only changes **how Stage-2 selects and applies** the
+winning geometry after Stage-1 results were observed.
+
+### Motivation (post-Stage-1)
+
+Stage-1 scored the same 400 core targets under A24 / A48 / A96. The
+pre-registered single-arm Stage-2 selector (max small-bucket agreement among
+large-safe arms; tie → A24) yields **A24**. Per-bucket results show a
+physically expected size interaction: A24 wins xs/sm, A48 wins md/lg, and
+A24's large-bucket gap is consistent with chip crop truncating wide arrays
+(24 m edge vs installations often >15–25 m wide).
+
+A single-threshold route therefore re-uses already-paid Stage-1 reps; it is
+not a new bake-off.
+
+### Frozen policy (no new free parameters)
+
+| item | freeze |
+|---|---|
+| Route | `chip_arm = A48` if `source_area_m2 >= 40`, else `A24` |
+| Threshold | **40 m² exactly** — the pre-registered small/large boundary; not tuned on Stage-1 |
+| Excluded | multi-threshold / per-bucket arm shopping; A96 stays bake-off only |
+| Provenance column | `chip_arm ∈ {A24, A48}` materialised at Stage-2 anchor prepare from frozen `source_area_m2` (census gpkg / fpcut; no temporal label) |
+| Single source of truth | still the anchor table + deterministic rule; sample manifest hashes unchanged |
+| Winner id | `routed_A24_A48_cut40` |
+
+### Per-stratum gates (blend may not launder a failed stratum)
+
+Stage-2 / Stage-D R1 still evaluates **small** and **large** strata
+separately against the pre-registered floors. The mixed overall agreement is
+diagnostic only.
+
+Using Stage-1 pairs under the route (counterfactual, same 400 targets):
+
+| stratum | source arm | agreement | floor | pass |
+|---|---|---:|---:|---|
+| small (`<40 m²`) | A24 | 0.8272 | 0.7395 | yes |
+| large (`≥100 m²`) | A48 | 0.9646 | 0.7982 | yes |
+| overall (diagnostic) | mix | 0.8868 | — | — |
+
+Single-arm reference: best overall A48 = 0.878; A24 small = 0.8272 / large =
+0.8919. The route **weakly dominates** every single arm on the two
+pre-registered primary metrics simultaneously (A24 small retained; A48 large
+taken). Full arithmetic:
+[`DATA-issue25-stage1-routed-counterfactual-2026-07-11.md`](DATA-issue25-stage1-routed-counterfactual-2026-07-11.md).
+
+### Four constraints that remain binding
+
+1. **Post-hoc rule change.** Documented here before Stage-2 starts. Threshold
+   locked to the pre-registered 40 m² cut; md (+2.1 pp) and xs (+3.7 pp) shifts
+   are noise-scale (~100 targets each) — only lg (+7.3 pp) is robust; do **not**
+   promote multi-cut optimization.
+2. **B0 unaffected.** B0 uses fixed 96 m group chips (`chip_half_m=48`) as an
+   independent model-bridge instrument.
+3. **Instrument heterogeneity (ESSD).** Two review extents = two instruments.
+   Downstream size-stratified install-date comparisons must not confuse size
+   effects with instrument effects. Stage-1 is a 400-target dual-instrument
+   overlap sample for calibration; optional Stage-2 ~5% dual-size rescore is a
+   monitoring add-on, not required to start Stage-2.
+4. **Group-chip routing conflicts.** Route **per target**. Do not force a
+   shared review extent across targets that only share a legacy group id.
+   Stage-2 does not cross-size batch groups.
+
+### Stage-2 human confirmation object
+
+Confirmation is no longer “single arm A24”. Confirmed winner policy:
+
+```text
+routed(A24/A48, cut=40 m²)  id=routed_A24_A48_cut40
+```
+
+Artifact: `stage_c/stage2_winner_decision.json` +
+`stage_c/.stage2_winner_confirmed` written only after this amendment is on
+disk. Stage-2 launch scripts must refuse to start unless that sentinel exists
+and names the routed policy.
 
 ## Out of scope
 
 - Student-side gates (gate-2 bar, decoder, agree_key semantics unchanged)
 - Accuracy claims beyond the CoJ presence channel
 - Full Panel v2 rescan (separate, gated on this pilot's verdict)
+- Multi-threshold or per-bucket arm re-optimization after this freeze
