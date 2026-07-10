@@ -61,24 +61,25 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(fh)]
 
 
-def prepare_stage1_anchors(
+def _prepare_anchors(
     manifest_path: Path,
     chip_targets_path: Path,
     output_path: Path,
     *,
-    expected_count: int = 400,
+    sample_stage: str,
+    expected_count: int,
 ) -> int:
-    """Filter the frozen core and attach the teacher footprint bbox dimensions."""
+    """Filter one frozen sample stage and attach teacher bbox dimensions."""
     manifest = _read_csv(manifest_path)
     target_rows = _read_csv(chip_targets_path)
     bbox_by_anchor = {
         row["anchor_id"]: (row.get("source_width_m", ""), row.get("source_height_m", ""))
         for row in target_rows
     }
-    selected = [row for row in manifest if row.get("sample_stage") == "stage1_core"]
+    selected = [row for row in manifest if row.get("sample_stage") == sample_stage]
     if len(selected) != expected_count:
         raise ValueError(
-            f"expected {expected_count} stage1_core anchors, found {len(selected)}"
+            f"expected {expected_count} {sample_stage} anchors, found {len(selected)}"
         )
     for row in selected:
         anchor_id = row.get("anchor_id", "")
@@ -99,6 +100,38 @@ def prepare_stage1_anchors(
         writer.writeheader()
         writer.writerows(selected)
     return len(selected)
+
+
+def prepare_stage1_anchors(
+    manifest_path: Path,
+    chip_targets_path: Path,
+    output_path: Path,
+    *,
+    expected_count: int = 400,
+) -> int:
+    return _prepare_anchors(
+        manifest_path,
+        chip_targets_path,
+        output_path,
+        sample_stage="stage1_core",
+        expected_count=expected_count,
+    )
+
+
+def prepare_stage2_anchors(
+    manifest_path: Path,
+    chip_targets_path: Path,
+    output_path: Path,
+    *,
+    expected_count: int = 800,
+) -> int:
+    return _prepare_anchors(
+        manifest_path,
+        chip_targets_path,
+        output_path,
+        sample_stage="stage2_precision",
+        expected_count=expected_count,
+    )
 
 
 def validate_authenticated_preflight(root: Path, model: str) -> dict[str, int]:
@@ -285,6 +318,11 @@ def main() -> None:
     prepare.add_argument("--chip-targets", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--expected-count", type=int, default=400)
+    prepare2 = sub.add_parser("prepare-stage2")
+    prepare2.add_argument("--manifest", type=Path, required=True)
+    prepare2.add_argument("--chip-targets", type=Path, required=True)
+    prepare2.add_argument("--output", type=Path, required=True)
+    prepare2.add_argument("--expected-count", type=int, default=800)
     validate = sub.add_parser("validate-preflight")
     validate.add_argument("--root", type=Path, required=True)
     validate.add_argument("--model", required=True)
@@ -303,6 +341,14 @@ def main() -> None:
             expected_count=args.expected_count,
         )
         print(f"Wrote {count} ISSUE-25 stage1 anchors -> {args.output}")
+    elif args.command == "prepare-stage2":
+        count = prepare_stage2_anchors(
+            args.manifest,
+            args.chip_targets,
+            args.output,
+            expected_count=args.expected_count,
+        )
+        print(f"Wrote {count} ISSUE-25 stage2 anchors -> {args.output}")
     elif args.command == "validate-preflight":
         summary = validate_authenticated_preflight(args.root, args.model)
         print(

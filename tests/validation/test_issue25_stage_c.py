@@ -10,6 +10,7 @@ from scripts.validation.issue25_stage_c import (
     choose_stage2_winner,
     pairwise_agreement,
     prepare_stage1_anchors,
+    prepare_stage2_anchors,
     validate_authenticated_preflight,
 )
 
@@ -70,6 +71,32 @@ def test_prepare_stage1_anchors_fails_when_bbox_join_is_missing(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="missing footprint bbox"):
         prepare_stage1_anchors(manifest, targets, tmp_path / "out.csv", expected_count=1)
+
+
+def test_prepare_stage2_anchors_selects_precision_extension(tmp_path: Path) -> None:
+    manifest = tmp_path / "target_anchors.csv"
+    targets = tmp_path / "chip_targets.csv"
+    output = tmp_path / "stage2.csv"
+    _write_csv(
+        manifest,
+        [
+            {"anchor_id": "t1", "sample_stage": "stage1_core", "chip_size_m": 96},
+            {"anchor_id": "t2", "sample_stage": "stage2_precision", "chip_size_m": 96},
+        ],
+    )
+    _write_csv(
+        targets,
+        [
+            {"anchor_id": "t1", "source_width_m": 5.5, "source_height_m": 8.25},
+            {"anchor_id": "t2", "source_width_m": 4.0, "source_height_m": 6.0},
+        ],
+    )
+
+    count = prepare_stage2_anchors(manifest, targets, output, expected_count=1)
+
+    assert count == 1
+    with output.open() as fh:
+        assert next(csv.DictReader(fh))["anchor_id"] == "t2"
 
 
 def test_validate_authenticated_preflight_requires_schema_success_and_model(tmp_path: Path) -> None:
