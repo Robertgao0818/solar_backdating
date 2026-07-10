@@ -1,6 +1,6 @@
 # ISSUE-26: Census-date scan-window cutoff (download + decoder semantics)
 
-Status: ready-for-agent
+Status: done
 Phase: 4 — Scan / GEHI provider
 Blocked by: —
 Opened: 2026-07-10 — three-agent read-only audit (bug-locator /
@@ -115,3 +115,25 @@ completeness loss from recurring.
 - No change to ISSUE-03 EB-prior/interval-midpoint machinery.
 - No cleanup of the 2.46× duplicate chip copies across rep/quarantine dirs
   (separate hygiene task; different root cause).
+
+## Implementation evidence (2026-07-10)
+
+- AC1 ✅ — catalog availability and every planner use a per-anchor upper bound
+  resolved from the census date plus `post_census_reference_frames` (default
+  3); the resolved census date/bound/count are persisted in each scan state.
+- AC2 ✅ — scan termination/failure/recovery evidence uses GEHI frames strictly
+  before census; the census mosaic owns the census-date observation, and same-
+  day/newer GEHI frames are reference-only. Changepoint applies the same rule
+  before epoch collapse and adds census presence only when historical evidence
+  exists.
+- AC3 ✅ — bounded adopted-decoder replay:
+  [DATA-issue26-bounded-replay-2026-07-10.md](DATA-issue26-bounded-replay-2026-07-10.md).
+  1,023/1,023 clamp-inverted and 316/341 nonmonotonic unique anchors become
+  point-dated; the remaining 25 have zero usable pre-census evidence and remain
+  undated. The earlier “371” is the polygon denominator; the interval inputs
+  contain 341 unique nonmonotonic scan-state anchors.
+- AC4 ✅ — the Cape Town path resolves `2025-06-30` from `regions.yaml` in a
+  config-only unit test.
+- AC5 ✅ — the report-layer clamp code is unchanged. A replay of all 15,859
+  main scan states produced zero `clamped_earliest_present` and zero
+  `clamp_inverted` decoder notes.

@@ -132,13 +132,22 @@ def failure_pct(
     return 100.0 * failed / len(results)
 
 
-def is_nonmonotonic(usable: list[RoundResult]) -> bool:
+def is_nonmonotonic(
+    usable: list[RoundResult],
+    *,
+    census_date: str | None = None,
+) -> bool:
     """True if a present observation is followed (chronologically) by an absent one.
 
     Order by `capture_date` ascending; any present->absent step is a multi-transition
     signal because real PV installations are monotonically present once installed.
     """
-    sorted_obs = sorted(usable, key=lambda o: o.capture_date)
+    evidence = (
+        usable
+        if census_date is None
+        else [o for o in usable if o.capture_date[:10] < census_date[:10]]
+    )
+    sorted_obs = sorted(evidence, key=lambda o: o.capture_date)
     for i in range(len(sorted_obs) - 1):
         if sorted_obs[i].pv_present and not sorted_obs[i + 1].pv_present:
             return True
@@ -376,6 +385,8 @@ def decide_next_action(
     config: AdaptiveScanConfig,
     *,
     failure_decision_sources: Collection[str] | None = None,
+    census_date: str | None = None,
+    catalog_max_date: str | None = None,
 ) -> Action:
     """Return the next Action for the orchestrator: execute another round or terminate.
 
@@ -384,24 +395,52 @@ def decide_next_action(
     >50%-failed ambiguity rule (Case E) counts. The terminal status string
     `"done_ambiguous_gemini_failed"` is intentionally unchanged regardless of
     which scorer's sentinel tripped the rule.
+
+    ``catalog_max_date`` constrains every planner to the per-anchor download
+    catalog. ``census_date`` is stricter: only GEHI observations/vintages before
+    it can drive termination, recovery, bisection, or failure-rate decisions;
+    the census mosaic owns the census-date presence observation, so same-day
+    and newer GEHI entries are reference-only.
     """
     if state.is_terminal:
         return TerminateAction(kind="terminate", status=state.status)
 
+    bounded_vintages = (
+        vintages
+        if catalog_max_date is None
+        else [v for v in vintages if v.capture_date[:10] <= catalog_max_date[:10]]
+    )
+
     if not state.rounds:
-        return ExecuteRoundAction(kind="execute_round", round=plan_initial_round(vintages, config))
+        return ExecuteRoundAction(
+            kind="execute_round", round=plan_initial_round(bounded_vintages, config)
+        )
 
     all_results = collect_all_results(state.rounds)
+    evidence_results = (
+        all_results
+        if census_date is None
+        else [r for r in all_results if r.capture_date[:10] < census_date[:10]]
+    )
+    evidence_vintages = (
+        bounded_vintages
+        if census_date is None
+        else [
+            v
+            for v in bounded_vintages
+            if v.capture_date[:10] < census_date[:10]
+        ]
+    )
 
-    pct = failure_pct(all_results, failure_decision_sources)
-    if all_results and pct > config.case_e_failure_pct:
+    pct = failure_pct(evidence_results, failure_decision_sources)
+    if evidence_results and pct > config.case_e_failure_pct:
         return TerminateAction(
             kind="terminate",
             status="done_ambiguous_gemini_failed",
             notes=f"failure_pct={pct:.1f} > threshold={config.case_e_failure_pct:.1f}",
         )
 
-    usable = usable_observations(all_results)
+    usable = usable_observations(evidence_results)
 
     if not usable:
         recovery_count = _count_round_type(state, "anchor_recovery")
@@ -411,7 +450,9 @@ def decide_next_action(
                 status="done_ambiguous_no_recent_anchor",
                 notes=f"no usable observations after {recovery_count} anchor_recovery rounds",
             )
-        rnd = plan_anchor_recovery_round(vintages, all_results, config, next_round_id(state))
+        rnd = plan_anchor_recovery_round(
+            evidence_vintages, all_results, config, next_round_id(state)
+        )
         if rnd is None:
             return TerminateAction(
                 kind="terminate",
@@ -420,7 +461,7 @@ def decide_next_action(
             )
         return ExecuteRoundAction(kind="execute_round", round=rnd)
 
-    if is_nonmonotonic(usable):
+    if is_nonmonotonic(usable, census_date=census_date):
         return TerminateAction(
             kind="terminate",
             status="done_ambiguous_nonmonotonic",
@@ -433,7 +474,9 @@ def decide_next_action(
         if _bisection_already_done(state):
             return TerminateAction(kind="terminate", status="done_appears")
         a, p = transitions[0]
-        rnd = plan_bisection_round(vintages, a, p, all_results, config, next_round_id(state))
+        rnd = plan_bisection_round(
+            evidence_vintages, a, p, all_results, config, next_round_id(state)
+        )
         if rnd is None:
             return TerminateAction(
                 kind="terminate",
@@ -446,10 +489,10 @@ def decide_next_action(
     n_absent = sum(1 for o in usable if not o.pv_present)
 
     if n_absent > 0 and n_present == 0:
-        return _decide_all_absent(state, vintages, all_results, config)
+        return _decide_all_absent(state, evidence_vintages, all_results, config)
 
     if n_present > 0 and n_absent == 0:
-        return _decide_all_present(state, vintages, all_results, config)
+        return _decide_all_present(state, evidence_vintages, all_results, config)
 
     raise RuntimeError(
         f"Unreachable: state has {len(usable)} usable obs but none are decidable (anchor_id={state.anchor_id})"
@@ -537,7 +580,7 @@ def _decide_all_present(
             return TerminateAction(
                 kind="terminate",
                 status="done_already_present_before_geid_history",
-                notes=f"all present; tail round empty",
+                notes="all present; tail round empty",
             )
         return ExecuteRoundAction(kind="execute_round", round=rnd)
 

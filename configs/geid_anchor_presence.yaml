@@ -48,6 +48,10 @@ adaptive_scan:
   require_complete_coverage_for_catalog: true
   require_complete_coverage_for_download: true
   catalog_min_date: "2009-01-01"
+  # Per-anchor catalog cutoff = census_imagery_mid_date plus this many newer
+  # vintages retained for human review. These reference frames are never
+  # decoder/termination evidence (ISSUE-26). catalog_max_date remains a hard cap.
+  post_census_reference_frames: 3
   catalog_max_date: "2025-12-31"
   availability_parallel: 4
   gemini_max_dates_per_call: 5

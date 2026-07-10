@@ -215,7 +215,7 @@ def test_ambiguous_run_near_ceiling_dates_correctly_not_clamp_inverted():
     assert post.map_date == "2024-02-21"  # phantom-capped, DATED
     assert post.map_interval_start == date(2021, 7, 30)  # anchored on last usable absent
     assert post.map_interval_end == ceiling
-    assert "clamped_earliest_present" in post.notes
+    assert "clamped_earliest_present" not in post.notes
     assert "clamp_inverted" not in post.notes  # the bug this test guards against
     assert post.p_undated < 0.5
 
@@ -429,36 +429,67 @@ def test_cohort_prior_beyond_window_mass():
 # --------------------------------------------------------------------------- #
 # Clamp scope (phantom cap parity + clamp_inverted + marker_missed_pv)
 # --------------------------------------------------------------------------- #
-def test_clamp_phantom_cap_parity_with_pava():
+def test_post_census_reference_frame_does_not_change_decoder_posterior():
+    census = date(2024, 2, 21)
+    evidence = [
+        _obs(2022, 6, 1, "0"),
+        _obs(2024, 2, 21, "1"),
+    ]
+    contaminated = [*evidence, _obs(2024, 8, 1, "0")]
+
+    base = CP(evidence, ClampContext(ceiling_date=census), EstimatorConfig())
+    other = CP(
+        contaminated,
+        ClampContext(ceiling_date=census),
+        EstimatorConfig(),
+    )
+
+    assert other == base
+
+
+def test_census_presence_does_not_create_date_without_historical_evidence():
+    census = date(2024, 2, 21)
+    post = CP(
+        [_obs(2024, 8, 1, "0")],
+        ClampContext(ceiling_date=census),
+        EstimatorConfig(),
+    )
+
+    assert post.map_date == ""
+    assert post.p_undated == 1.0
+
+
+def test_census_presence_replaces_phantom_future_cap():
     obs = _yearly(["0", "0", "1", "1"])  # first present = 2018-01-01
     ceiling = date(2017, 6, 1)
     cp_post = CP(obs, ClampContext(ceiling_date=ceiling), EstimatorConfig())
     pava_post = PAVA(obs, ClampContext(ceiling_date=ceiling), EstimatorConfig())
     assert cp_post.map_date == pava_post.map_date == "2017-06-01"
     assert cp_post.map_interval_end == pava_post.map_interval_end == ceiling
-    assert "clamped_earliest_present" in cp_post.notes
-    assert "2018-01-01" in cp_post.notes
+    assert "clamped_earliest_present" not in cp_post.notes
+    assert "clamped_earliest_present" in pava_post.notes
 
 
-def test_clamp_inverted_undated_with_note():
-    obs = _yearly(["0", "0", "1", "1"], start=2016)  # latest absent = 2017-01-01
-    ceiling = date(2015, 6, 1)  # BEFORE the latest-absent bound too
+def test_census_presence_prevents_clamp_inverted_with_earlier_history():
+    obs = [
+        _obs(2014, 1, 1, "0"),
+        _obs(2016, 1, 1, "0"),
+        _obs(2017, 1, 1, "1"),
+    ]
+    ceiling = date(2015, 6, 1)
     post = CP(obs, ClampContext(ceiling_date=ceiling), EstimatorConfig())
-    assert post.map_date == ""  # report-layer reclassification to undated
-    assert "clamp_inverted" in post.notes
-    # posterior itself is untouched (still the dated MAP mass, not moved to
-    # the beyond-window cell) -- only map_date/notes are reclassified.
+    assert post.map_date == "2015-06-01"
+    assert "clamp_inverted" not in post.notes
     assert post.map_index != len(post.epochs) - 1
 
 
-def test_marker_missed_pv_note_only():
+def test_post_census_absent_frames_are_reference_only():
     obs = _yearly(["0", "0", "0", "0"], start=2016)  # last absent = 2019-01-01
     census_end = date(2017, 6, 1)  # <= last absent
     post = CP(obs, ClampContext(census_end_date=census_end), EstimatorConfig())
-    assert "marker_missed_pv" in post.notes
-    assert post.map_date == ""  # status-note only; still the natural undated result
-    assert post.p_undated > 0.5
-    assert post.map_index == len(post.epochs) - 1  # posterior mass on beyond-window
+    assert "marker_missed_pv" not in post.notes
+    assert post.map_date == "2017-06-01"
+    assert post.map_index != len(post.epochs) - 1
 
 
 def test_marker_missed_pv_not_triggered_when_before_census_end():

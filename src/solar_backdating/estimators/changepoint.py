@@ -69,11 +69,12 @@ keeps tied epochs), still contribute zero log-likelihood at every tau -- this
 preserves the duplicate-injection invariance property (injecting a frame that
 only ever creates or resolves a tie must not silently delete a cell boundary).
 
-Clamp scope (beyond PAVA's phantom-future cap): ``clamp_inverted`` and
-``marker_missed_pv`` are decoder-only reclassifications mirroring
-``scripts/temporal/infer_install_dates.py`` (lines ~304-322, ~360-376). Both
-are report-layer only — they never mutate the posterior itself, only
-``map_date``/``notes``.
+Cutoff/clamp scope (ISSUE-26): ``ceiling_date`` (preferred per-grid flight
+date) or ``census_end_date`` (fallback) excludes later reference frames before
+epoch collapse, so they cannot affect the likelihood or cell lattice.
+The cutoff changes the posterior by construction. The legacy
+``clamped_earliest_present`` / ``clamp_inverted`` / ``marker_missed_pv``
+defenses remain in place after decoding and only change ``map_date``/``notes``.
 """
 from __future__ import annotations
 
@@ -240,7 +241,40 @@ def estimate_changepoint(
     clamp: ClampContext = ClampContext(),
     config: EstimatorConfig = EstimatorConfig(),
 ) -> InstallDatePosterior:
-    all_epochs = collapse_epochs(observations, config.decoder_epoch_gap_days)
+    evidence_cutoff = (
+        clamp.ceiling_date
+        if clamp.ceiling_date is not None
+        else clamp.census_end_date
+    )
+    if evidence_cutoff is None:
+        all_epochs = collapse_epochs(observations, config.decoder_epoch_gap_days)
+    else:
+        # The census mosaic is the known-PV observation for this downstream
+        # backdating task. Keep historical GEHI evidence strictly before it,
+        # then append census presence as its own epoch so a near-date absent
+        # GEHI frame cannot collapse with and neutralize the stronger census
+        # evidence. Frames after the cutoff remain available to callers for
+        # review/provenance but never enter the likelihood or cell lattice.
+        historical = [o for o in observations if o.capture_date < evidence_cutoff]
+        all_epochs = collapse_epochs(historical, config.decoder_epoch_gap_days)
+        has_historical_evidence = any(
+            o.quality_flag == "usable" and o.pv_present in ("0", "1")
+            for o in historical
+        )
+        if has_historical_evidence:
+            all_epochs.append(
+                Epoch(
+                    start_date=evidence_cutoff,
+                    end_date=evidence_cutoff,
+                    n_present=1,
+                    n_absent=0,
+                    n_abstain=0,
+                    mean_confidence=1.0,
+                    stratum="usable",
+                    n_present_usable=1,
+                    n_absent_usable=0,
+                )
+            )
 
     # Usable-anchored cell lattice (correction 2B): drop abstain-symbol epochs
     # UNCONDITIONALLY -- both with and without a fitted emission model. Abstain

@@ -10,7 +10,6 @@ import pytest
 from scripts.temporal.scan_config import AdaptiveScanConfig
 from scripts.temporal.scan_decision import (
     ExecuteRoundAction,
-    TerminateAction,
     VintageEntry,
     decide_next_action,
     plan_initial_round,
@@ -167,6 +166,28 @@ def test_decide_next_action_first_call_plans_initial(sample_anchor: dict[str, st
     assert action.round.round_id == 1
 
 
+def test_initial_round_respects_per_anchor_catalog_cutoff(
+    sample_anchor: dict[str, str],
+) -> None:
+    state = create_scan_state(sample_anchor)
+    vintages = [
+        VintageEntry(capture_date="2024-02-21", version=1),
+        VintageEntry(capture_date="2024-05-01", version=2),
+        VintageEntry(capture_date="2024-08-01", version=3),
+        VintageEntry(capture_date="2024-11-01", version=4),
+    ]
+
+    action = decide_next_action(
+        state,
+        vintages,
+        AdaptiveScanConfig(),
+        catalog_max_date="2024-08-01",
+    )
+
+    assert isinstance(action, ExecuteRoundAction)
+    assert max(p.capture_date for p in action.round.picks) == "2024-08-01"
+
+
 # Task A stub test removed; replaced by full case A-E coverage in test_scan_decision.py
 
 
@@ -177,6 +198,45 @@ def test_initial_round_uses_primary_zoom_from_ladder() -> None:
     action = decide_next_action(state, vintages, config)
     assert isinstance(action, ExecuteRoundAction)
     assert all(p.requested_zoom == 20 for p in action.round.picks)
+
+
+def test_cape_town_catalog_bound_resolves_from_region_registry(monkeypatch) -> None:
+    from scripts.temporal import gehi_availability, gehi_info
+    from scripts.temporal.run_adaptive_scan import (
+        _fetch_real_vintage_catalog,
+        _resolve_census_mid_date,
+    )
+
+    resolved = _resolve_census_mid_date(
+        {"region_key": "cape_town"},
+        override=None,
+    )
+
+    dates = ["2025-06-01", "2025-08-01", "2025-10-01", "2025-12-01"]
+    monkeypatch.setattr(
+        gehi_info,
+        "fetch_vintages_for_anchor",
+        lambda _anchor, *, zoom, **_kwargs: [
+            {"capture_date": capture_date, "version": i}
+            for i, capture_date in enumerate(dates)
+        ],
+    )
+    monkeypatch.setattr(
+        gehi_availability,
+        "fetch_availability_for_anchor",
+        lambda _anchor, **_kwargs: [{"capture_date": d} for d in dates],
+    )
+    catalog = _fetch_real_vintage_catalog(
+        {"anchor_id": "ct", "region_key": "cape_town"},
+        AdaptiveScanConfig(
+            discovery_zoom_ladder=(19,),
+            post_census_reference_frames=3,
+        ),
+        census_date=resolved,
+    )
+
+    assert resolved == "2025-06-30"
+    assert catalog.catalog_max_date == "2025-12-01"
 
 
 def test_orchestrator_failure_persists_terminal_state(
@@ -266,6 +326,97 @@ def test_real_vintage_catalog_uses_bbox_complete_z19_then_z18(monkeypatch) -> No
     assert catalog.available_dates_by_zoom[19] == {"2020-06-01", "2024-06-01"}
 
 
+def test_real_vintage_catalog_caps_at_census_plus_reference_frames(monkeypatch) -> None:
+    from scripts.temporal import gehi_availability, gehi_info
+    from scripts.temporal.run_adaptive_scan import _fetch_real_vintage_catalog
+
+    dates = [
+        "2023-06-01",
+        "2024-02-21",
+        "2024-05-01",
+        "2024-08-01",
+        "2024-11-01",
+        "2025-02-01",
+    ]
+    seen_max_dates: list[str] = []
+
+    def fake_info(_anchor, *, zoom, **_kwargs):
+        return [
+            {"capture_date": capture_date, "version": 1000 + i}
+            for i, capture_date in enumerate(dates)
+        ]
+
+    def fake_availability(_anchor, *, max_date, **_kwargs):
+        seen_max_dates.append(max_date)
+        return [{"capture_date": d} for d in dates if d <= max_date]
+
+    monkeypatch.setattr(gehi_info, "fetch_vintages_for_anchor", fake_info)
+    monkeypatch.setattr(
+        gehi_availability, "fetch_availability_for_anchor", fake_availability
+    )
+
+    catalog = _fetch_real_vintage_catalog(
+        {"anchor_id": "a"},
+        AdaptiveScanConfig(
+            discovery_zoom_ladder=(19,),
+            post_census_reference_frames=3,
+        ),
+        census_date="2024-02-21",
+    )
+
+    assert seen_max_dates == ["2024-11-01"]
+    assert catalog.catalog_max_date == "2024-11-01"
+    assert [v.capture_date for v in catalog.vintages][-1] == "2024-11-01"
+
+
+def test_catalog_cutoff_counts_bbox_complete_reference_frames(monkeypatch) -> None:
+    from scripts.temporal import gehi_availability, gehi_info
+    from scripts.temporal.run_adaptive_scan import _fetch_real_vintage_catalog
+
+    dates = [
+        "2024-02-21",
+        "2024-05-01",
+        "2024-08-01",
+        "2024-11-01",
+        "2025-02-01",
+    ]
+    seen_max_dates: list[str] = []
+
+    def fake_info(_anchor, *, zoom, **_kwargs):
+        return [
+            {"capture_date": capture_date, "version": 1000 + i}
+            for i, capture_date in enumerate(dates)
+        ]
+
+    def fake_availability(_anchor, *, max_date, **_kwargs):
+        seen_max_dates.append(max_date)
+        return [
+            {"capture_date": capture_date}
+            for capture_date in dates
+            if capture_date <= max_date and capture_date != "2024-08-01"
+        ]
+
+    monkeypatch.setattr(gehi_info, "fetch_vintages_for_anchor", fake_info)
+    monkeypatch.setattr(
+        gehi_availability, "fetch_availability_for_anchor", fake_availability
+    )
+
+    catalog = _fetch_real_vintage_catalog(
+        {"anchor_id": "a"},
+        AdaptiveScanConfig(
+            discovery_zoom_ladder=(19,),
+            post_census_reference_frames=3,
+        ),
+        census_date="2024-02-21",
+    )
+
+    assert seen_max_dates == ["2024-11-01", "2025-02-01"]
+    assert catalog.catalog_max_date == "2025-02-01"
+    assert [
+        v.capture_date for v in catalog.vintages if v.capture_date > "2024-02-21"
+    ] == ["2024-05-01", "2024-11-01", "2025-02-01"]
+
+
 def test_vintage_check_uses_cached_and_lazy_bbox_availability(monkeypatch) -> None:
     from scripts.temporal import gehi_availability
     from scripts.temporal.run_adaptive_scan import make_vintage_check
@@ -289,3 +440,27 @@ def test_vintage_check_uses_cached_and_lazy_bbox_availability(monkeypatch) -> No
     assert calls == [20]
     assert not check(20, "2018-06-01")
     assert calls == [20]
+
+
+def test_vintage_check_lazy_catalog_uses_per_anchor_cutoff(monkeypatch) -> None:
+    from scripts.temporal import gehi_availability
+    from scripts.temporal.run_adaptive_scan import make_vintage_check
+
+    seen_max_dates: list[str] = []
+
+    def fake_availability(_anchor, *, max_date, **_kwargs):
+        seen_max_dates.append(max_date)
+        return [{"capture_date": "2024-08-01"}]
+
+    monkeypatch.setattr(
+        gehi_availability, "fetch_availability_for_anchor", fake_availability
+    )
+    check = make_vintage_check(
+        {"anchor_id": "a"},
+        available_dates_by_zoom={19: set()},
+        config=AdaptiveScanConfig(download_zoom_ladder=(20, 19)),
+        catalog_max_date="2024-11-01",
+    )
+
+    assert check(20, "2024-08-01")
+    assert seen_max_dates == ["2024-11-01"]

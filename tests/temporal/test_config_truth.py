@@ -121,12 +121,14 @@ def test_default_parity_on_real_config() -> None:
     config = load_config(REAL_CONFIG)
     assert config.download_zoom_ladder == (20, 19, 18)
     assert config.census2023_zoom_ladder == (19, 18)
+    assert config.post_census_reference_frames == 3
 
 
 def test_dataclass_defaults_match_frozen_production() -> None:
     default = AdaptiveScanConfig()
     assert default.download_zoom_ladder == (20, 19, 18)
     assert default.census2023_zoom_ladder == (19, 18)
+    assert default.post_census_reference_frames == 3
 
 
 # ---------------------------------------------------------------------------

@@ -126,6 +126,56 @@ class DryRunProfile:
 class VintageCatalog:
     vintages: list[VintageEntry]
     available_dates_by_zoom: dict[int, set[str]]
+    catalog_max_date: str | None = None
+
+
+def _resolve_catalog_max_date(
+    capture_dates: Iterable[str],
+    config: AdaptiveScanConfig,
+    *,
+    census_date: str | None,
+) -> str:
+    """Return the per-anchor hard catalog bound.
+
+    The configured ``catalog_max_date`` remains an absolute safety cap. This is
+    the first metadata-derived candidate; the real coverage-gated catalog may
+    advance through later candidates until N bbox-complete reference dates are
+    available.
+    """
+    return _catalog_cutoff_candidates(
+        capture_dates, config, census_date=census_date
+    )[0]
+
+
+def _catalog_cutoff_candidates(
+    capture_dates: Iterable[str],
+    config: AdaptiveScanConfig,
+    *,
+    census_date: str | None,
+) -> list[str]:
+    """Candidate bounds from the earliest plausible cutoff to the hard cap.
+
+    Coverage-gated catalogs try these in order until N bbox-complete
+    post-census reference dates are present. Non-gated catalogs use the first
+    candidate directly.
+    """
+    hard_max = config.catalog_max_date[:10]
+    if census_date is None:
+        return [hard_max]
+    census = census_date[:10]
+    if census >= hard_max:
+        return [hard_max]
+    newer = sorted(
+        {
+            str(value)[:10]
+            for value in capture_dates
+            if str(value)[:10] > census and str(value)[:10] <= hard_max
+        }
+    )
+    keep = max(0, int(config.post_census_reference_frames))
+    if keep == 0 or not newer:
+        return [census]
+    return newer[min(keep, len(newer)) - 1 :]
 
 
 def parse_args() -> argparse.Namespace:
@@ -374,6 +424,7 @@ def make_vintage_check(
     *,
     available_dates_by_zoom: dict[int, set[str]],
     config: AdaptiveScanConfig,
+    catalog_max_date: str | None = None,
     catalog_cache: CatalogCache | None = None,
     catalog_force_refresh: bool = False,
     catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
@@ -388,8 +439,10 @@ def make_vintage_check(
     `catalog_cache=None` (the default) makes zero behavior change: every
     lazy zoom lookup issues a live GEHI call exactly as before ISSUE-13.
     """
+    effective_max_date = (catalog_max_date or config.catalog_max_date)[:10]
     catalogs: dict[int, set[str]] = {
-        int(zoom): set(dates) for zoom, dates in available_dates_by_zoom.items()
+        int(zoom): {date for date in dates if date[:10] <= effective_max_date}
+        for zoom, dates in available_dates_by_zoom.items()
     }
 
     def check(zoom: int, capture_date: str) -> bool:
@@ -402,7 +455,7 @@ def make_vintage_check(
                     zoom=zoom,
                     provider=config.provider,
                     min_date=config.catalog_min_date,
-                    max_date=config.catalog_max_date,
+                    max_date=effective_max_date,
                     parallel=config.availability_parallel,
                     complete=True,
                     catalog_cache=catalog_cache,
@@ -420,7 +473,12 @@ def make_vintage_check(
                     force_refresh=catalog_force_refresh,
                     max_age_days=catalog_max_age_days,
                 )
-            catalogs[zoom] = {str(r.get("capture_date", ""))[:10] for r in rows if r.get("capture_date")}
+            catalogs[zoom] = {
+                str(r.get("capture_date", ""))[:10]
+                for r in rows
+                if r.get("capture_date")
+                and str(r.get("capture_date", ""))[:10] <= effective_max_date
+            }
         return capture_date[:10] in catalogs[zoom]
 
     return check
@@ -817,25 +875,57 @@ def run_one_anchor(
     real_catalog: VintageCatalog | None = None
     if dry_run:
         vintages = dry_run_vintages(anchor_id)
+        catalog_max_date = _resolve_catalog_max_date(
+            (v.capture_date for v in vintages),
+            config,
+            census_date=census_mid_date_iso,
+        )
     else:
-        real_catalog = _fetch_real_vintage_catalog(anchor, config, **catalog_kwargs)
+        fetch_kwargs = dict(catalog_kwargs)
+        if census_mid_date_iso is not None:
+            fetch_kwargs["census_date"] = census_mid_date_iso
+        real_catalog = _fetch_real_vintage_catalog(anchor, config, **fetch_kwargs)
         vintages = real_catalog.vintages
+        catalog_max_date = (
+            real_catalog.catalog_max_date
+            or getattr(config, "catalog_max_date", None)
+            or max(v.capture_date for v in vintages)
+        )
+
+    state.census_date = census_mid_date_iso
+    state.catalog_max_date = catalog_max_date
+    state.post_census_reference_frames = getattr(
+        config, "post_census_reference_frames", None
+    )
+    save_scan_state(state, state_path)
+
     vintage_check = None
     if not dry_run:
         assert real_catalog is not None
+        check_kwargs = dict(catalog_kwargs)
+        if census_mid_date_iso is not None:
+            check_kwargs["catalog_max_date"] = catalog_max_date
         vintage_check = make_vintage_check(
             anchor,
             available_dates_by_zoom=real_catalog.available_dates_by_zoom,
             config=config,
-            **catalog_kwargs,
+            **check_kwargs,
         )
 
     assert scorer is not None
     max_iter = 32
     for _ in range(max_iter):
+        decision_kwargs: dict[str, object] = {
+            "failure_decision_sources": scorer.failure_decision_sources,
+        }
+        if census_mid_date_iso is not None:
+            decision_kwargs["census_date"] = census_mid_date_iso
+            decision_kwargs["catalog_max_date"] = catalog_max_date
         action: Action = decide_next_action(
-            state, vintages, config,
-            failure_decision_sources=scorer.failure_decision_sources,
+            state,
+            vintages,
+            config,
+            **decision_kwargs,
         )
         if isinstance(action, TerminateAction):
             state.status = action.status
@@ -898,6 +988,7 @@ def _fetch_real_vintage_catalog(
     anchor: dict[str, str],
     config: AdaptiveScanConfig,
     *,
+    census_date: str | None = None,
     catalog_cache: CatalogCache | None = None,
     catalog_force_refresh: bool = False,
     catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
@@ -915,8 +1006,7 @@ def _fetch_real_vintage_catalog(
     """
     from scripts.temporal.gehi_info import fetch_vintages_for_anchor
 
-    available_dates_by_zoom: dict[int, set[str]] = {}
-    by_date: dict[str, VintageEntry] = {}
+    info_by_zoom: dict[int, dict[str, object]] = {}
     for zoom in config.discovery_zoom_ladder:
         info_rows = fetch_vintages_for_anchor(
             anchor,
@@ -931,30 +1021,69 @@ def _fetch_real_vintage_catalog(
             capture_date = str(row.get("capture_date", "")).strip()[:10]
             if capture_date and capture_date not in info_by_date:
                 info_by_date[capture_date] = row
+        info_by_zoom[int(zoom)] = info_by_date
 
-        if config.require_complete_coverage_for_catalog:
-            from scripts.temporal.gehi_availability import fetch_availability_for_anchor
+    cutoff_candidates = _catalog_cutoff_candidates(
+        (
+            capture_date
+            for rows in info_by_zoom.values()
+            for capture_date in rows
+        ),
+        config,
+        census_date=census_date,
+    )
 
-            availability_rows = fetch_availability_for_anchor(
-                anchor,
-                zoom=zoom,
-                provider=config.provider,
-                min_date=config.catalog_min_date,
-                max_date=config.catalog_max_date,
-                parallel=config.availability_parallel,
-                complete=True,
-                catalog_cache=catalog_cache,
-                force_refresh=catalog_force_refresh,
-                max_age_days=catalog_max_age_days,
-            )
-            allowed_dates = {
-                str(row.get("capture_date", ""))[:10]
-                for row in availability_rows
-                if row.get("capture_date")
+    effective_max_date = cutoff_candidates[0]
+    available_dates_by_zoom: dict[int, set[str]] = {}
+    if config.require_complete_coverage_for_catalog:
+        from scripts.temporal.gehi_availability import fetch_availability_for_anchor
+
+        keep = max(0, int(config.post_census_reference_frames))
+        for candidate_max_date in cutoff_candidates:
+            candidate_dates_by_zoom: dict[int, set[str]] = {}
+            for zoom in config.discovery_zoom_ladder:
+                availability_rows = fetch_availability_for_anchor(
+                    anchor,
+                    zoom=zoom,
+                    provider=config.provider,
+                    min_date=config.catalog_min_date,
+                    max_date=candidate_max_date,
+                    parallel=config.availability_parallel,
+                    complete=True,
+                    catalog_cache=catalog_cache,
+                    force_refresh=catalog_force_refresh,
+                    max_age_days=catalog_max_age_days,
+                )
+                candidate_dates_by_zoom[int(zoom)] = {
+                    str(row.get("capture_date", ""))[:10]
+                    for row in availability_rows
+                    if row.get("capture_date")
+                }
+            effective_max_date = candidate_max_date
+            available_dates_by_zoom = candidate_dates_by_zoom
+            reference_dates = {
+                capture_date
+                for dates in candidate_dates_by_zoom.values()
+                for capture_date in dates
+                if census_date is not None
+                and capture_date > census_date[:10]
             }
-        else:
-            allowed_dates = set(info_by_date)
-        available_dates_by_zoom[int(zoom)] = set(allowed_dates)
+            if census_date is None or len(reference_dates) >= keep:
+                break
+    else:
+        available_dates_by_zoom = {
+            zoom: {
+                capture_date
+                for capture_date in rows
+                if capture_date <= effective_max_date
+            }
+            for zoom, rows in info_by_zoom.items()
+        }
+
+    by_date: dict[str, VintageEntry] = {}
+    for zoom in config.discovery_zoom_ladder:
+        info_by_date = info_by_zoom[int(zoom)]
+        allowed_dates = available_dates_by_zoom[int(zoom)]
 
         for capture_date in sorted(set(info_by_date) & allowed_dates):
             if capture_date in by_date:
@@ -972,6 +1101,7 @@ def _fetch_real_vintage_catalog(
     return VintageCatalog(
         vintages=[by_date[d] for d in sorted(by_date)],
         available_dates_by_zoom=available_dates_by_zoom,
+        catalog_max_date=effective_max_date,
     )
 
 

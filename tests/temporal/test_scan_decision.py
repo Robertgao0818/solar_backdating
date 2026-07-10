@@ -101,6 +101,123 @@ def test_helper_find_transitions_single_pair() -> None:
     assert transitions[0][1].capture_date == "2022-06-15"
 
 
+def test_nonmonotonic_ignores_post_census_phantom_absent() -> None:
+    obs = [
+        _result("2023-06-15", present=False),
+        _result("2024-02-21", present=True),
+        _result("2024-08-01", present=False),
+    ]
+
+    assert is_nonmonotonic(obs, census_date="2024-02-21") is False
+
+
+def test_decision_ignores_post_census_phantom_absent(state_factory, config) -> None:
+    vintages = [
+        VintageEntry(capture_date="2023-06-15", version=1),
+        VintageEntry(capture_date="2024-02-21", version=2),
+        VintageEntry(capture_date="2024-08-01", version=3),
+    ]
+    state = state_factory(
+        [
+            _round(
+                1,
+                "initial",
+                results=[
+                    _result("2023-06-15", present=False),
+                    _result("2024-02-21", present=True),
+                    _result("2024-08-01", present=False),
+                ],
+                window_start="2023-06-15",
+                window_end="2024-08-01",
+            )
+        ]
+    )
+
+    action = decide_next_action(
+        state,
+        vintages,
+        config,
+        census_date="2024-02-21",
+    )
+
+    assert isinstance(action, TerminateAction)
+    assert action.status == "done_installed_during_census"
+
+
+def test_all_absent_uses_latest_pre_census_evidence(state_factory, config) -> None:
+    vintages = [
+        VintageEntry(capture_date="2023-06-15", version=1),
+        VintageEntry(capture_date="2024-02-01", version=2),
+        VintageEntry(capture_date="2024-08-01", version=3),
+    ]
+    state = state_factory(
+        [
+            _round(
+                1,
+                "initial",
+                results=[
+                    _result("2023-06-15", present=False),
+                    _result("2024-02-01", present=False),
+                    _result("2024-08-01", present=False),
+                ],
+                window_start="2023-06-15",
+                window_end="2024-08-01",
+            )
+        ]
+    )
+
+    action = decide_next_action(
+        state,
+        vintages,
+        config,
+        census_date="2024-02-21",
+    )
+
+    assert isinstance(action, TerminateAction)
+    assert action.status == "done_installed_during_census"
+
+
+def test_post_census_failures_do_not_trigger_failure_termination(
+    state_factory, config
+) -> None:
+    vintages = [
+        VintageEntry(capture_date="2023-06-15", version=1),
+        VintageEntry(capture_date="2024-08-01", version=2),
+        VintageEntry(capture_date="2024-09-01", version=3),
+        VintageEntry(capture_date="2024-10-01", version=4),
+    ]
+    failed = [
+        _result(
+            capture_date,
+            present=None,
+            quality="unusable",
+            source="gemini_failed",
+        )
+        for capture_date in ("2024-08-01", "2024-09-01", "2024-10-01")
+    ]
+    state = state_factory(
+        [
+            _round(
+                1,
+                "initial",
+                results=[_result("2023-06-15", present=True), *failed],
+                window_start="2023-06-15",
+                window_end="2024-10-01",
+            )
+        ]
+    )
+
+    action = decide_next_action(
+        state,
+        vintages,
+        config,
+        census_date="2024-02-21",
+    )
+
+    assert isinstance(action, TerminateAction)
+    assert action.status == "done_already_present_before_geid_history"
+
+
 def test_helper_is_nonmonotonic_detects_present_then_absent() -> None:
     obs = [
         _result("2018-06-15", present=False),

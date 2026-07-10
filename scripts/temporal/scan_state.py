@@ -2,8 +2,9 @@
 
 A `ScanState` is the per-anchor checkpoint for `run_adaptive_scan.py`. It records
 the rounds the orchestrator has executed, the picks it scored in each round, and
-the terminal status (or `scanning` while in flight). The orchestrator writes the
-state atomically after every round so the loop is resumable.
+the terminal status (or `scanning` while in flight), plus the resolved census
+date and per-anchor catalog cutoff that governed planning. The orchestrator
+writes the state atomically after every round so the loop is resumable.
 
 The schema is intentionally narrow: dataclasses serialize to JSON via
 `asdict()`. Bumping `SPEC_VERSION` is the only forward-compatibility lever; old
@@ -105,6 +106,9 @@ class ScanState:
     updated_at: str = ""
     spec_version: str = SPEC_VERSION
     notes: str = ""
+    census_date: str | None = None
+    catalog_max_date: str | None = None
+    post_census_reference_frames: int | None = None
 
     def __post_init__(self) -> None:
         if self.status not in ALL_STATUSES:
@@ -176,6 +180,13 @@ def load_scan_state(path: Path) -> ScanState | None:
         updated_at=str(raw.get("updated_at", "")),
         spec_version=str(raw.get("spec_version", SPEC_VERSION)),
         notes=str(raw.get("notes", "")),
+        census_date=raw.get("census_date"),
+        catalog_max_date=raw.get("catalog_max_date"),
+        post_census_reference_frames=(
+            int(raw["post_census_reference_frames"])
+            if raw.get("post_census_reference_frames") is not None
+            else None
+        ),
     )
 
 

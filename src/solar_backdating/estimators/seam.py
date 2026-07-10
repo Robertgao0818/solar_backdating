@@ -43,10 +43,10 @@ class VintageObservation:
 
 @dataclass(frozen=True)
 class ClampContext:
-    """Upper-bound context for phantom-future capping."""
+    """Census evidence cutoff plus report-layer upper-bound defenses."""
 
-    ceiling_date: date | None = None  # per-grid Vexcel last_capture_date; None = no clamp
-    census_end_date: date | None = None  # global fallback upper bound; None = unused
+    ceiling_date: date | None = None  # per-grid flight date; preferred evidence cutoff
+    census_end_date: date | None = None  # regional fallback evidence cutoff
 
 
 @dataclass(frozen=True)

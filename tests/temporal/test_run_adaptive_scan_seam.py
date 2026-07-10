@@ -319,6 +319,44 @@ def test_dry_run_scan_state_byte_identical_downstream_invariance(tmp_path: Path,
     assert _one("run_a") == _one("run_b")
 
 
+def test_run_one_anchor_records_per_anchor_census_catalog_bound(tmp_path: Path) -> None:
+    anchor = {
+        "anchor_id": "cutoff_provenance_anchor",
+        "region_key": "johannesburg",
+        "grid_id": "G1",
+    }
+    census_date = "2024-02-21"
+    config = AdaptiveScanConfig(post_census_reference_frames=2)
+    future_dates = sorted(
+        v.capture_date
+        for v in ras.dry_run_vintages(anchor["anchor_id"])
+        if v.capture_date > census_date
+    )
+
+    state = run_one_anchor(
+        anchor,
+        config,
+        tmp_path / "scan_states",
+        dry_run=True,
+        force_restart=True,
+        census_mid_date_iso=census_date,
+    )
+
+    assert len(future_dates) >= 2
+    assert state.census_date == census_date
+    assert state.catalog_max_date == future_dates[1]
+    assert state.post_census_reference_frames == 2
+    assert max(p.capture_date for rnd in state.rounds for p in rnd.picks) <= future_dates[1]
+
+    reloaded = scan_state_mod.load_scan_state(
+        scan_state_mod.state_path_for(anchor["anchor_id"], tmp_path / "scan_states")
+    )
+    assert reloaded is not None
+    assert reloaded.census_date == census_date
+    assert reloaded.catalog_max_date == future_dates[1]
+    assert reloaded.post_census_reference_frames == 2
+
+
 # ---------------------------------------------------------------------------
 # 5. Write-time vocab enforcement + additive registration through this path.
 # ---------------------------------------------------------------------------
