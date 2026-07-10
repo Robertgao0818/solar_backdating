@@ -33,11 +33,10 @@ python -u scripts/validation/issue25_stage_c.py analyze-stage1 \
   --output "$ANALYSIS" \
   --model "$MODEL"
 
-bash scripts/validation/run_issue25_stage_c_stage2.sh
 bash scripts/validation/run_issue25_stage_c_b0.sh
 
 source scripts/activate_env.sh >/dev/null
 pytest -q tests/
 
-date -u +%Y-%m-%dT%H:%M:%SZ > "$RUN_ROOT/.complete"
-echo "[ISSUE25] Stage C complete utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$RUN_ROOT/.ready_for_stage2_human"
+echo "[ISSUE25] Stage-1 + B0 complete; Stage-2 awaits human winner confirmation utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
