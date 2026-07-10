@@ -44,11 +44,13 @@ The storyline plan already conditions on this: "verdict 以 banked96 几何为�
      confounded with "new model is different".
    - **Legacy control (free):** existing banked rep1–3 per-bucket ceiling
      table from the area-stratified memo.
-3. **Model.** ONE of {`gemini-3.1-flash-lite`, `gemini-3.5-flash-extra-low`},
-   frozen at kickoff after a 20-target smoke calibration (max_tokens /
-   abstain-band check — the abstain-root-cause lesson from the FP-review
-   calibration). Same model for all arms; model choice is never varied
-   inside the geometry comparison.
+3. **Model.** **`gemini-3.1-flash-lite`**, frozen by the user after the
+   20-target smoke calibration on 2026-07-10
+   ([DATA memo](DATA-issue25-model-smoke-2026-07-10.md)). The alternate
+   `gemini-3.5-flash-extra-low` tied overall exact-pattern repeatability but
+   emitted frame abstains/non-monotonic sequences and failed 19/20 targets at
+   `max_tokens=1024` due to JSON truncation. Same frozen model for all arms;
+   model choice is never varied inside the geometry comparison.
 4. **Sample.** Stratified by **area bucket × zone**; zones
    (residential / industrial / CBD) assigned from a grid→zone lookup that is
    **frozen and committed with the sample manifest before any scoring**.
@@ -89,7 +91,7 @@ The storyline plan already conditions on this: "verdict 以 banked96 几何为�
 ## Acceptance criteria
 
 - [ ] Sample manifest + grid→zone lookup committed (freeze point)
-- [ ] 20-target smoke calibration report; model frozen
+- [x] 20-target smoke calibration report; model frozen
 - [ ] Stage-1 per-arm × per-bucket self-consistency table
 - [ ] B0 model-bridge table (model effect isolated from geometry effect)
 - [ ] Verdict per R1 + DATA memo; CoJ disagreement queue exported
