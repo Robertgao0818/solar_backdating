@@ -55,6 +55,11 @@ for rep in 1 2 3 4 5; do
   date -u +%Y-%m-%dT%H:%M:%SZ > "$OUT/.done"
 done
 
+python -u scripts/validation/issue25_stage_c.py validate-matrix \
+  --matrix-root "$RUN_ROOT/b0" \
+  --anchors "$B0_GROUPS" \
+  --reps 5 \
+  --model "$MODEL"
 mkdir -p "$RUN_ROOT/b0"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$RUN_ROOT/b0/.complete"
 echo "[ISSUE25] B0 complete utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"

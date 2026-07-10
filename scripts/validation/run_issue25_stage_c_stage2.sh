@@ -73,6 +73,11 @@ for rep in 1 2 3 4 5; do
   date -u +%Y-%m-%dT%H:%M:%SZ > "$OUT/.done"
 done
 
+python -u scripts/validation/issue25_stage_c.py validate-matrix \
+  --matrix-root "$RUN_ROOT/stage2/$WINNER" \
+  --anchors "$STAGE2_ANCHORS" \
+  --reps 5 \
+  --model "$MODEL"
 mkdir -p "$RUN_ROOT/stage2"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$RUN_ROOT/stage2/.complete"
 echo "[ISSUE25] stage2 complete winner=$WINNER utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"

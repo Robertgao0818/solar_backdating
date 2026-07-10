@@ -205,6 +205,43 @@ def validate_authenticated_preflight(root: Path, model: str) -> dict[str, int]:
     }
 
 
+def validate_scan_matrix(
+    matrix_root: Path,
+    anchors_path: Path,
+    *,
+    reps: int,
+    model: str,
+) -> dict[str, int]:
+    """Require the exact frozen anchor set, terminal states, and one model."""
+    expected = {row["anchor_id"] for row in _read_csv(anchors_path)}
+    total_states = 0
+    for rep in range(1, reps + 1):
+        rep_root = matrix_root / f"rep{rep}"
+        state_paths = sorted((rep_root / "scan_states").glob("*.json"))
+        found = {path.stem for path in state_paths}
+        if found != expected:
+            raise ValueError(
+                f"rep{rep} state set mismatch: missing={len(expected - found)} "
+                f"extra={len(found - expected)}"
+            )
+        for path in state_paths:
+            status = str(json.loads(path.read_text(encoding="utf-8")).get("status", ""))
+            if not status.startswith("done_"):
+                raise ValueError(f"rep{rep} non-terminal state: {path} status={status}")
+        provenance = [
+            json.loads(line)
+            for line in (rep_root / "scoring_provenance.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        models = {row.get("model_id") for row in provenance}
+        if models != {model}:
+            raise ValueError(f"rep{rep} model mismatch: {sorted(models)}")
+        total_states += len(state_paths)
+    return {"anchors": len(expected), "reps": reps, "states": total_states}
+
+
 def analyze_stage1(
     run_root: Path,
     anchors_path: Path,
@@ -369,6 +406,11 @@ def main() -> None:
     prepare_b0.add_argument("--group-anchors", type=Path, required=True)
     prepare_b0.add_argument("--output", type=Path, required=True)
     prepare_b0.add_argument("--expected-targets", type=int, default=150)
+    validate_matrix = sub.add_parser("validate-matrix")
+    validate_matrix.add_argument("--matrix-root", type=Path, required=True)
+    validate_matrix.add_argument("--anchors", type=Path, required=True)
+    validate_matrix.add_argument("--reps", type=int, required=True)
+    validate_matrix.add_argument("--model", required=True)
     args = parser.parse_args()
 
     if args.command == "prepare-stage1":
@@ -414,6 +456,17 @@ def main() -> None:
             expected_targets=args.expected_targets,
         )
         print(f"Wrote {count} unique ISSUE-25 B0 group anchors -> {args.output}")
+    elif args.command == "validate-matrix":
+        summary = validate_scan_matrix(
+            args.matrix_root,
+            args.anchors,
+            reps=args.reps,
+            model=args.model,
+        )
+        print(
+            f"Validated matrix anchors={summary['anchors']} reps={summary['reps']} "
+            f"states={summary['states']}"
+        )
 
 
 if __name__ == "__main__":

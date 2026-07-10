@@ -13,6 +13,7 @@ from scripts.validation.issue25_stage_c import (
     prepare_stage1_anchors,
     prepare_stage2_anchors,
     validate_authenticated_preflight,
+    validate_scan_matrix,
 )
 
 
@@ -197,3 +198,25 @@ def test_choose_stage2_winner_prefers_large_safe_small_bucket_leader() -> None:
 
     assert winner["arm"] == "A24"
     assert winner["large_safety_floor"] == pytest.approx(0.7982)
+
+
+def test_validate_scan_matrix_requires_exact_states_and_frozen_model(tmp_path: Path) -> None:
+    anchors = tmp_path / "anchors.csv"
+    _write_csv(anchors, [{"anchor_id": "t1"}])
+    matrix = tmp_path / "matrix"
+    for rep in (1, 2):
+        states = matrix / f"rep{rep}" / "scan_states"
+        states.mkdir(parents=True)
+        (states / "t1.json").write_text(json.dumps({"status": "done_appears"}))
+        (matrix / f"rep{rep}" / "scoring_provenance.jsonl").write_text(
+            json.dumps({"model_id": "gemini-3.1-flash-lite"}) + "\n"
+        )
+
+    summary = validate_scan_matrix(
+        matrix,
+        anchors,
+        reps=2,
+        model="gemini-3.1-flash-lite",
+    )
+
+    assert summary == {"anchors": 1, "reps": 2, "states": 2}
