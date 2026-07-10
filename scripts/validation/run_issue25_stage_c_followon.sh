@@ -17,6 +17,13 @@ while [[ ! -f "$RUN_ROOT/stage1/.complete" ]]; do
     echo "ERROR: Stage-1 driver exited nonzero" >&2
     exit 2
   fi
+  if tmux has-session -t issue25_stagec_stage1 2>/dev/null; then
+    PANE_DEAD=$(tmux list-panes -t issue25_stagec_stage1 -F '#{pane_dead}' | head -1)
+    if [[ "$PANE_DEAD" == "1" ]]; then
+      echo "ERROR: Stage-1 tmux pane died before the completion sentinel" >&2
+      exit 2
+    fi
+  fi
   sleep 20
 done
 
