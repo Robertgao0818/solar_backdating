@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import pytest
 
-from scripts.validation.issue25_stage_c import prepare_stage1_anchors
+from scripts.validation.issue25_stage_c import (
+    prepare_stage1_anchors,
+    validate_authenticated_preflight,
+)
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
@@ -64,3 +68,50 @@ def test_prepare_stage1_anchors_fails_when_bbox_join_is_missing(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="missing footprint bbox"):
         prepare_stage1_anchors(manifest, targets, tmp_path / "out.csv", expected_count=1)
+
+
+def test_validate_authenticated_preflight_requires_schema_success_and_model(tmp_path: Path) -> None:
+    audit = tmp_path / "audit" / "t1"
+    audit.mkdir(parents=True)
+    (audit / "round_1.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "batch_attempt_1",
+                "n_picks": 2,
+                "n_valid": 2,
+                "missing_indices": [],
+                "error": None,
+                "raw_response": '{"chip_index": 1}',
+            }
+        )
+        + "\n"
+    )
+    (tmp_path / "scoring_provenance.jsonl").write_text(
+        json.dumps({"model_id": "gemini-3.1-flash-lite"}) + "\n"
+    )
+
+    summary = validate_authenticated_preflight(tmp_path, "gemini-3.1-flash-lite")
+
+    assert summary == {"audit_calls": 1, "scored_observations": 1}
+
+
+def test_validate_authenticated_preflight_rejects_empty_response(tmp_path: Path) -> None:
+    audit = tmp_path / "audit" / "t1"
+    audit.mkdir(parents=True)
+    (audit / "round_1.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "batch_attempt_1",
+                "n_picks": 1,
+                "n_valid": 0,
+                "missing_indices": [1],
+                "error": "empty response",
+                "raw_response": "",
+            }
+        )
+        + "\n"
+    )
+    (tmp_path / "scoring_provenance.jsonl").write_text("")
+
+    with pytest.raises(ValueError, match="authenticated preflight audit failed"):
+        validate_authenticated_preflight(tmp_path, "gemini-3.1-flash-lite")

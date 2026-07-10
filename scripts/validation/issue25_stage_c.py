@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 
 
@@ -53,6 +54,44 @@ def prepare_stage1_anchors(
     return len(selected)
 
 
+def validate_authenticated_preflight(root: Path, model: str) -> dict[str, int]:
+    """Fail closed unless the bounded real call returned non-empty valid schema."""
+    audit_rows = []
+    for path in sorted((root / "audit").rglob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                audit_rows.append(json.loads(line))
+    if not audit_rows:
+        raise ValueError("authenticated preflight produced no audit calls")
+    for row in audit_rows:
+        if (
+            row.get("stage") != "batch_attempt_1"
+            or row.get("error") not in (None, "")
+            or int(row.get("n_valid") or 0) <= 0
+            or row.get("missing_indices") not in (None, [])
+            or not str(row.get("raw_response") or "").strip()
+        ):
+            raise ValueError(f"authenticated preflight audit failed: {row}")
+
+    provenance_path = root / "scoring_provenance.jsonl"
+    provenance = [
+        json.loads(line)
+        for line in provenance_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not provenance:
+        raise ValueError("authenticated preflight produced no scored observations")
+    wrong_models = sorted({str(row.get("model_id")) for row in provenance if row.get("model_id") != model})
+    if wrong_models:
+        raise ValueError(
+            f"authenticated preflight model mismatch: expected {model}, got {wrong_models}"
+        )
+    return {
+        "audit_calls": len(audit_rows),
+        "scored_observations": len(provenance),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -61,6 +100,9 @@ def main() -> None:
     prepare.add_argument("--chip-targets", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--expected-count", type=int, default=400)
+    validate = sub.add_parser("validate-preflight")
+    validate.add_argument("--root", type=Path, required=True)
+    validate.add_argument("--model", required=True)
     args = parser.parse_args()
 
     if args.command == "prepare-stage1":
@@ -71,6 +113,13 @@ def main() -> None:
             expected_count=args.expected_count,
         )
         print(f"Wrote {count} ISSUE-25 stage1 anchors -> {args.output}")
+    elif args.command == "validate-preflight":
+        summary = validate_authenticated_preflight(args.root, args.model)
+        print(
+            "Authenticated preflight passed: "
+            f"audit_calls={summary['audit_calls']} "
+            f"scored_observations={summary['scored_observations']}"
+        )
 
 
 if __name__ == "__main__":

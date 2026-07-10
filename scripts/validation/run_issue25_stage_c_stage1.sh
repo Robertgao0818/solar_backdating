@@ -46,8 +46,41 @@ fi
 
 echo "[ISSUE25] stage1 kickoff targets=$N_STAGE1 workers=$WORKERS qps=$QPS model=$MODEL"
 echo "[ISSUE25] manifest_sha256=$(sha256sum "$MANIFEST" | awk '{print $1}')"
+echo "[ISSUE25] chip_targets_sha256=$(sha256sum "$CHIP_TARGETS" | awk '{print $1}')"
 echo "[ISSUE25] started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "[ISSUE25] gateway_accounts=$ACTIVE_ACCOUNTS gateway_slots=$ACTIVE_SLOTS"
+
+PREFLIGHT="$RUN_ROOT/authenticated_preflight_merged_bbox"
+if [[ ! -f "$PREFLIGHT/.ok" ]]; then
+  rm -rf "$PREFLIGHT/audit" "$PREFLIGHT/scan_states"
+  rm -f "$PREFLIGHT/scoring_provenance.jsonl" "$PREFLIGHT/chip_provenance.jsonl"
+  mkdir -p "$PREFLIGHT"
+  echo "[ISSUE25] authenticated merged+bbox preflight begin"
+  python -u scripts/temporal/run_adaptive_scan.py \
+    --anchors-csv "$STAGE1_ANCHORS" \
+    --limit-anchors 1 \
+    --force-restart \
+    --scan-states-dir "$PREFLIGHT/scan_states" \
+    --chips-dir "$PREFLIGHT/unused_merged_chips" \
+    --merged-tm-chips-dir "$PREFLIGHT/chips_tm" \
+    --merged-wayback-chips-dir "$PREFLIGHT/chips_wayback" \
+    --audit-dir "$PREFLIGHT/audit" \
+    --provider Merged \
+    --scorer gemini \
+    --anchor-workers 1 \
+    --qps 1 \
+    --round1-model "$MODEL" \
+    --round2-model "$MODEL" \
+    --routing-salt-mode target \
+    --no-verdict-store \
+    --review-extent-m 24 \
+    --catalog-cache-dir "$CATALOG_CACHE" \
+    2>&1 | tee "$PREFLIGHT/run.log"
+  python -u scripts/validation/issue25_stage_c.py validate-preflight \
+    --root "$PREFLIGHT" \
+    --model "$MODEL"
+  touch "$PREFLIGHT/.ok"
+fi
 
 run_rep() {
   local arm="$1" rep="$2" limit="${3:-}"
@@ -95,16 +128,24 @@ run_rep() {
 # actual shared-tree growth before releasing the remaining stage-1 matrix.
 if [[ ! -f "$RUN_ROOT/.first100_storage_checked" ]]; then
   BEFORE_BYTES=$(du -sb "$ROOT/full_prefetch" | awk '{print $1}')
+  BEFORE_RAW_BYTES=$(find "$ROOT/full_prefetch" -type f -name '*.tif' -printf '%s\n' | awk '{s += $1} END {print s + 0}')
+  BEFORE_RENDER_BYTES=$(find "$ROOT/full_prefetch" -type f -name '*.png' -printf '%s\n' | awk '{s += $1} END {print s + 0}')
   run_rep 24 1 100
   AFTER_BYTES=$(du -sb "$ROOT/full_prefetch" | awk '{print $1}')
-  GROWTH_BYTES=$((AFTER_BYTES - BEFORE_BYTES))
-  PROJECTED_BYTES=$((BEFORE_BYTES + GROWTH_BYTES * 48))
+  AFTER_RAW_BYTES=$(find "$ROOT/full_prefetch" -type f -name '*.tif' -printf '%s\n' | awk '{s += $1} END {print s + 0}')
+  AFTER_RENDER_BYTES=$(find "$ROOT/full_prefetch" -type f -name '*.png' -printf '%s\n' | awk '{s += $1} END {print s + 0}')
+  RAW_GROWTH_BYTES=$((AFTER_RAW_BYTES - BEFORE_RAW_BYTES))
+  RENDER_GROWTH_BYTES=$((AFTER_RENDER_BYTES - BEFORE_RENDER_BYTES))
+  PROJECTED_BYTES=$((BEFORE_BYTES + RAW_GROWTH_BYTES * 12 + RENDER_GROWTH_BYTES * 20))
   RESERVE_BYTES=$((14 * 1024 * 1024 * 1024))
   FREE_BYTES=$(df -B1 --output=avail "$ROOT" | tail -1 | tr -d ' ')
   {
     echo "before_bytes=$BEFORE_BYTES"
     echo "after_bytes=$AFTER_BYTES"
-    echo "growth_bytes=$GROWTH_BYTES"
+    echo "raw_growth_bytes=$RAW_GROWTH_BYTES"
+    echo "render_growth_bytes=$RENDER_GROWTH_BYTES"
+    echo "raw_scale=12"
+    echo "render_scale=20"
     echo "conservative_projected_bytes=$PROJECTED_BYTES"
     echo "reserve_bytes=$RESERVE_BYTES"
     echo "free_bytes=$FREE_BYTES"
@@ -119,7 +160,7 @@ if [[ ! -f "$RUN_ROOT/.first100_storage_checked" ]]; then
     exit 4
   fi
   touch "$RUN_ROOT/.first100_storage_checked"
-  echo "[ISSUE25] first100 storage growth=$GROWTH_BYTES projected=$PROJECTED_BYTES bytes"
+  echo "[ISSUE25] first100 raw_growth=$RAW_GROWTH_BYTES render_growth=$RENDER_GROWTH_BYTES projected=$PROJECTED_BYTES bytes"
 fi
 
 for arm in 24 48 96; do
