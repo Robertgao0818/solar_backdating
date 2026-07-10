@@ -2,7 +2,12 @@
 
 > Tracer slice 6 of 8 · [TRACKER](TRACKER.md)
 >
-> **Ready to start (2026-07-05):** all three blockers ✅. Readiness map + file-level execution design (inputs inventory, tools-vs-gap, budget, non-dependency on ISSUE-21, pre-registered tie-break): [`ISSUE-06-prep-2026-07-05.md`](ISSUE-06-prep-2026-07-05.md). Nothing below is done yet.
+> **Gate run complete 2026-07-10.** Harness + re-render adapter + both-backbone
+> gate-1/2 numbers + composite verdict in
+> [`ISSUE-06-gate-verdict-2026-07-06.md`](ISSUE-06-gate-verdict-2026-07-06.md).
+> Gate 1 PASS both; gate 2 FAIL both (A ≈ 0.64 ≪ ceiling 0.7724); SAT/L bet
+> FALSIFIED (floor slightly better). Gemini stays default. Prep:
+> [`ISSUE-06-prep-2026-07-05.md`](ISSUE-06-prep-2026-07-05.md).
 
 ## Parent
 
@@ -42,12 +47,17 @@ falsified). This is an offline benchmark reported in `docs/`, **not** a CI asser
 
 ## Acceptance criteria
 
-- [ ] Gate harness produces the three numbers for DINOv3-L-SAT, reusing the existing interval-agreement key construction.
-- [ ] Same three numbers produced for the DINOv2-S floor.
-- [ ] Number (1) demonstrates self rep↔rep ≈ 1.0 for the deterministic student(s).
-- [ ] Number (2) reported under the D8 rules — both pipelines through the Phase-0 decoder, inventory-weighted, dated-only denominator alongside — against a teacher rep↔rep ceiling re-derived on the same cohort the Gemini reps used. No hand-authored 0.74 anywhere in the verdict.
-- [ ] Gate verdict doc records pass/fail per backbone and whether the floor matches L-SAT (falsification check).
-- [ ] Gate is an offline benchmark reported in `docs/`, not asserted in CI.
+- [x] Gate harness produces the three numbers for DINOv3-L-SAT, reusing the existing interval-agreement key construction.
+- [x] Same three numbers produced for the DINOv2-S floor.
+- [x] Number (1) demonstrates self rep↔rep ≈ 1.0 for the deterministic student(s).
+- [x] Number (2) reported under the D8 rules — both pipelines through the Phase-0 decoder, inventory-weighted, dated-only denominator alongside — against a teacher rep↔rep ceiling re-derived on the same cohort the Gemini reps used. No hand-authored 0.74 anywhere in the verdict.
+- [x] Gate verdict doc records pass/fail per backbone and whether the floor matches L-SAT (falsification check).
+- [x] Gate is an offline benchmark reported in `docs/`, not asserted in CI.
+
+**Gate outcome (not an AC, recorded for consumers):** gate 1 PASS both; gate 2
+FAIL both vs re-derived ceiling 0.7724 (`A_LSAT=0.6392`, `A_floor=0.6542`);
+SAT/L bet FALSIFIED under pre-registered R1 (`A_LSAT − A_floor = −0.0150 ≯
+S=0.0116`). Production scorer stays Gemini.
 
 ## Blocked by
 

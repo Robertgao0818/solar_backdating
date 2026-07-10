@@ -27,8 +27,8 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | 3 | DINOv3-L-SAT frozen scorer scaffold + selection flag | ✅ | [replan_v2 5](../replan_v2/ISSUE-05-presence-scorer-seam.md) ✅ | [ISSUE-03](ISSUE-03-dinov3-scorer-scaffold.md) |
 | 4 | Train light head + calibrate abstain band (RunPod; + co-teacher dual-scoring) | ✅ | 2, 3 | [ISSUE-04](ISSUE-04-train-head-calibrate.md) |
 | 5 | DINOv2 ViT-S/14 falsification floor | ✅ | 4 | [ISSUE-05](ISSUE-05-dinov2-floor.md) |
-| 6 | Fidelity gate (three numbers, both backbones; baseline = Phase-0 decoder under D8) — **IN PROGRESS 2026-07-10**: offline harness landed (`c424efe`), verdict skeleton + tie-break locked pre-gate-2 (`3ad2655`), student re-render input contract locked (`a603e48`); gate run itself not executed; prep: [ISSUE-06-prep-2026-07-05](ISSUE-06-prep-2026-07-05.md) | 🟡 | 4 ✅, 5 ✅, [replan_v2 2](../replan_v2/ISSUE-02-changepoint-posterior-decoder.md) ✅ | [ISSUE-06](ISSUE-06-fidelity-gate.md) |
-| 7 | Feature-flag rollout + ops profile | ⬜ | 6 | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
+| 6 | Fidelity gate (three numbers, both backbones; baseline = Phase-0 decoder under D8) — **DONE 2026-07-10**: gate-1 PASS both (self-repro 1.0); gate-2 FAIL both (`A_LSAT=0.6392`, `A_floor=0.6542` ≪ ceiling 0.7724, `S=0.0116`); gate-3 EQUIVALENT; SAT/L bet **FALSIFIED** (floor +1.5 pp). Verdict: [ISSUE-06-gate-verdict-2026-07-06](ISSUE-06-gate-verdict-2026-07-06.md). Gemini stays default → slice 7 still blocked on a future pass | ✅ | 4 ✅, 5 ✅, [replan_v2 2](../replan_v2/ISSUE-02-changepoint-posterior-decoder.md) ✅ | [ISSUE-06](ISSUE-06-fidelity-gate.md) |
+| 7 | Feature-flag rollout + ops profile | ⛔ | 6 (gate-2 FAIL — no production swap) | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
 | 8 | Bonus: deterministic run-to-run experiment (not gated) | ⬜ | 4 | [ISSUE-08](ISSUE-08-determinism-experiment.md) |
 
 ## Dependency graph
@@ -116,6 +116,24 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
 
 ## Progress log
 
+- 2026-07-10 — **Slice 6 DONE (gate executed).** Gate-1/2 full run on local
+  RTX 4070 (zero API spend): teacher ceiling re-decoded from banked rep1–3;
+  student re-scored after LOCKED `chip_geom_v2_tight12` nomarker re-render
+  (0/14,002 render drops). Numbers:
+  - Gate 1: self-repro **1.0** both backbones (PASS).
+  - Teacher ceiling inv-weighted pairs 0.7708 / 0.7674 / 0.7790 → mean
+    **0.7724**, spread `S=0.0116`.
+  - `A_LSAT=0.6392`, `A_floor=0.6542` (mean over rep1–3, inv-weighted
+    all-units) — both **FAIL** to reach ceiling (~12–13 pp short).
+  - R1 bet-survival: `A_LSAT − A_floor = −0.0150 ≯ S` → **SAT/L FALSIFIED**;
+    floor is the operative equivalent but **neither is a production swap**.
+  - Gate 3 (pre-locked): EQUIVALENT 0.7971 vs 0.7968.
+  Verdict filled: [ISSUE-06-gate-verdict-2026-07-06](ISSUE-06-gate-verdict-2026-07-06.md).
+  Artifacts: `~/zasolar_data/geid_temporal/fidelity_gate_20260710/`.
+  **Slice 7 remains blocked** (gate-2 FAIL; Gemini stays default). P4 /
+  Panel v2 full rescan stay on Gemini quota. Harness gained the tight12
+  nomarker re-render adapter in `fidelity_gate.py` (was identity — would have
+  been OOD under the LOCKED input contract).
 - 2026-07-10 — Slice 6 flipped 🟡: the student-vs-teacher offline fidelity
   harness landed (`c424efe`, `scripts/validation/fidelity_gate.py` + tests),
   the gate verdict skeleton with the pre-registered R1 tie-break is locked

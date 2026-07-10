@@ -1,15 +1,21 @@
 # ISSUE-06 — Fidelity gate verdict
 
-Status: **SKELETON — locked 2026-07-06 BEFORE any gate-2 number was produced.**
+Status: **GATE-RUN COMPLETE 2026-07-10** (LOCKED sections unchanged since
+2026-07-06; only `TBD-gate-run` sections filled below).
 Parent: [`ISSUE-06-fidelity-gate.md`](ISSUE-06-fidelity-gate.md) · prep/design:
 [`ISSUE-06-prep-2026-07-05.md`](ISSUE-06-prep-2026-07-05.md) (R1 rule
 pre-registered there, commit `9ea5405`).
 
-This skeleton exists to make the tie-break rule **operationally binding before
+This skeleton existed to make the tie-break rule **operationally binding before
 the gate-2 numbers land** (prep §Risks R1: "written … so the verdict cannot be
 back-fit to the numbers"). Sections marked `TBD-gate-run` are filled only
 after the runs complete; nothing in a `LOCKED` section may be edited afterwards
 except to fix a typo that does not change semantics (note any such edit here).
+
+**Run stamp (2026-07-10):** local RTX 4070 Laptop GPU; zero Gemini/API spend;
+teacher ceiling = CPU re-decode of banked rep1–3; student = tight12 nomarker
+re-render + local re-score. Artifacts:
+`~/zasolar_data/geid_temporal/fidelity_gate_20260710/{dinov3_lsat,dinov2_floor}/`.
 
 ---
 
@@ -113,25 +119,124 @@ in this verdict (the ~14 pp optimism gap is the ISSUE-04 R2 lesson).
 Gate-3 verdict per LOCKED rule 1: **EQUIVALENT** (Δ = 0.029 pp < 1 SE ≈ 1.46 pp)
 → **SAT/L bet falsified on gate 3**; survival now rests solely on LOCKED rule 2.
 
-## Gate 1 — student self rep↔rep reproducibility `TBD-gate-run`
+## Gate 1 — student self rep↔rep reproducibility (filled 2026-07-10)
 
-- DINOv3-L-SAT: TBD (expect exact 1.0, demonstrated by two full passes +
-  byte-compare of decoded intervals, not asserted)
-- DINOv2-S floor: TBD
+Demonstrated by two full student re-score passes over rep1 (cache OFF) +
+byte-compare of decoded agree_keys — not asserted.
 
-## Gate 2 — pipeline interval agreement vs re-derived teacher ceiling `TBD-gate-run`
+| backbone | self-agreement | n_decoded compared | n_mismatches | pass |
+|---|--:|--:|--:|---|
+| DINOv3-L-SAT | **1.0** | 289 | 0 | **PASS** |
+| DINOv2-S floor | **1.0** | 289 | 0 | **PASS** |
 
-- Teacher ceiling (rep1–3 pairs, inv-weighted / dated-only / decoded-only): TBD
-- Ceiling spread `S`: TBD
-- `A_LSAT` (per-rep + mean): TBD
-- `A_floor` (per-rep + mean): TBD
-- R3 split (anchors with ≥1 teacher-`unusable` frame in window vs none): TBD
-- Leakage drop actually applied (ids + counts): TBD
-- No hand-authored bar anywhere; the retired ~0.74 must not appear as a bar.
+Primary "no wobble" goal: **met for both backbones**.
 
-## Composite verdict `TBD-gate-run`
+## Gate 2 — pipeline interval agreement vs re-derived teacher ceiling (filled 2026-07-10)
 
-- Pass/fail per backbone (gate 1 / gate 2 vs ceiling / gate 3): TBD
-- L-SAT-vs-floor bet: TBD strictly by the LOCKED rules above.
-- Artifacts: `~/zasolar_data/geid_temporal/fidelity_gate_20260706/` (fresh dir;
-  the banked `llm_endtoend_storebacked_20260704/` was read-only input).
+Caliber = LOCKED definitions above. Student chips re-rendered at
+`chip_geom_v2_tight12` / `draw_marker=False` before scoring (LOCKED input
+contract). Render drops: **0 / 14,002 frames (0.000%)** on both backbones —
+pollution stop-rule not triggered. No hand-authored 0.74 bar anywhere.
+
+### Teacher rep↔rep ceiling (rep1–3, full banked frame sets)
+
+| pair | n_intersection | inv-weighted (headline) | dated-only inv-weighted |
+|---|--:|--:|--:|
+| 1–2 | 222 | **0.7708** | 0.7709 |
+| 1–3 | 218 | **0.7674** | 0.7685 |
+| 2–3 | 233 | **0.7790** | 0.7790 |
+
+- Ceiling mean (inv-weighted) = **0.7724**
+- Ceiling spread `S` = max − min = **0.0116**
+
+### Student-vs-teacher (`A_backbone` = mean of per-rep inv-weighted all-units)
+
+| backbone | rep1 | rep2 | rep3 | **A mean (headline)** | decoded-only pooled | dated-only pooled |
+|---|--:|--:|--:|--:|--:|--:|
+| DINOv3-L-SAT | 0.6653 | 0.6028 | 0.6495 | **0.6392** | 0.3706 | 0.3706 |
+| DINOv2-S floor | 0.6650 | 0.6345 | 0.6630 | **0.6542** | 0.3945 | 0.3946 |
+
+n_all_units per rep = 628 (642 − 14 leakage-dropped rows); n_decoded pooled =
+868 / 1,884 unit-rep rows (splice-through inflates all-units — decoded-only
+reported as diagnostic per LOCKED caliber).
+
+**Gate-2 vs ceiling (PRD: student should reach the teacher self-consistency
+ceiling):** both backbones miss by ~12–13 pp (LSAT −0.133 / floor −0.118 vs
+ceiling mean 0.7724). **Gate 2 = FAIL for both** (no-answer-change not
+demonstrated at production-swap bar). Bound-above still holds: neither exceeds
+the ceiling.
+
+### R3 unusable-frame split (pooled decoded-only, inv-weighted)
+
+| backbone | with ≥1 teacher-`unusable` frame | no unusable frame |
+|---|---|---|
+| DINOv3-L-SAT | n=406, agree=**0.2490** | n=462, agree=**0.4152** |
+| DINOv2-S floor | n=406, agree=**0.1852** | n=462, agree=**0.5112** |
+
+The known thin unusable-class recall (prep R3) is visible: agreement is
+materially worse on windows that contain teacher-`unusable` frames. Floor is
+worse than L-SAT on the unusable-bearing subset and better on the clean subset.
+
+### Leakage drop actually applied
+
+Intersection of `chip_subset_anchors.json` (800) with the 642-row reference:
+
+- **14 rows dropped** / **2 group** / **6 target** anchors (matches expected
+  ≤2 / ≤6)
+- group: `…_c0003649`, `…_c0012245`
+- target: `…_t00000046`, `…_t00009160`, `…_t00015343`, `…_t00021645`,
+  `…_t00023953`, `…_t00032299`
+- source_feature_ids: 45, 7975, 7977, 7978, 7980, 9159, 15342, 21644, 23952,
+  30199, 30203, 30204, 30207, 32298
+- n_reference_rows after drop = **628**
+
+## Composite verdict (filled 2026-07-10)
+
+### Pass/fail per backbone
+
+| backbone | gate 1 (repro) | gate 2 (vs ceiling) | gate 3 (chip fidelity) |
+|---|---|---|---|
+| DINOv3-L-SAT | **PASS** (1.0) | **FAIL** (A=0.6392 ≪ ceiling 0.7724) | 0.7971 @ 0.885 cov (held-out) |
+| DINOv2-S floor | **PASS** (1.0) | **FAIL** (A=0.6542 ≪ ceiling 0.7724) | 0.7968 @ 0.878 cov (held-out) |
+
+### L-SAT-vs-floor bet (LOCKED R1 arithmetic — no discretion)
+
+1. Gate 3: **EQUIVALENT** (locked pre-run) → SAT/L falsified on chip fidelity.
+2. Gate 2 bet-survival: `A_LSAT − A_floor = 0.6392 − 0.6542 = **−0.0150**`,
+   `S = 0.0116`. Survives iff `A_LSAT − A_floor > S` → **−0.0150 ≯ 0.0116 →
+   FALSIFIED**. Floor is the operative equivalent on the headline caliber
+   (and is actually **+1.5 pp better** than L-SAT).
+3. Coverage tie-break: not reached as a bet-survival signal (rule 2 already
+   falsified); for the record L-SAT still holds the gate-3 coverage edge
+   (+0.70 pp), which does not override rule 2.
+
+**SAT/L bet overall: FALSIFIED.** Cheaper DINOv2-S floor is the operative
+student equivalent — **but neither backbone reaches the teacher rep↔rep
+ceiling, so neither is a production scorer swap candidate.**
+
+### Production implication
+
+- **Gemini stays the default scorer** (feature flag unchanged).
+- **ISSUE-07 rollout remains blocked** on a fidelity-gate pass.
+- **P4 (replan ISSUE-15/16) and Panel v2 full rescan stay on Gemini quota** —
+  the student did not clear the no-answer-change bar that would unlock a
+  Gemini-free rescore path.
+- Conditionality from plan doc §5 P0-2 (banked96 geometry): this run used the
+  LOCKED tight12 nomarker re-render, so the gate-2 numbers are **not** the
+  OOD banked96-scoring path; a future Panel v2 re-render still needs a cheap
+  fidelity re-check of any winner if geometry moves again.
+- Honesty chain for the decoder baseline: carried unchanged in the LOCKED
+  section above (hard-MAP NO-GO → Option-A caliber flip → ISSUE-21 band
+  discharged).
+
+### Artifacts
+
+| path | contents |
+|---|---|
+| `~/zasolar_data/geid_temporal/fidelity_gate_20260710/dinov3_lsat/` | gate1/2 JSON, provenance, summary, render_drop_report |
+| `~/zasolar_data/geid_temporal/fidelity_gate_20260710/dinov2_floor/` | same |
+| `~/zasolar_data/geid_temporal/fidelity_gate_20260710/logs/` | full run logs |
+| banked teacher input (read-only) | `…/llm_endtoend_storebacked_20260704/rep{1,2,3}/` |
+
+Head sha256 verified at run: DINOv3 `bc053cbd…`, floor `38ecbf37…`.
+Re-render: 0 drops / 14,002 frames on both passes.

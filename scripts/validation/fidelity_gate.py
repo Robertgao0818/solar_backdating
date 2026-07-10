@@ -34,16 +34,19 @@ Everything else is reuse: the reference->scan_state join keys + decoder wiring
 strata aggregation (``llm_endtoend_analyze.agg`` :140, replicated verbatim below
 as ``agg`` because the original is a closure).
 
-CHIP-GEOMETRY CAVEAT (must survive into the verdict; flagged by recon 2026-07-05):
-the banked rep ``chip_path`` files were rendered at ``chip_geom_v1_banked96`` WITH
-a review marker (``draw_marker=True``); the student heads were trained on
-``chip_geom_v2_tight12`` marker-free crops. Scoring the banked ``.tif`` directly
-feeds the frozen encoder a wider-FOV, marker-overlaid, aspect-distorted image the
-head's linear map never saw. This harness re-scores whatever ``_resolve_chip_path``
-returns (identity by default) — the SINGLE chokepoint a future re-render adapter
-plugs into. Until that adapter lands, a real-GPU gate-2 run is scoring geometry-v1
-pixels; the provenance manifest records ``chip_geometry_warning`` so the number is
-never read as a clean fidelity result. CPU unit tests inject a fake scorer and are
+STUDENT RE-RENDER (ISSUE-06 verdict skeleton LOCKED 2026-07-06, pre-gate-2):
+banked rep ``chip_path`` files are ``chip_geom_v1_banked96`` GeoTIFFs (often with
+a co-located marked review PNG). Both student heads trained on
+``chip_geom_v2_tight12`` **nomarker** crops. Real-GPU gate runs MUST re-render
+each banked source through ``ensure_single_target_review_png`` +
+``resolve_chip_geometry(chip_geom_v2_tight12)`` with ``draw_marker=False`` before
+scoring. Frames that cannot be re-rendered are dropped from **both** pipelines'
+observation sequences (like-for-like frame sets). Pollution stop-rule: if
+re-render drops exceed ``--render-drop-stop-pct`` of frames (default 2%), the
+run aborts before shipping gate-2 numbers. Teacher ceiling stays on full banked
+frame sets. ``--no-student-rerender`` is an emergency escape that re-enables the
+legacy identity path and stamps a hard warning into provenance (not a clean
+gate). CPU unit tests inject a fake scorer with the identity resolver and are
 unaffected.
 
 The gate is an OFFLINE benchmark reported in ``docs/`` — never a CI assertion.
@@ -60,9 +63,10 @@ import json
 import subprocess
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
+from typing import Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -205,7 +209,7 @@ def new_stats() -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# student re-scoring pass (mirror of scan_state_io.load_scan_observations)
+# student re-render adapter (LOCKED input contract) + re-scoring pass
 # --------------------------------------------------------------------------- #
 @dataclass
 class _V:
@@ -214,14 +218,150 @@ class _V:
     quality_flag: str
 
 
-def _resolve_chip_path(chip_path: str) -> str:
-    """Single chokepoint for a future geometry-v2 re-render adapter.
+@dataclass
+class _RawFrame:
+    capture_date: object  # date
+    raw_date: str
+    chip_path: str
+    teacher_pv: object
+    teacher_confidence: object
+    teacher_quality_flag: str
 
-    Identity today. See the module-level CHIP-GEOMETRY CAVEAT: the banked chips
-    are geometry-v1 + marker; a re-render step (draw_marker=False,
-    chip_geom_v2_tight12) would slot in here before scoring so the student sees
-    the framing its head was trained on. Not implemented in this phase (no GPU)."""
-    return chip_path
+
+@dataclass
+class StudentChipResolver:
+    """Map a banked source chip to the PNG the student head was trained on.
+
+    Default production path: re-render banked GeoTIFF at ``chip_geom_v2_tight12``
+    with ``draw_marker=False`` (nomarker), via the same
+    ``ensure_single_target_review_png`` + ``resolve_chip_geometry`` chain the
+    distillation set used. Identity mode (``chip_targets_path is None``) leaves
+    the banked path unchanged — used by CPU unit tests / ``--no-student-rerender``.
+    """
+
+    chip_targets_path: Path | None = None
+    geometry_version: str = "chip_geom_v2_tight12"
+    contain_footprint: bool = True
+    # filled at init when chip_targets_path is set
+    _by_target_id: dict = field(default_factory=dict, repr=False)
+    _by_chip_id: dict = field(default_factory=dict, repr=False)
+    _geom: object = field(default=None, repr=False)
+    _resolve_fn: Callable[[str, str], tuple[str | None, str | None]] | None = field(
+        default=None, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        if self._resolve_fn is not None:
+            return
+        if self.chip_targets_path is None:
+            # identity: return the banked path as-is (tests / emergency escape)
+            self._resolve_fn = lambda chip_path, _anchor_id: (
+                (chip_path, None) if chip_path else (None, "empty_chip_path")
+            )
+            return
+        from scripts.temporal.build_distillation_set import (  # noqa: PLC0415
+            _anchor_kind,
+            _marker_from_row,
+            load_chip_targets_lookup,
+        )
+        from scripts.temporal.chip_geometry import (  # noqa: PLC0415
+            contain_crop_to_footprint,
+            resolve_chip_geometry,
+        )
+        from scripts.temporal.gehi_common import ensure_single_target_review_png  # noqa: PLC0415
+
+        self._by_target_id, self._by_chip_id = load_chip_targets_lookup(
+            Path(self.chip_targets_path)
+        )
+        self._geom = resolve_chip_geometry(self.geometry_version)
+
+        def _resolve(chip_path: str, anchor_id: str) -> tuple[str | None, str | None]:
+            if not chip_path:
+                return None, "empty_chip_path"
+            src = Path(chip_path)
+            if not src.exists() or src.stat().st_size == 0:
+                return None, "source_missing_or_empty"
+            kind = _anchor_kind(anchor_id)
+            if kind == "t":
+                ct_row = self._by_target_id.get(anchor_id)
+            elif kind == "c":
+                ct_row = self._by_chip_id.get(anchor_id)
+            else:
+                ct_row = self._by_target_id.get(anchor_id) or self._by_chip_id.get(
+                    anchor_id
+                )
+            if ct_row is None:
+                return None, "unresolvable_chip_targets_join"
+            try:
+                geom = self._geom
+                marker = _marker_from_row(ct_row)
+                chip_size_m = float(
+                    ct_row.get("chip_size_m", geom.download_chip_size_m)
+                    or geom.download_chip_size_m
+                )
+                crop_mult = float(geom.crop_context_multiplier)
+                if self.contain_footprint:
+                    radius = marker.search_radius_m or (chip_size_m * 0.05)
+                    base_crop = min(
+                        chip_size_m,
+                        max(geom.min_crop_size_m, 2.0 * radius * crop_mult),
+                    )
+                    contained = contain_crop_to_footprint(
+                        base_crop,
+                        source_width_m=float(ct_row.get("source_width_m", 0.0) or 0.0),
+                        source_height_m=float(ct_row.get("source_height_m", 0.0) or 0.0),
+                        chip_size_m=chip_size_m,
+                    )
+                    if radius > 0:
+                        crop_mult = contained / (2.0 * radius)
+                png = ensure_single_target_review_png(
+                    src,
+                    marker,
+                    chip_size_m=chip_size_m,
+                    crop_context_multiplier=crop_mult,
+                    min_crop_size_m=geom.min_crop_size_m,
+                    min_output_px=geom.min_output_px,
+                    draw_marker=False,
+                )
+            except Exception as exc:  # noqa: BLE001 — recorded as a render drop
+                return None, f"render_failed:{type(exc).__name__}:{exc}"
+            if png is None or not Path(png).exists() or Path(png).stat().st_size == 0:
+                return None, "render_output_missing_or_empty"
+            return str(png), None
+
+        self._resolve_fn = _resolve
+
+    @property
+    def active(self) -> bool:
+        return self.chip_targets_path is not None
+
+    def resolve(self, chip_path: str, anchor_id: str) -> tuple[str | None, str | None]:
+        assert self._resolve_fn is not None
+        return self._resolve_fn(chip_path, anchor_id)
+
+
+def _iter_raw_frames(path: Path) -> tuple[str, list[_RawFrame]]:
+    """Walk a scan_state into ordered raw frames + the top-level anchor_id."""
+    data = json.loads(Path(path).read_text())
+    anchor_id = str(data.get("anchor_id") or Path(path).stem)
+    frames: list[_RawFrame] = []
+    for rnd in data.get("rounds", []) or []:
+        for result in rnd.get("results", []) or []:
+            d = _parse_capture_date(result.get("capture_date"))
+            if d is None:
+                continue
+            frames.append(
+                _RawFrame(
+                    capture_date=d,
+                    raw_date=str(result.get("capture_date") or ""),
+                    chip_path=str(result.get("chip_path") or ""),
+                    teacher_pv=result.get("pv_present"),
+                    teacher_confidence=result.get("confidence"),
+                    teacher_quality_flag=str(result.get("quality_flag") or "usable")
+                    or "usable",
+                )
+            )
+    return anchor_id, frames
 
 
 def _score_chips(
@@ -234,7 +374,7 @@ def _score_chips(
     skip_missing: bool,
     stats: Counter,
 ) -> list[_V]:
-    """Score chips through the injected scorer.score(picks) seam, in order.
+    """Score already-resolved chip paths through ``scorer.score(picks)`` in order.
 
     Fails loudly (FileNotFoundError with the path) on a missing chip unless
     ``skip_missing`` — the scorer would otherwise silently abstain. Caches per
@@ -244,8 +384,7 @@ def _score_chips(
     results: list[_V | None] = [None] * len(chip_paths)
     picks: list[Pick] = []
     pick_idx: list[int] = []
-    for i, cp in enumerate(chip_paths):
-        rp = _resolve_chip_path(cp)
+    for i, rp in enumerate(chip_paths):
         ck = (rp, scorer_key)
         if cache is not None and ck in cache:
             results[i] = cache[ck]
@@ -254,7 +393,7 @@ def _score_chips(
         if not rp or not Path(rp).exists():
             stats["missing_chip"] += 1
             if not skip_missing:
-                raise FileNotFoundError(f"student chip missing (no silent skip): {cp!r}")
+                raise FileNotFoundError(f"student chip missing (no silent skip): {rp!r}")
             v = _V(None, None, "missing_chip")
             results[i] = v
             if cache is not None:
@@ -270,8 +409,90 @@ def _score_chips(
             v = _V(ob.pv_present, ob.pv_score, ob.quality_flag)
             results[i] = v
             if cache is not None:
-                cache[(_resolve_chip_path(chip_paths[i]), scorer_key)] = v
+                cache[(chip_paths[i], scorer_key)] = v
     return [r for r in results]  # type: ignore[return-value]
+
+
+def load_paired_observations(
+    path: Path,
+    scorer,
+    cache: dict | None,
+    *,
+    scorer_key: str,
+    skip_missing: bool,
+    stats: Counter,
+    resolver: StudentChipResolver | None = None,
+) -> tuple[list[VintageObservation], list[VintageObservation], dict]:
+    """Like-for-like teacher + student observation sequences for one scan_state.
+
+    When ``resolver`` is active (tight12 nomarker re-render), a frame that
+    cannot be re-rendered is dropped from **both** sequences (LOCKED render-drop
+    policy). Returns ``(teacher_obs, student_obs, drop_info)`` where
+    ``drop_info`` carries per-anchor frame counts for the pollution stop-rule.
+    """
+    resolver = resolver or StudentChipResolver()  # identity
+    anchor_id, frames = _iter_raw_frames(path)
+    kept: list[_RawFrame] = []
+    resolved_paths: list[str] = []
+    n_drop = 0
+    drop_reasons: Counter = Counter()
+    anchors_with_drop = False
+    for fr in frames:
+        rp, err = resolver.resolve(fr.chip_path, anchor_id)
+        if err is not None or not rp:
+            n_drop += 1
+            drop_reasons[err or "unknown"] += 1
+            anchors_with_drop = True
+            stats["render_drop"] += 1
+            stats[f"render_drop:{err or 'unknown'}"] += 1
+            continue
+        kept.append(fr)
+        resolved_paths.append(rp)
+        stats["render_ok"] += 1
+
+    drop_info = {
+        "anchor_id": anchor_id,
+        "n_frames": len(frames),
+        "n_kept": len(kept),
+        "n_dropped": n_drop,
+        "drop_reasons": dict(drop_reasons),
+        "had_drop": anchors_with_drop,
+    }
+
+    teacher_obs: list[VintageObservation] = []
+    for i, fr in enumerate(kept):
+        teacher_obs.append(
+            VintageObservation(
+                capture_date=fr.capture_date,
+                pv_present=_PRESENT_MAP.get(fr.teacher_pv, ""),
+                confidence=fr.teacher_confidence,
+                quality_flag=fr.teacher_quality_flag,
+                source_row=i,
+            )
+        )
+
+    student_obs: list[VintageObservation] = []
+    if scorer is not None:
+        verdicts = _score_chips(
+            resolved_paths,
+            [fr.raw_date for fr in kept],
+            scorer,
+            cache,
+            scorer_key=scorer_key,
+            skip_missing=skip_missing,
+            stats=stats,
+        )
+        for i, (fr, v) in enumerate(zip(kept, verdicts)):
+            student_obs.append(
+                VintageObservation(
+                    capture_date=fr.capture_date,
+                    pv_present=_PRESENT_MAP.get(v.pv_present, ""),
+                    confidence=v.pv_score,
+                    quality_flag=v.quality_flag or "usable",
+                    source_row=i,
+                )
+            )
+    return teacher_obs, student_obs, drop_info
 
 
 def load_student_observations(
@@ -282,40 +503,19 @@ def load_student_observations(
     scorer_key: str,
     skip_missing: bool,
     stats: Counter,
+    resolver: StudentChipResolver | None = None,
 ) -> list[VintageObservation]:
-    """Student mirror of ``load_scan_observations``: same rounds walk, same
-    ``(round_idx, chip_index)`` order, same unparseable-date drop + ``source_row``
-    enumeration — but ``pv_present``/``confidence``/``quality_flag`` come from the
-    student scorer re-scoring each frame's chip, not the banked Gemini verdict."""
-    data = json.loads(Path(path).read_text())
-    frames: list[tuple[object, str, str]] = []  # (parsed_date, chip_path, raw_date)
-    for rnd in data.get("rounds", []) or []:
-        for result in rnd.get("results", []) or []:
-            d = _parse_capture_date(result.get("capture_date"))
-            if d is None:
-                continue
-            frames.append((d, result.get("chip_path") or "", str(result.get("capture_date") or "")))
-    verdicts = _score_chips(
-        [f[1] for f in frames],
-        [f[2] for f in frames],
+    """Student-only convenience wrapper (tests / callers that ignore teacher side)."""
+    _teacher, student, _drop = load_paired_observations(
+        path,
         scorer,
         cache,
         scorer_key=scorer_key,
         skip_missing=skip_missing,
         stats=stats,
+        resolver=resolver,
     )
-    obs: list[VintageObservation] = []
-    for i, ((d, _cp, _raw), v) in enumerate(zip(frames, verdicts)):
-        obs.append(
-            VintageObservation(
-                capture_date=d,
-                pv_present=_PRESENT_MAP.get(v.pv_present, ""),
-                confidence=v.pv_score,
-                quality_flag=v.quality_flag or "usable",
-                source_row=i,
-            )
-        )
-    return obs
+    return student
 
 
 # --------------------------------------------------------------------------- #
@@ -335,6 +535,9 @@ def rep_keys(
     scorer_key: str,
     skip_missing: bool,
     stats: Counter,
+    resolver: StudentChipResolver | None = None,
+    drop_log: list | None = None,
+    apply_render_drop_to_teacher: bool = True,
 ) -> dict[int, dict]:
     """sf -> {teacher_key, student_key, decoded, had_unusable}.
 
@@ -342,7 +545,14 @@ def rep_keys(
     -> layer/anchor-col join, same splice-through + missing-scan-state fallbacks),
     but emits the full ``agree_key`` (via the posterior adapter) instead of just
     the year, and decodes a parallel student observation sequence.
+
+    When the student re-render resolver is active and
+    ``apply_render_drop_to_teacher`` is True (gate-2 student-vs-teacher path),
+    frames that fail re-render are dropped from **both** pipelines. The teacher
+    ceiling path passes ``teacher_only=True`` and keeps the full banked frame
+    set (LOCKED policy).
     """
+    resolver = resolver or StudentChipResolver()
     out: dict[int, dict] = {}
     for row in ref_rows:
         sf = row["sf"]
@@ -391,18 +601,36 @@ def rep_keys(
             for r in (rnd.get("results") or [])
         )
         clamp = ClampContext(ceiling_date=vexcel_ceiling.get(row["grid_id"]))
-        teacher_obs = load_scan_observations(scan_path)
-        teacher_key = posterior_to_agree_key(est(teacher_obs, clamp, config))
         student_key = None
-        if not teacher_only:
-            student_obs = load_student_observations(
+        if teacher_only or not apply_render_drop_to_teacher or not resolver.active:
+            # Full banked frame set for the ceiling, or identity-resolver tests.
+            teacher_obs = load_scan_observations(scan_path)
+            teacher_key = posterior_to_agree_key(est(teacher_obs, clamp, config))
+            if not teacher_only:
+                student_obs = load_student_observations(
+                    scan_path,
+                    scorer,
+                    cache,
+                    scorer_key=scorer_key,
+                    skip_missing=skip_missing,
+                    stats=stats,
+                    resolver=resolver,
+                )
+                student_key = posterior_to_agree_key(est(student_obs, clamp, config))
+        else:
+            # LOCKED: drop re-render failures from both pipelines.
+            teacher_obs, student_obs, drop_info = load_paired_observations(
                 scan_path,
                 scorer,
                 cache,
                 scorer_key=scorer_key,
                 skip_missing=skip_missing,
                 stats=stats,
+                resolver=resolver,
             )
+            if drop_log is not None and drop_info.get("had_drop"):
+                drop_log.append(drop_info)
+            teacher_key = posterior_to_agree_key(est(teacher_obs, clamp, config))
             student_key = posterior_to_agree_key(est(student_obs, clamp, config))
         out[sf] = {
             "teacher_key": teacher_key,
@@ -561,6 +789,7 @@ def self_repro_rep(
     vexcel_ceiling: dict,
     scorer,
     skip_missing: bool,
+    resolver: StudentChipResolver | None = None,
 ) -> tuple[bool, list[dict], int]:
     """Run the student pass twice (cache OFF both passes -> real re-scoring) and
     byte-compare the decoded student keys. Returns ``(ok, mismatches, n_decoded)``
@@ -580,6 +809,7 @@ def self_repro_rep(
             scorer_key="self_repro",
             skip_missing=skip_missing,
             stats=new_stats(),
+            resolver=resolver,
         )
         return {sf: v["student_key"] for sf, v in km.items() if v["decoded"]}
 
@@ -694,6 +924,35 @@ def main() -> int:
         action="store_true",
         help="escape hatch: abstain on a missing chip instead of failing loudly (counts always reported)",
     )
+    _default_chip_targets = (
+        Path.home()
+        / "zasolar_data"
+        / "geid_temporal"
+        / "jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01_chipgroups"
+        / "chip_targets.csv"
+    )
+    ap.add_argument(
+        "--chip-targets",
+        type=Path,
+        default=_default_chip_targets,
+        help="chip_targets.csv for tight12 nomarker re-render (LOCKED student input contract)",
+    )
+    ap.add_argument(
+        "--geometry-version",
+        default="chip_geom_v2_tight12",
+        help="named chip geometry for the student re-render (default: chip_geom_v2_tight12)",
+    )
+    ap.add_argument(
+        "--no-student-rerender",
+        action="store_true",
+        help="EMERGENCY: score banked chip_path as-is (OOD). Not a clean gate-2 number.",
+    )
+    ap.add_argument(
+        "--render-drop-stop-pct",
+        type=float,
+        default=2.0,
+        help="pollution stop-rule: abort if re-render drops exceed this %% of frames (default 2.0)",
+    )
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
 
@@ -749,6 +1008,27 @@ def main() -> int:
         decoder_epoch_gap_days=a.decoder_epoch_gap_days,
     )
 
+    # Student chip resolver (LOCKED tight12 nomarker re-render, unless escaped).
+    if a.teacher_only or a.no_student_rerender:
+        resolver = StudentChipResolver()  # identity
+        if a.no_student_rerender and not a.teacher_only:
+            print(
+                "WARNING: --no-student-rerender active — scoring banked geometry-v1 "
+                "pixels; gate-2 is NOT a clean fidelity number.",
+                file=sys.stderr,
+            )
+    else:
+        if not Path(a.chip_targets).exists():
+            raise SystemExit(
+                f"chip_targets.csv required for student re-render (LOCKED contract): "
+                f"{a.chip_targets}"
+            )
+        resolver = StudentChipResolver(
+            chip_targets_path=Path(a.chip_targets),
+            geometry_version=a.geometry_version,
+            contain_footprint=True,
+        )
+
     head_sha = _sha256_file(a.head)
     scorer = None
     scorer_key = "teacher_only"
@@ -761,14 +1041,12 @@ def main() -> int:
         scorer = get_scorer(a.scorer, **kwargs)
         scorer_key = f"{a.scorer}|{head_sha}"
 
-    cache: dict = {}
-    stats = new_stats()
-
-    # ---- per-rep decoded keys ----
-    per_rep_maps = []
+    # ---- teacher ceiling (full banked frame sets; LOCKED) ----
+    ceiling_stats = new_stats()
+    ceiling_maps = []
     for rep_dir in a.reps:
         delivery = load_delivery_by_sf(rep_dir / "delivery.csv")
-        per_rep_maps.append(
+        ceiling_maps.append(
             rep_keys(
                 rep_dir,
                 ref_rows,
@@ -776,21 +1054,85 @@ def main() -> int:
                 est=est,
                 config=config,
                 vexcel_ceiling=vexcel_ceiling,
-                teacher_only=a.teacher_only,
-                scorer=scorer,
-                cache=cache,
-                scorer_key=scorer_key,
-                skip_missing=a.skip_missing_chips,
-                stats=stats,
+                teacher_only=True,
+                scorer=None,
+                cache=None,
+                scorer_key="teacher_only",
+                skip_missing=True,
+                stats=ceiling_stats,
+                resolver=StudentChipResolver(),  # unused under teacher_only
             )
+        )
+    ceiling = pairwise_ceiling(ceiling_maps, ref_by_sf, strat_w)
+
+    # ---- student-vs-teacher (render-drop applied to both pipelines) ----
+    cache: dict = {}
+    stats = new_stats()
+    drop_log: list[dict] = []
+    svt_maps = []
+    if not a.teacher_only:
+        for rep_dir in a.reps:
+            delivery = load_delivery_by_sf(rep_dir / "delivery.csv")
+            svt_maps.append(
+                rep_keys(
+                    rep_dir,
+                    ref_rows,
+                    delivery,
+                    est=est,
+                    config=config,
+                    vexcel_ceiling=vexcel_ceiling,
+                    teacher_only=False,
+                    scorer=scorer,
+                    cache=cache,
+                    scorer_key=scorer_key,
+                    skip_missing=a.skip_missing_chips,
+                    stats=stats,
+                    resolver=resolver,
+                    drop_log=drop_log,
+                    apply_render_drop_to_teacher=resolver.active,
+                )
+            )
+
+    # Pollution stop-rule (LOCKED): abort if re-render drops exceed threshold.
+    n_render_ok = int(stats.get("render_ok", 0))
+    n_render_drop = int(stats.get("render_drop", 0))
+    n_render_total = n_render_ok + n_render_drop
+    drop_pct = (100.0 * n_render_drop / n_render_total) if n_render_total else 0.0
+    render_drop_report = {
+        "n_frames_attempted": n_render_total,
+        "n_render_ok": n_render_ok,
+        "n_render_drop": n_render_drop,
+        "drop_pct": round(drop_pct, 4),
+        "stop_pct": a.render_drop_stop_pct,
+        "n_anchors_with_drop": len(drop_log),
+        "drop_reasons": {
+            k.split("render_drop:", 1)[-1]: int(v)
+            for k, v in stats.items()
+            if str(k).startswith("render_drop:")
+        },
+        "anchors_with_drop_sample": drop_log[:50],
+    }
+    if (
+        resolver.active
+        and not a.teacher_only
+        and n_render_total > 0
+        and drop_pct > a.render_drop_stop_pct
+    ):
+        (out_dir / "render_drop_report.json").write_text(
+            json.dumps(render_drop_report, indent=2)
+        )
+        raise SystemExit(
+            f"POLLUTION STOP-RULE: re-render drops {drop_pct:.3f}% "
+            f"({n_render_drop}/{n_render_total} frames) exceed "
+            f"--render-drop-stop-pct={a.render_drop_stop_pct}. "
+            f"Refusing to ship gate-2 numbers. See {out_dir}/render_drop_report.json"
         )
 
     # ---- gate 2 ----
-    ceiling = pairwise_ceiling(per_rep_maps, ref_by_sf, strat_w)
     svt_per_rep = []
     pooled_rows: list[dict] = []
     if not a.teacher_only:
-        for idx, km in enumerate(per_rep_maps):
+        for idx, km in enumerate(svt_maps):
             rows = student_teacher_rows(km, ref_by_sf)
             pooled_rows.extend(rows)
             svt_per_rep.append({"rep": idx + 1, **student_vs_teacher(rows, strat_w)})
@@ -802,13 +1144,18 @@ def main() -> int:
         "student_vs_teacher_pooled": student_vs_teacher(pooled_rows, strat_w)
         if pooled_rows
         else None,
+        "render_drop": render_drop_report,
         "known_quirk_note": (
             "L1 scan-state counts differ per rep (230/236/239 of 244 groups); "
             "pairwise ceiling uses the decoded intersection, per-pair denominators "
-            "+ missing sfs reported."
+            "+ missing sfs reported. Teacher ceiling uses full banked frame sets; "
+            "student-vs-teacher drops re-render failures from both pipelines."
         ),
     }
     (out_dir / "gate2_agreement.json").write_text(json.dumps(gate2, indent=2))
+    (out_dir / "render_drop_report.json").write_text(
+        json.dumps(render_drop_report, indent=2)
+    )
 
     # ---- gate 1 (self-repro) ----
     gate1 = None
@@ -825,6 +1172,7 @@ def main() -> int:
             vexcel_ceiling=vexcel_ceiling,
             scorer=scorer,
             skip_missing=a.skip_missing_chips,
+            resolver=resolver,
         )
         self_repro_ok = ok
         # Report the ACTUAL fraction, not 1.0-or-None, so a near-miss keeps its
@@ -849,6 +1197,22 @@ def main() -> int:
             return [_jsonable(x) for x in v]
         return v
 
+    if resolver.active:
+        chip_geometry_note = (
+            f"student chips re-rendered at {a.geometry_version} draw_marker=False "
+            f"(nomarker) from banked GeoTIFF sources via ensure_single_target_review_png; "
+            f"chip_targets={a.chip_targets}; render drops applied to both pipelines "
+            f"({n_render_drop}/{n_render_total} frames = {drop_pct:.3f}%). "
+            "Teacher ceiling uses full banked frame sets."
+        )
+    else:
+        chip_geometry_note = (
+            "NO student re-render (identity path / --no-student-rerender / "
+            "--teacher-only). Banked chip_path files are chip_geom_v1_banked96; "
+            "student heads were trained on chip_geom_v2_tight12 nomarker — any "
+            "student-vs-teacher number under this path is OOD and not a clean gate."
+        )
+
     provenance = {
         "git_rev": _git_rev(),
         "args": {k: _jsonable(v) for k, v in vars(a).items()},
@@ -868,13 +1232,16 @@ def main() -> int:
         "leakage_drop_applied": leakage is not None,
         "leakage_drop": leakage,
         "walk_stats": dict(stats),
-        "chip_geometry_warning": (
-            "banked chip_path files are chip_geom_v1_banked96 + draw_marker=True; the "
-            "student heads were trained on chip_geom_v2_tight12 marker-free crops. A "
-            "real-GPU run scores geometry-v1 pixels through _resolve_chip_path (identity "
-            "today). A geometry-v2 re-render adapter must land before the gate-2 number "
-            "is read as a clean fidelity result. CPU tests inject a fake scorer (unaffected)."
-        ),
+        "ceiling_walk_stats": dict(ceiling_stats),
+        "student_rerender_active": resolver.active,
+        "geometry_version": a.geometry_version if resolver.active else None,
+        "chip_targets": str(a.chip_targets) if resolver.active else None,
+        "render_drop": render_drop_report,
+        "chip_geometry_note": chip_geometry_note,
+        # keep the old key name so prior consumers still see a string
+        "chip_geometry_warning": chip_geometry_note
+        if not resolver.active
+        else None,
     }
     (out_dir / "provenance.json").write_text(json.dumps(provenance, indent=2))
 
@@ -885,6 +1252,10 @@ def main() -> int:
     if gate1 is not None:
         print(f"gate1 self-repro pass={self_repro_ok} (mismatches={gate1['n_mismatches']})")
     print(f"ceiling spread: {ceiling['spread']}")
+    print(
+        f"render drops: {n_render_drop}/{n_render_total} ({drop_pct:.3f}%) "
+        f"rerender_active={resolver.active}"
+    )
     # gate 1 is the only hard exit signal (reproducibility must hold by construction).
     return 0 if self_repro_ok else 3
 
@@ -932,7 +1303,21 @@ def _write_summary(out_dir: Path, gate1, gate2, provenance, *, teacher_only: boo
                 f"n_decoded={pooled['n_decoded']})"
             )
             L.append(f"- R3 unusable split: {pooled['r3_unusable_split']}")
-    L += ["", "## Chip-geometry caveat", "", provenance["chip_geometry_warning"], ""]
+        rd = gate2.get("render_drop") or {}
+        if rd:
+            L.append(
+                f"- render drops: {rd.get('n_render_drop')}/{rd.get('n_frames_attempted')} "
+                f"({rd.get('drop_pct')}%), anchors_with_drop={rd.get('n_anchors_with_drop')}"
+            )
+    L += [
+        "",
+        "## Chip geometry (student input contract)",
+        "",
+        provenance.get("chip_geometry_note")
+        or provenance.get("chip_geometry_warning")
+        or "(none)",
+        "",
+    ]
     L += [
         "## Gate 3 — held-out chip-level agreement (lifted, not recomputed)",
         "",
