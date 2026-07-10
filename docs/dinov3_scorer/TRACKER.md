@@ -116,6 +116,16 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
 
 ## Progress log
 
+- 2026-07-10 — **Gate-2 residual audit (a): hard-example strips + counterfactual
+  on `done_appears`.** Script
+  `scripts/validation/hard_example_strips_gate2.py`; DATA
+  [DATA-hard-example-strips-done-appears-2026-07-10](DATA-hard-example-strips-done-appears-2026-07-10.md).
+  Oracle frame repair (floor): baseline 0.45 → fix FP 0.58 → FP+unusable
+  **0.59** (still −18 pp vs ceiling 0.77); FP+FN+unusable **0.80** clears
+  ceiling; clean FP-only 0.69, clean FP+FN 0.87. Unusable forced-decide alone
+  +1 pp on this stratum. Residual = bidirectional PA confusion, not unusable
+  alone. HTML strips (28 units) under
+  `~/zasolar_data/geid_temporal/fidelity_gate_20260710/hard_examples_done_appears_floor/`.
 - 2026-07-10 — **Slice 6 DONE (gate executed).** Gate-1/2 full run on local
   RTX 4070 (zero API spend): teacher ceiling re-decoded from banked rep1–3;
   student re-scored after LOCKED `chip_geom_v2_tight12` nomarker re-render
