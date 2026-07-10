@@ -1,0 +1,53 @@
+{
+  "counts": {
+    "b0_bridge": 150,
+    "grid_zone": {
+      "cbd": 25,
+      "industrial": 58,
+      "residential": 299
+    },
+    "sample_total": 1200,
+    "stage1_core": 400,
+    "stage2_precision": 800
+  },
+  "created_date": "2026-07-10",
+  "file_sha256": {
+    "grid_zone_lookup.csv": "ad601c41943ffe61c4e765b3170e53b9c168daa9efda1d4e057866dfbc090fd5",
+    "sample_manifest.csv": "3c218e5704343252a25bc0d8d4fa69592cfdb45b6cebfba8dbd89e9cab6304b0",
+    "target_anchors_96m.csv": "26e61dc5b6f0b243fe4dc83388df9f076aa38b477f44ac50d1ab116e02bf1154"
+  },
+  "geometry": {
+    "arms_m": [
+      24,
+      48,
+      96
+    ],
+    "source_extent_m": 96.0,
+    "target_centered": true
+  },
+  "issue": 25,
+  "model": "gemini-3.1-flash-lite",
+  "seed": 20260710,
+  "source_snapshots": {
+    "coj_path": "/home/gaosh/zasolar_data/geid_temporal/issue25_teacher_geometry_20260710/source_cache/coj_zoning_active_2017.gpkg",
+    "coj_sha256": "32705a6edd43c900aaa792328b9f4490fe1cc23c92b996b708bed751f9012a6b",
+    "osm_path": "/home/gaosh/zasolar_data/geid_temporal/issue25_teacher_geometry_20260710/source_cache/osm_jhb_landuse_industrial_commercial_retail.gpkg",
+    "osm_sha256": "7a3ce9310317dc2d8b03e1aedb725de8d731a36b2a5dc061b21c87c75659e656"
+  },
+  "zone_rule": {
+    "coj_zoning_url": "https://services2.arcgis.com/160O4zMRy3tavX3J/arcgis/rest/services/Zoning/FeatureServer/0",
+    "osm_query": {
+      "landuse": [
+        "industrial",
+        "commercial",
+        "retail"
+      ]
+    },
+    "precedence": [
+      "cbd25_spatial_crosswalk",
+      "osm_industrial_share_ge_0.03",
+      "coj_zoning_industrial_n3_purity_ge_0.70",
+      "residential_fallback"
+    ]
+  }
+}

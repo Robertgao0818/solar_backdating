@@ -58,6 +58,10 @@ The storyline plan already conditions on this: "verdict 以 banked96 几何为�
    Stage 2 (precision): winning arm × 5 reps on +800 further targets
    (total 1,200) for per-stratum CIs. Counts adjustable until manifest
    commit, frozen after.
+   **Frozen 2026-07-10:** [`issue25_manifest_20260710/`](issue25_manifest_20260710/)
+   contains the 382-grid lookup, 1,200-target balanced manifest, exact
+   target-centred 96 m anchors, source-snapshot hashes, and the 150-target B0
+   subset. Every area-bucket × zone cell has n=100 across the full sample.
 5. **Scoring.** Production adaptive sequence scan per rep, 5 independent
    reps per (target, arm). CoJ 2023 municipal aerial (true-date, independent
    provider, JHB) scored once per target as a same-epoch **presence
@@ -90,7 +94,7 @@ The storyline plan already conditions on this: "verdict 以 banked96 几何为�
 
 ## Acceptance criteria
 
-- [ ] Sample manifest + grid→zone lookup committed (freeze point)
+- [x] Sample manifest + grid→zone lookup committed (freeze point)
 - [x] 20-target smoke calibration report; model frozen
 - [ ] Stage-1 per-arm × per-bucket self-consistency table
 - [ ] B0 model-bridge table (model effect isolated from geometry effect)
