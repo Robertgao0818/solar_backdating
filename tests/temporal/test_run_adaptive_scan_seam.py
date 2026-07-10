@@ -218,6 +218,48 @@ def test_execute_round_real_routes_through_injected_scorer(tmp_path: Path, monke
     assert all(r.confidence == 0.9 for r in returned.results)
 
 
+def test_execute_round_real_scores_the_requested_review_render(tmp_path: Path, monkeypatch) -> None:
+    """Geometry pilots can replace the legacy full-chip PNG at the public seam."""
+
+    def fake_download(anchor, *, capture_date, version, zoom_ladder, output_root, provider="TM", vintage_check=None):
+        p = tmp_path / f"chip_{capture_date}.tif"
+        p.write_bytes(b"TIF")
+        return _ok_download(p)
+
+    monkeypatch.setattr(_gehi_download, "download_chip_with_zoom_ladder", fake_download)
+
+    rendered: list[tuple[Path, str]] = []
+
+    def render_for_arm(path: Path, anchor: dict[str, str]) -> Path:
+        out = path.with_name(f"{path.stem}.A24.png")
+        out.write_bytes(b"PNG")
+        rendered.append((path, anchor["anchor_id"]))
+        return out
+
+    scorer = _FakeScorer(pv_present=True, quality_flag="usable", decision_source="stubscorer_ok")
+    rnd = Round(
+        round_id=1,
+        round_type="initial",
+        window_start_date=None,
+        window_end_date=None,
+        picks=[Pick(chip_index=1, capture_date="2020-01-01", version=100, requested_zoom=20)],
+    )
+
+    execute_round_real(
+        rnd,
+        {"anchor_id": "A1", "region_key": "johannesburg"},
+        AdaptiveScanConfig(gemini_max_dates_per_call=5),
+        chips_dir=tmp_path / "chips",
+        audit_dir=tmp_path / "audit",
+        gemini_config=object(),
+        scorer=scorer,
+        review_renderer=render_for_arm,
+    )
+
+    assert rendered == [(tmp_path / "chip_2020-01-01.tif", "A1")]
+    assert str(scorer.batch_calls[0][0].chip_path).endswith(".A24.png")
+
+
 # ---------------------------------------------------------------------------
 # 2. Injected scorer verdicts reach the persisted scan_state (round loop).
 # ---------------------------------------------------------------------------

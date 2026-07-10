@@ -310,8 +310,55 @@ def parse_args() -> argparse.Namespace:
         "off because Wayback's availability lists layer-release dates, not "
         "captured dates, so the completeness intersection would be empty.",
     )
+    parser.add_argument(
+        "--review-extent-m",
+        type=float,
+        default=None,
+        help="Render a target-centred, marked review crop with this fixed metre "
+        "extent from the downloaded source raster. Default: score the legacy "
+        "full-chip review PNG. Used by ISSUE-25 A24/A48/A96.",
+    )
     add_catalog_cache_cli_args(parser)
     return parser.parse_args()
+
+
+def make_fixed_extent_review_renderer(
+    extent_m: float,
+) -> Callable[[Path, Mapping[str, str]], Path]:
+    """Build the ISSUE-25 target-centred teacher renderer for one frozen arm."""
+    if extent_m <= 0:
+        raise ValueError("review extent must be positive")
+
+    def render(image_path: Path, anchor: Mapping[str, str]) -> Path:
+        from scripts.temporal.gehi_common import (
+            ReviewTargetMarker,
+            ensure_single_target_review_png,
+        )
+
+        source_extent_m = float(anchor.get("chip_size_m") or 96.0)
+        if extent_m > source_extent_m:
+            raise ValueError(
+                f"review extent {extent_m:g}m exceeds source extent "
+                f"{source_extent_m:g}m for {anchor.get('anchor_id', '<unknown>')}"
+            )
+        marker = ReviewTargetMarker(
+            target_id=str(anchor.get("anchor_id", "target")),
+            target_label=str(anchor.get("target_label") or "T01"),
+            offset_x_m=float(anchor.get("target_offset_x_m") or 0.0),
+            offset_y_m=float(anchor.get("target_offset_y_m") or 0.0),
+            search_radius_m=float(anchor.get("search_radius_m") or 10.0),
+        )
+        return ensure_single_target_review_png(
+            image_path,
+            marker,
+            chip_size_m=source_extent_m,
+            crop_context_multiplier=0.01,
+            min_crop_size_m=float(extent_m),
+            min_output_px=256,
+            draw_marker=True,
+        )
+
+    return render
 
 
 def read_anchors(path: Path, limit: int | None) -> list[dict[str, str]]:
@@ -612,6 +659,7 @@ def execute_round_real(
     overwrite_chips: bool = False,
     min_cache_zoom: int | None = None,
     provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
+    review_renderer: Callable[[Path, Mapping[str, str]], Path] | None = None,
 ) -> Round:
     """Download chips for each pick (zoom ladder), batch-score via the injected
     scorer, return Round with results.
@@ -662,7 +710,14 @@ def execute_round_real(
             provenance_writer(build_chip_provenance(outcome, anchor, config.provider))
 
     download_by_index: dict[int, object] = {pick.chip_index: outcome for pick, outcome in download_outcomes}
-    score_picks, batch_to_original = _build_batch_picks_with_remap(download_outcomes, ensure_review_png)
+    if review_renderer is None:
+        review_asset_resolver = ensure_review_png
+    else:
+        def review_asset_resolver(path: Path) -> Path:
+            return review_renderer(path, anchor)
+    score_picks, batch_to_original = _build_batch_picks_with_remap(
+        download_outcomes, review_asset_resolver
+    )
 
     routing_salt = None
     if routing_salt_mode != "none":
@@ -811,6 +866,7 @@ def run_one_anchor(
     catalog_cache: CatalogCache | None = None,
     catalog_force_refresh: bool = False,
     catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
+    review_renderer: Callable[[Path, Mapping[str, str]], Path] | None = None,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
     state_path = state_path_for(anchor_id, scan_states_dir)
@@ -966,6 +1022,8 @@ def run_one_anchor(
                 issue18_kwargs["min_cache_zoom"] = min_cache_zoom
             if provenance_writer is not None:
                 issue18_kwargs["provenance_writer"] = provenance_writer
+            if review_renderer is not None:
+                issue18_kwargs["review_renderer"] = review_renderer
             rnd = execute_round_real(
                 rnd, anchor, config,
                 chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=round_config,
@@ -1189,6 +1247,11 @@ def _exit_code_for_states(states: Iterable[ScanState]) -> int:
 
 def main() -> None:
     args = parse_args()
+    review_renderer = (
+        make_fixed_extent_review_renderer(args.review_extent_m)
+        if args.review_extent_m is not None
+        else None
+    )
     config = load_config(args.config)
     config_overrides: dict[str, object] = {"provider": args.provider}
     if args.provider == "Wayback":
@@ -1323,6 +1386,7 @@ def main() -> None:
                 catalog_cache=catalog_cache,
                 catalog_force_refresh=args.force_catalog_refresh,
                 catalog_max_age_days=args.catalog_max_age_days,
+                review_renderer=review_renderer,
             )
         except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
             state = _record_orchestrator_failure(anchor, args.scan_states_dir, exc)
