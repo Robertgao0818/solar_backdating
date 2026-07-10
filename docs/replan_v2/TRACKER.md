@@ -52,6 +52,17 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 23 | [GEHI displacement + tight12 contamination audit](DATA-gehi-displacement-audit-2026-07-06.md) | 3 | done | 19 |
 | 24 | [Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock registration](ISSUE-24-learned-feature-matching.md) | 3 | done — KILL overturned → GO; Step-6 probe executed (characterization, 91.3% validated) | — |
 | 25 | [Teacher chip-geometry & stability pilot (from-scratch 24/48/96, 5-rep, CoJ channel)](ISSUE-25-teacher-geometry-stability-pilot.md) | 2/4 | ready-for-human | — |
+| 26 | [Census-date scan-window cutoff (download + decoder semantics)](ISSUE-26-census-cutoff-scan-window.md) | 4 | ready-for-agent | — |
+
+Slice 26 note (2026-07-10): three-agent audit confirmed the scan's
+`catalog_max_date` is a global static (2025-12-31) never clipped by census
+vintage, and Round-1 planning anchors on the newest frame. Pre-patch
+contamination: 9,308 anchors with post-flight `earliest_present` (cleaned
+post-hoc by the 2026-06-04 report-layer clamp); unrepaired completeness
+loss: 371 nonmonotonic-killed + 1,023 clamp_inverted anchors (1,820
+polygons demoted to undated). Fix = per-anchor catalog cutoff at
+census + 2-3 reference frames AND post-census frames become
+reference-only (excluded from `is_nonmonotonic` / changepoint evidence).
 
 Slice 24 note (2026-07-08, updated 2026-07-09): opened to replace the
 DINO-coarse dense-token matcher (killed same day — best 39.4% recovery on
