@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from scripts.validation.issue25_stage_c import (
+    choose_stage2_winner,
+    pairwise_agreement,
     prepare_stage1_anchors,
     validate_authenticated_preflight,
 )
@@ -115,3 +117,28 @@ def test_validate_authenticated_preflight_rejects_empty_response(tmp_path: Path)
 
     with pytest.raises(ValueError, match="authenticated preflight audit failed"):
         validate_authenticated_preflight(tmp_path, "gemini-3.1-flash-lite")
+
+
+def test_pairwise_agreement_uses_all_ten_pairs_per_five_rep_target() -> None:
+    stats = pairwise_agreement(
+        {
+            "t1": ["A", "A", "A", "A", "A"],
+            "t2": ["A", "A", "B", "B", "B"],
+        }
+    )
+
+    # t1: 10/10; t2: C(2,2)+C(3,2)=4/10.
+    assert stats == {"agreement": 0.7, "matching_pairs": 14, "n_pairs": 20, "n_targets": 2}
+
+
+def test_choose_stage2_winner_prefers_large_safe_small_bucket_leader() -> None:
+    winner = choose_stage2_winner(
+        {
+            "A24": {"small": {"agreement": 0.76}, "large": {"agreement": 0.80}},
+            "A48": {"small": {"agreement": 0.78}, "large": {"agreement": 0.79}},
+            "A96": {"small": {"agreement": 0.74}, "large": {"agreement": 0.82}},
+        }
+    )
+
+    assert winner["arm"] == "A24"
+    assert winner["large_safety_floor"] == pytest.approx(0.7982)
