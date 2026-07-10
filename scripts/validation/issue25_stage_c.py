@@ -134,6 +134,39 @@ def prepare_stage2_anchors(
     )
 
 
+def prepare_b0_groups(
+    sample_manifest_path: Path,
+    group_anchors_path: Path,
+    output_path: Path,
+    *,
+    expected_targets: int = 150,
+) -> int:
+    """Freeze unique legacy group anchors for the 150-target B0 bridge."""
+    sample = _read_csv(sample_manifest_path)
+    selected = [row for row in sample if row.get("b0_bridge") == "True"]
+    if len(selected) != expected_targets:
+        raise ValueError(
+            f"expected {expected_targets} B0 targets, found {len(selected)}"
+        )
+    group_ids = {row["chip_id"] for row in selected}
+    group_rows = [
+        row
+        for row in _read_csv(group_anchors_path)
+        if row.get("anchor_id") in group_ids
+    ]
+    found = {row["anchor_id"] for row in group_rows}
+    missing = sorted(group_ids - found)
+    if missing:
+        raise ValueError(f"missing B0 legacy group anchors: {missing[:5]}")
+    group_rows.sort(key=lambda row: row["anchor_id"])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(group_rows[0]))
+        writer.writeheader()
+        writer.writerows(group_rows)
+    return len(group_rows)
+
+
 def validate_authenticated_preflight(root: Path, model: str) -> dict[str, int]:
     """Fail closed unless the bounded real call returned non-empty valid schema."""
     audit_rows = []
@@ -331,6 +364,11 @@ def main() -> None:
     analyze.add_argument("--anchors", type=Path, required=True)
     analyze.add_argument("--output", type=Path, required=True)
     analyze.add_argument("--model", default="gemini-3.1-flash-lite")
+    prepare_b0 = sub.add_parser("prepare-b0")
+    prepare_b0.add_argument("--sample-manifest", type=Path, required=True)
+    prepare_b0.add_argument("--group-anchors", type=Path, required=True)
+    prepare_b0.add_argument("--output", type=Path, required=True)
+    prepare_b0.add_argument("--expected-targets", type=int, default=150)
     args = parser.parse_args()
 
     if args.command == "prepare-stage1":
@@ -368,6 +406,14 @@ def main() -> None:
             f"Stage-1 winner={winner['arm']} small={winner['small_agreement']:.4f} "
             f"large={winner['large_agreement']:.4f} -> {args.output}"
         )
+    elif args.command == "prepare-b0":
+        count = prepare_b0_groups(
+            args.sample_manifest,
+            args.group_anchors,
+            args.output,
+            expected_targets=args.expected_targets,
+        )
+        print(f"Wrote {count} unique ISSUE-25 B0 group anchors -> {args.output}")
 
 
 if __name__ == "__main__":

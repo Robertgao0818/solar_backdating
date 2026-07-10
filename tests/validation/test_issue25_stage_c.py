@@ -9,6 +9,7 @@ import pytest
 from scripts.validation.issue25_stage_c import (
     choose_stage2_winner,
     pairwise_agreement,
+    prepare_b0_groups,
     prepare_stage1_anchors,
     prepare_stage2_anchors,
     validate_authenticated_preflight,
@@ -97,6 +98,33 @@ def test_prepare_stage2_anchors_selects_precision_extension(tmp_path: Path) -> N
     assert count == 1
     with output.open() as fh:
         assert next(csv.DictReader(fh))["anchor_id"] == "t2"
+
+
+def test_prepare_b0_groups_freezes_unique_legacy_group_subset(tmp_path: Path) -> None:
+    sample = tmp_path / "sample.csv"
+    groups = tmp_path / "groups.csv"
+    output = tmp_path / "b0.csv"
+    _write_csv(
+        sample,
+        [
+            {"anchor_id": "t1", "chip_id": "g1", "b0_bridge": "True"},
+            {"anchor_id": "t2", "chip_id": "g1", "b0_bridge": "True"},
+            {"anchor_id": "t3", "chip_id": "g2", "b0_bridge": "False"},
+        ],
+    )
+    _write_csv(
+        groups,
+        [
+            {"anchor_id": "g1", "chip_size_m": 96},
+            {"anchor_id": "g2", "chip_size_m": 96},
+        ],
+    )
+
+    count = prepare_b0_groups(sample, groups, output, expected_targets=2)
+
+    assert count == 1
+    with output.open() as fh:
+        assert [row["anchor_id"] for row in csv.DictReader(fh)] == ["g1"]
 
 
 def test_validate_authenticated_preflight_requires_schema_success_and_model(tmp_path: Path) -> None:
