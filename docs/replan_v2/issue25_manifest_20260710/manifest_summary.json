@@ -7,6 +7,7 @@
       "residential": 299
     },
     "sample_total": 1200,
+    "smoke20": 20,
     "stage1_core": 400,
     "stage2_precision": 800
   },
@@ -14,6 +15,7 @@
   "file_sha256": {
     "grid_zone_lookup.csv": "ad601c41943ffe61c4e765b3170e53b9c168daa9efda1d4e057866dfbc090fd5",
     "sample_manifest.csv": "3c218e5704343252a25bc0d8d4fa69592cfdb45b6cebfba8dbd89e9cab6304b0",
+    "smoke20_anchors_96m.csv": "18955c67f6ac30e9dda5308fe16e11f1df82d94587d8232ae6e5edd4ec6ad5d9",
     "target_anchors_96m.csv": "26e61dc5b6f0b243fe4dc83388df9f076aa38b477f44ac50d1ab116e02bf1154"
   },
   "geometry": {

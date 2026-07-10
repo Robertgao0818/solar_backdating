@@ -9,6 +9,7 @@ from scripts.validation.issue25_manifest import (
     build_grid_zone_lookup,
     compute_coj_zoning_evidence,
     compute_osm_industrial_share,
+    select_issue25_smoke,
     select_issue25_targets,
 )
 
@@ -170,4 +171,45 @@ def test_coj_adapter_counts_only_residential_and_industrial_target_evidence() ->
     assert evidence == {
         "JNB0001": {"industrial": 1, "residential": 1},
         "JNB0002": {"industrial": 1, "residential": 0},
+    }
+
+
+def test_smoke20_covers_every_stratum_and_only_uses_stage1_targets() -> None:
+    rows = [
+        {
+            "anchor_id": f"{bucket}-{zone}-{index}",
+            "area_bucket": bucket,
+            "zone": zone,
+            "sample_stage": "stage1_core",
+        }
+        for bucket in AREA_BUCKETS
+        for zone in ZONES
+        for index in range(40)
+    ]
+
+    smoke = select_issue25_smoke(rows, seed=20260710)
+
+    counts = {
+        (bucket, zone): sum(
+            row["area_bucket"] == bucket and row["zone"] == zone for row in smoke
+        )
+        for bucket in AREA_BUCKETS
+        for zone in ZONES
+    }
+    assert len(smoke) == 20
+    assert len({row["anchor_id"] for row in smoke}) == 20
+    assert all(row["sample_stage"] == "stage1_core" for row in smoke)
+    assert counts == {
+        ("a_xs_lt15", "cbd"): 2,
+        ("a_xs_lt15", "industrial"): 2,
+        ("a_xs_lt15", "residential"): 3,
+        ("b_sm_15_40", "cbd"): 2,
+        ("b_sm_15_40", "industrial"): 2,
+        ("b_sm_15_40", "residential"): 3,
+        ("c_md_40_100", "cbd"): 1,
+        ("c_md_40_100", "industrial"): 1,
+        ("c_md_40_100", "residential"): 1,
+        ("d_lg_ge100", "cbd"): 1,
+        ("d_lg_ge100", "industrial"): 1,
+        ("d_lg_ge100", "residential"): 1,
     }

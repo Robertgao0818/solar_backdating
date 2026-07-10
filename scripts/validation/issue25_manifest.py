@@ -57,6 +57,19 @@ _B0_QUOTA = {
     ("d_lg_ge100", "industrial"): 8,
     ("d_lg_ge100", "residential"): 5,
 }
+_SMOKE_QUOTA = {
+    (bucket, zone): (
+        3
+        if (bucket, zone) in {
+            ("a_xs_lt15", "residential"),
+            ("b_sm_15_40", "residential"),
+        }
+        else 2
+        if bucket in {"a_xs_lt15", "b_sm_15_40"}
+        else 1
+    )
+    for bucket, zone in _STRATA
+}
 
 
 def _area_bucket(area_m2: float) -> str:
@@ -303,6 +316,40 @@ def select_issue25_targets(
     )
 
 
+def select_issue25_smoke(
+    sample_rows: Iterable[Mapping[str, object]],
+    *,
+    seed: int = 20260710,
+) -> list[dict[str, object]]:
+    """Select the frozen 20-target, all-strata Stage-B API smoke subset."""
+
+    by_stratum: dict[tuple[str, str], list[dict[str, object]]] = {
+        stratum: [] for stratum in _STRATA
+    }
+    for source_row in sample_rows:
+        row = dict(source_row)
+        if row.get("sample_stage") != "stage1_core":
+            continue
+        stratum = (str(row["area_bucket"]), str(row["zone"]))
+        if stratum in by_stratum:
+            by_stratum[stratum].append(row)
+
+    out: list[dict[str, object]] = []
+    for stratum in _STRATA:
+        quota = _SMOKE_QUOTA[stratum]
+        pool = sorted(
+            by_stratum[stratum],
+            key=lambda row: _hash_rank(seed, "smoke20", str(row["anchor_id"])),
+        )
+        if len(pool) < quota:
+            raise ValueError(
+                f"stage1 stratum {stratum!r} has {len(pool)} targets, "
+                f"needs {quota} for smoke20"
+            )
+        out.extend(pool[:quota])
+    return out
+
+
 def build_target_centered_anchors(
     rows: Iterable[Mapping[str, object]],
     *,
@@ -539,14 +586,18 @@ def main() -> int:
         seed=args.seed,
     )
     anchor_rows = build_target_centered_anchors(sample_rows)
+    smoke_rows = select_issue25_smoke(sample_rows, seed=args.seed)
+    smoke_anchor_rows = build_target_centered_anchors(smoke_rows)
 
     zone_fields, sample_fields, anchor_fields = _manifest_fields()
     zone_path = args.out_dir / "grid_zone_lookup.csv"
     sample_path = args.out_dir / "sample_manifest.csv"
     anchor_path = args.out_dir / "target_anchors_96m.csv"
+    smoke_anchor_path = args.out_dir / "smoke20_anchors_96m.csv"
     _write_csv(zone_path, zone_rows, zone_fields)
     _write_csv(sample_path, sample_rows, sample_fields)
     _write_csv(anchor_path, anchor_rows, anchor_fields)
+    _write_csv(smoke_anchor_path, smoke_anchor_rows, anchor_fields)
 
     summary = {
         "issue": 25,
@@ -584,11 +635,13 @@ def main() -> int:
                 row["sample_stage"] == "stage2_precision" for row in sample_rows
             ),
             "b0_bridge": sum(bool(row["b0_bridge"]) for row in sample_rows),
+            "smoke20": len(smoke_anchor_rows),
         },
         "file_sha256": {
             zone_path.name: _sha256_file(zone_path),
             sample_path.name: _sha256_file(sample_path),
             anchor_path.name: _sha256_file(anchor_path),
+            smoke_anchor_path.name: _sha256_file(smoke_anchor_path),
         },
     }
     summary_path = args.out_dir / "manifest_summary.json"
