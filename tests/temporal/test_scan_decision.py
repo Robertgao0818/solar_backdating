@@ -18,6 +18,7 @@ from scripts.temporal.scan_decision import (
     decide_next_action,
     find_transitions,
     is_nonmonotonic,
+    select_evenly_spaced_picks,
 )
 from scripts.temporal.scan_state import (
     Pick,
@@ -99,6 +100,17 @@ def test_helper_find_transitions_single_pair() -> None:
     assert len(transitions) == 1
     assert transitions[0][0].capture_date == "2020-06-15"
     assert transitions[0][1].capture_date == "2022-06-15"
+
+
+def test_evenly_spaced_picks_preserve_imagery_provider() -> None:
+    vintages = [
+        VintageEntry(capture_date="2020-01-01", version=1, provider="TM"),
+        VintageEntry(capture_date="2021-01-01", version=2, provider="Wayback"),
+    ]
+
+    picks = select_evenly_spaced_picks(vintages, target_count=5, requested_zoom=20)
+
+    assert [pick.provider for pick in picks] == ["TM", "Wayback"]
 
 
 def test_nonmonotonic_ignores_post_census_phantom_absent() -> None:

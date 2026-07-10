@@ -317,6 +317,8 @@ def target_crop_review_png_path(
     min_crop_size_m: float,
     min_output_px: int,
     draw_marker: bool = True,
+    bbox_width_m: float | None = None,
+    bbox_height_m: float | None = None,
 ) -> Path:
     """Return the deterministic single-target crop review PNG cache path.
 
@@ -344,6 +346,13 @@ def target_crop_review_png_path(
             ),
         },
     }
+    if bbox_width_m is not None or bbox_height_m is not None:
+        payload["bbox_width_m"] = (
+            None if bbox_width_m is None else round(float(bbox_width_m), 6)
+        )
+        payload["bbox_height_m"] = (
+            None if bbox_height_m is None else round(float(bbox_height_m), 6)
+        )
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     token = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
     safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", target_marker.target_label).strip("_") or "target"
@@ -362,6 +371,8 @@ def _draw_single_target_marker_at(
     y: float,
     target_label: str,
     search_radius_px: float | None,
+    bbox_width_px: float | None = None,
+    bbox_height_px: float | None = None,
 ) -> None:
     from PIL import ImageDraw, ImageFont
 
@@ -376,12 +387,35 @@ def _draw_single_target_marker_at(
     ring_r = min(ring_r, max(6, short // 2 - 2))
     cross_r = max(5, int(round(short * 0.045)))
 
-    for offset in range(3, 0, -1):
-        r = ring_r + offset
-        draw.ellipse([px - r, py - r, px + r, py + r], outline=(0, 0, 0))
-    for offset in range(2):
-        r = ring_r - offset
-        draw.ellipse([px - r, py - r, px + r, py + r], outline=color)
+    has_bbox = (
+        bbox_width_px is not None
+        and bbox_height_px is not None
+        and bbox_width_px > 0
+        and bbox_height_px > 0
+    )
+    if has_bbox:
+        half_w = max(3, int(round(float(bbox_width_px) / 2.0)))
+        half_h = max(3, int(round(float(bbox_height_px) / 2.0)))
+        rect = [px - half_w, py - half_h, px + half_w, py + half_h]
+        for offset in range(3, 0, -1):
+            draw.rectangle(
+                [rect[0] - offset, rect[1] - offset, rect[2] + offset, rect[3] + offset],
+                outline=(0, 0, 0),
+            )
+        for offset in range(2):
+            draw.rectangle(
+                [rect[0] + offset, rect[1] + offset, rect[2] - offset, rect[3] - offset],
+                outline=color,
+            )
+        aid_r = max(half_w, half_h)
+    else:
+        for offset in range(3, 0, -1):
+            r = ring_r + offset
+            draw.ellipse([px - r, py - r, px + r, py + r], outline=(0, 0, 0))
+        for offset in range(2):
+            r = ring_r - offset
+            draw.ellipse([px - r, py - r, px + r, py + r], outline=color)
+        aid_r = ring_r
     draw.line([px - cross_r, py, px + cross_r, py], fill=(0, 0, 0), width=5)
     draw.line([px, py - cross_r, px, py + cross_r], fill=(0, 0, 0), width=5)
     draw.line([px - cross_r, py, px + cross_r, py], fill=color, width=3)
@@ -391,12 +425,12 @@ def _draw_single_target_marker_at(
     bbox = draw.textbbox((0, 0), label, font=font)
     label_w = bbox[2] - bbox[0] + 8
     label_h = bbox[3] - bbox[1] + 6
-    label_x = px + ring_r + 4
+    label_x = px + aid_r + 4
     if label_x + label_w >= w:
-        label_x = px - ring_r - label_w - 4
-    label_y = py - ring_r - label_h - 3
+        label_x = px - aid_r - label_w - 4
+    label_y = py - aid_r - label_h - 3
     if label_y < 0:
-        label_y = py + ring_r + 3
+        label_y = py + aid_r + 3
     label_x = _clamp_int(label_x, 0, max(0, w - label_w - 1))
     label_y = _clamp_int(label_y, 0, max(0, h - label_h - 1))
     draw.rectangle(
@@ -563,6 +597,8 @@ def ensure_single_target_review_png(
     min_crop_size_m: float = 24.0,
     min_output_px: int = 128,
     draw_marker: bool = True,
+    bbox_width_m: float | None = None,
+    bbox_height_m: float | None = None,
 ) -> Path:
     """Create a target-centered review PNG for single-target sequence scoring.
 
@@ -593,6 +629,8 @@ def ensure_single_target_review_png(
         min_crop_size_m=min_crop_size_m,
         min_output_px=min_output_px,
         draw_marker=draw_marker,
+        bbox_width_m=bbox_width_m,
+        bbox_height_m=bbox_height_m,
     )
     try:
         if (
@@ -643,12 +681,24 @@ def ensure_single_target_review_png(
             local_x = (target_x - left) * scale
             local_y = (target_y - top) * scale
             search_radius_px = short * radius_m / float(chip_size_m) * scale
+            bbox_width_px = (
+                short * float(bbox_width_m) / float(chip_size_m) * scale
+                if bbox_width_m is not None
+                else None
+            )
+            bbox_height_px = (
+                short * float(bbox_height_m) / float(chip_size_m) * scale
+                if bbox_height_m is not None
+                else None
+            )
             _draw_single_target_marker_at(
                 crop,
                 x=local_x,
                 y=local_y,
                 target_label=target_marker.target_label,
                 search_radius_px=search_radius_px,
+                bbox_width_px=bbox_width_px,
+                bbox_height_px=bbox_height_px,
             )
         png_path.parent.mkdir(parents=True, exist_ok=True)
         crop.save(png_path, format="PNG")

@@ -156,6 +156,35 @@ class GehiCommonTests(unittest.TestCase):
                 center = (img.size[0] // 2, img.size[1] // 2)
                 self.assertNotEqual(img.getpixel(center), (30, 30, 30))
 
+    def test_ensure_single_target_review_png_draws_footprint_bbox(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            tif = Path(td) / "chip.tif"
+            Image.new("RGB", (200, 200), (30, 30, 30)).save(tif, format="TIFF")
+            marker = ReviewTargetMarker("target_1", "T01", 0.0, 0.0, 8.0)
+
+            png = ensure_single_target_review_png(
+                tif,
+                marker,
+                chip_size_m=100.0,
+                min_crop_size_m=100.0,
+                min_output_px=128,
+                bbox_width_m=20.0,
+                bbox_height_m=10.0,
+            )
+
+            with Image.open(png) as img:
+                # 20m x 10m on a 100m, 200px chip => bbox corners near
+                # centre +/-20px horizontally and +/-10px vertically.
+                self.assertNotEqual(img.getpixel((80, 90)), (30, 30, 30))
+                self.assertNotEqual(img.getpixel((120, 110)), (30, 30, 30))
+
     @staticmethod
     def _run_result(*, returncode: int = 0, stdout: str = "", stderr: str = "") -> GehiRunResult:
         return GehiRunResult(args=("availability",), returncode=returncode, stdout=stdout, stderr=stderr)

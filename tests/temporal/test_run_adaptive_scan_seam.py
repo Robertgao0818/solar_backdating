@@ -31,6 +31,7 @@ from scripts.temporal import scan_state as scan_state_mod
 from scripts.temporal.gehi_download import DownloadResult
 from scripts.temporal.run_adaptive_scan import (
     VintageCatalog,
+    merge_provider_catalogs,
     execute_round_real,
     run_one_anchor,
 )
@@ -258,6 +259,83 @@ def test_execute_round_real_scores_the_requested_review_render(tmp_path: Path, m
 
     assert rendered == [(tmp_path / "chip_2020-01-01.tif", "A1")]
     assert str(scorer.batch_calls[0][0].chip_path).endswith(".A24.png")
+
+
+def test_execute_round_real_routes_merged_picks_to_provider_caches(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[str, Path]] = []
+    checks: list[tuple[str, bool]] = []
+
+    def fake_download(anchor, *, capture_date, version, zoom_ladder, output_root, provider="TM", vintage_check=None):
+        calls.append((provider, output_root))
+        checks.append((provider, vintage_check(20, capture_date)))
+        p = tmp_path / f"{provider}_{capture_date}.tif"
+        p.write_bytes(b"TIF")
+        return _ok_download(p)
+
+    monkeypatch.setattr(_gehi_download, "download_chip_with_zoom_ladder", fake_download)
+    monkeypatch.setattr(_gehi_common, "ensure_review_png", lambda p: Path(str(p)).with_suffix(".png"))
+
+    scorer = _FakeScorer(pv_present=True, quality_flag="usable", decision_source="stubscorer_ok")
+    rnd = Round(
+        round_id=1,
+        round_type="initial",
+        window_start_date=None,
+        window_end_date=None,
+        picks=[
+            Pick(chip_index=1, capture_date="2020-01-01", version=100, requested_zoom=20, provider="TM"),
+            Pick(chip_index=2, capture_date="2021-01-01", version=101, requested_zoom=20, provider="Wayback"),
+        ],
+    )
+
+    returned = execute_round_real(
+        rnd,
+        {"anchor_id": "A1", "region_key": "johannesburg"},
+        AdaptiveScanConfig(provider="Merged", gemini_max_dates_per_call=5),
+        chips_dir=tmp_path / "unused",
+        provider_chips_dirs={"TM": tmp_path / "tm", "Wayback": tmp_path / "wayback"},
+        audit_dir=tmp_path / "audit",
+        gemini_config=object(),
+        scorer=scorer,
+        vintage_check={
+            "TM": lambda _zoom, _date: True,
+            "Wayback": lambda _zoom, _date: False,
+        },
+    )
+
+    assert calls == [("TM", tmp_path / "tm"), ("Wayback", tmp_path / "wayback")]
+    assert checks == [("TM", True), ("Wayback", False)]
+    assert [result.provider for result in returned.results] == ["TM", "Wayback"]
+
+
+def test_merge_provider_catalogs_unions_dates_with_tm_precedence() -> None:
+    tm = VintageCatalog(
+        vintages=[
+            VintageEntry("2020-01-01", 10, provider="TM"),
+            VintageEntry("2022-01-01", 12, provider="TM"),
+        ],
+        available_dates_by_zoom={20: {"2020-01-01", "2022-01-01"}},
+        catalog_max_date="2022-01-01",
+    )
+    wayback = VintageCatalog(
+        vintages=[
+            VintageEntry("2021-01-01", 21, provider="Wayback"),
+            VintageEntry("2022-01-01", 22, provider="Wayback"),
+        ],
+        available_dates_by_zoom={19: {"2021-01-01", "2022-01-01"}},
+        catalog_max_date="2022-01-01",
+    )
+
+    merged = merge_provider_catalogs(tm, wayback)
+
+    assert [(v.capture_date, v.version, v.provider) for v in merged.vintages] == [
+        ("2020-01-01", 10, "TM"),
+        ("2021-01-01", 21, "Wayback"),
+        ("2022-01-01", 12, "TM"),
+    ]
+    assert merged.available_dates_by_provider_zoom == {
+        "TM": tm.available_dates_by_zoom,
+        "Wayback": wayback.available_dates_by_zoom,
+    }
 
 
 # ---------------------------------------------------------------------------

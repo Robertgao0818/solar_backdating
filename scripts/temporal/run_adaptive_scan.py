@@ -31,7 +31,7 @@ import sys
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterable, Mapping
@@ -127,6 +127,34 @@ class VintageCatalog:
     vintages: list[VintageEntry]
     available_dates_by_zoom: dict[int, set[str]]
     catalog_max_date: str | None = None
+    available_dates_by_provider_zoom: dict[str, dict[int, set[str]]] = field(
+        default_factory=dict
+    )
+
+
+def merge_provider_catalogs(
+    tm: VintageCatalog, wayback: VintageCatalog
+) -> VintageCatalog:
+    """Merge production imagery sources into one chronological adaptive catalog.
+
+    A capture date is scored once. GE Time Machine is the primary production
+    source and wins exact-date collisions; Wayback contributes dates absent from
+    TM. Provider-specific availability maps remain attached for download checks.
+    """
+    by_date = {v.capture_date: dataclasses.replace(v, provider="Wayback") for v in wayback.vintages}
+    by_date.update(
+        {v.capture_date: dataclasses.replace(v, provider="TM") for v in tm.vintages}
+    )
+    max_dates = [d for d in (tm.catalog_max_date, wayback.catalog_max_date) if d]
+    return VintageCatalog(
+        vintages=[by_date[d] for d in sorted(by_date)],
+        available_dates_by_zoom={},
+        catalog_max_date=max(max_dates) if max_dates else None,
+        available_dates_by_provider_zoom={
+            "TM": tm.available_dates_by_zoom,
+            "Wayback": wayback.available_dates_by_zoom,
+        },
+    )
 
 
 def _resolve_catalog_max_date(
@@ -302,13 +330,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider",
-        choices=("TM", "Wayback"),
+        choices=("TM", "Wayback", "Merged"),
         default="TM",
-        help="GEHI imagery provider. TM=Google Earth Time Machine (default). "
-        "Wayback=ESRI World Imagery; its catalog/download key on the real "
+        help="GEHI imagery provider. TM=Google Earth Time Machine (default); "
+        "Wayback=ESRI World Imagery; Merged unions both catalogs into one "
+        "adaptive sequence with TM precedence on exact-date collisions. Wayback's "
+        "catalog/download key is the real "
         "captured date. Selecting Wayback forces require_complete_coverage_* "
         "off because Wayback's availability lists layer-release dates, not "
         "captured dates, so the completeness intersection would be empty.",
+    )
+    parser.add_argument(
+        "--merged-tm-chips-dir",
+        type=Path,
+        default=None,
+        help="TM cache root used when --provider Merged.",
+    )
+    parser.add_argument(
+        "--merged-wayback-chips-dir",
+        type=Path,
+        default=None,
+        help="Wayback cache root used when --provider Merged.",
     )
     parser.add_argument(
         "--review-extent-m",
@@ -348,6 +390,19 @@ def make_fixed_extent_review_renderer(
             offset_y_m=float(anchor.get("target_offset_y_m") or 0.0),
             search_radius_m=float(anchor.get("search_radius_m") or 10.0),
         )
+        try:
+            bbox_width_m = float(anchor["source_width_m"])
+            bbox_height_m = float(anchor["source_height_m"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "fixed-extent teacher rendering requires source_width_m and "
+                f"source_height_m for {anchor.get('anchor_id', '<unknown>')}"
+            ) from exc
+        if bbox_width_m <= 0 or bbox_height_m <= 0:
+            raise ValueError(
+                f"invalid teacher bbox {bbox_width_m:g}x{bbox_height_m:g}m for "
+                f"{anchor.get('anchor_id', '<unknown>')}"
+            )
         return ensure_single_target_review_png(
             image_path,
             marker,
@@ -356,6 +411,8 @@ def make_fixed_extent_review_renderer(
             min_crop_size_m=float(extent_m),
             min_output_px=256,
             draw_marker=True,
+            bbox_width_m=bbox_width_m,
+            bbox_height_m=bbox_height_m,
         )
 
     return render
@@ -660,6 +717,7 @@ def execute_round_real(
     min_cache_zoom: int | None = None,
     provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
     review_renderer: Callable[[Path, Mapping[str, str]], Path] | None = None,
+    provider_chips_dirs: Mapping[str, Path] | None = None,
 ) -> Round:
     """Download chips for each pick (zoom ladder), batch-score via the injected
     scorer, return Round with results.
@@ -695,19 +753,30 @@ def execute_round_real(
 
     download_outcomes: list[tuple[Pick, object]] = []
     for pick in rnd.picks:
+        pick_provider = pick.provider or config.provider
+        output_root = (
+            provider_chips_dirs.get(pick_provider, chips_dir)
+            if provider_chips_dirs is not None
+            else chips_dir
+        )
+        pick_vintage_check = (
+            vintage_check.get(pick_provider)
+            if isinstance(vintage_check, Mapping)
+            else vintage_check
+        )
         outcome = download_chip_with_zoom_ladder(
             anchor,
             capture_date=pick.capture_date,
             version=pick.version,
             zoom_ladder=config.download_zoom_ladder,
-            output_root=chips_dir,
-            provider=config.provider,
-            vintage_check=vintage_check,
+            output_root=output_root,
+            provider=pick_provider,
+            vintage_check=pick_vintage_check,
             **escape_kwargs,
         )
         download_outcomes.append((pick, outcome))
         if provenance_writer is not None:
-            provenance_writer(build_chip_provenance(outcome, anchor, config.provider))
+            provenance_writer(build_chip_provenance(outcome, anchor, pick_provider))
 
     download_by_index: dict[int, object] = {pick.chip_index: outcome for pick, outcome in download_outcomes}
     if review_renderer is None:
@@ -765,6 +834,7 @@ def execute_round_real(
                     notes=f"download_failed: status={outcome.status} error={outcome.error or ''}"[:300],
                     chip_path="",
                     actual_zoom=outcome.actual_zoom,
+                    provider=pick.provider,
                 )
             )
             continue
@@ -783,6 +853,7 @@ def execute_round_real(
                     notes="missing observation in batch results",
                     chip_path=str(outcome.path),
                     actual_zoom=outcome.actual_zoom,
+                    provider=pick.provider,
                 )
             )
             continue
@@ -799,6 +870,7 @@ def execute_round_real(
                 notes=obs.notes,
                 chip_path=str(outcome.path),
                 actual_zoom=outcome.actual_zoom,
+                provider=pick.provider,
             )
         )
 
@@ -867,6 +939,7 @@ def run_one_anchor(
     catalog_force_refresh: bool = False,
     catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
     review_renderer: Callable[[Path, Mapping[str, str]], Path] | None = None,
+    provider_chips_dirs: Mapping[str, Path] | None = None,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
     state_path = state_path_for(anchor_id, scan_states_dir)
@@ -958,15 +1031,37 @@ def run_one_anchor(
     vintage_check = None
     if not dry_run:
         assert real_catalog is not None
-        check_kwargs = dict(catalog_kwargs)
-        if census_mid_date_iso is not None:
-            check_kwargs["catalog_max_date"] = catalog_max_date
-        vintage_check = make_vintage_check(
-            anchor,
-            available_dates_by_zoom=real_catalog.available_dates_by_zoom,
-            config=config,
-            **check_kwargs,
-        )
+        provider_maps = real_catalog.available_dates_by_provider_zoom
+        if provider_maps:
+            checks = {}
+            for provider, dates_by_zoom in provider_maps.items():
+                provider_config = dataclasses.replace(config, provider=provider)
+                if provider == "Wayback":
+                    provider_config = dataclasses.replace(
+                        provider_config,
+                        require_complete_coverage_for_catalog=False,
+                        require_complete_coverage_for_download=False,
+                    )
+                check_kwargs = dict(catalog_kwargs)
+                if census_mid_date_iso is not None:
+                    check_kwargs["catalog_max_date"] = catalog_max_date
+                checks[provider] = make_vintage_check(
+                    anchor,
+                    available_dates_by_zoom=dates_by_zoom,
+                    config=provider_config,
+                    **check_kwargs,
+                )
+            vintage_check = checks
+        else:
+            check_kwargs = dict(catalog_kwargs)
+            if census_mid_date_iso is not None:
+                check_kwargs["catalog_max_date"] = catalog_max_date
+            vintage_check = make_vintage_check(
+                anchor,
+                available_dates_by_zoom=real_catalog.available_dates_by_zoom,
+                config=config,
+                **check_kwargs,
+            )
 
     assert scorer is not None
     max_iter = 32
@@ -1024,6 +1119,8 @@ def run_one_anchor(
                 issue18_kwargs["provenance_writer"] = provenance_writer
             if review_renderer is not None:
                 issue18_kwargs["review_renderer"] = review_renderer
+            if provider_chips_dirs is not None:
+                issue18_kwargs["provider_chips_dirs"] = provider_chips_dirs
             rnd = execute_round_real(
                 rnd, anchor, config,
                 chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=round_config,
@@ -1062,6 +1159,32 @@ def _fetch_real_vintage_catalog(
     `catalog_cache=None` (the default) makes zero behavior change: every zoom
     in the ladder issues a live GEHI call exactly as before ISSUE-13.
     """
+    if config.provider == "Merged":
+        tm_config = dataclasses.replace(config, provider="TM")
+        wayback_config = dataclasses.replace(
+            config,
+            provider="Wayback",
+            require_complete_coverage_for_catalog=False,
+            require_complete_coverage_for_download=False,
+        )
+        tm = _fetch_real_vintage_catalog(
+            anchor,
+            tm_config,
+            census_date=census_date,
+            catalog_cache=catalog_cache,
+            catalog_force_refresh=catalog_force_refresh,
+            catalog_max_age_days=catalog_max_age_days,
+        )
+        wayback = _fetch_real_vintage_catalog(
+            anchor,
+            wayback_config,
+            census_date=census_date,
+            catalog_cache=catalog_cache,
+            catalog_force_refresh=catalog_force_refresh,
+            catalog_max_age_days=catalog_max_age_days,
+        )
+        return merge_provider_catalogs(tm, wayback)
+
     from scripts.temporal.gehi_info import fetch_vintages_for_anchor
 
     info_by_zoom: dict[int, dict[str, object]] = {}
@@ -1154,7 +1277,11 @@ def _fetch_real_vintage_catalog(
                 version = int(version_raw)
             except (TypeError, ValueError):
                 continue
-            by_date[capture_date] = VintageEntry(capture_date=capture_date, version=version)
+            by_date[capture_date] = VintageEntry(
+                capture_date=capture_date,
+                version=version,
+                provider=config.provider,
+            )
 
     return VintageCatalog(
         vintages=[by_date[d] for d in sorted(by_date)],
@@ -1262,6 +1389,17 @@ def main() -> None:
         config_overrides["require_complete_coverage_for_catalog"] = False
         config_overrides["require_complete_coverage_for_download"] = False
     config = dataclasses.replace(config, **config_overrides)
+    provider_chips_dirs = None
+    if args.provider == "Merged":
+        if args.merged_tm_chips_dir is None or args.merged_wayback_chips_dir is None:
+            raise SystemExit(
+                "--provider Merged requires --merged-tm-chips-dir and "
+                "--merged-wayback-chips-dir"
+            )
+        provider_chips_dirs = {
+            "TM": args.merged_tm_chips_dir,
+            "Wayback": args.merged_wayback_chips_dir,
+        }
     if not args.anchors_csv.exists():
         raise SystemExit(f"Anchors CSV not found: {args.anchors_csv}")
     args.scan_states_dir.mkdir(parents=True, exist_ok=True)
@@ -1292,6 +1430,9 @@ def main() -> None:
 
         limiter = RateLimiter(args.qps)
         args.chips_dir.mkdir(parents=True, exist_ok=True)
+        if provider_chips_dirs is not None:
+            for provider_dir in provider_chips_dirs.values():
+                provider_dir.mkdir(parents=True, exist_ok=True)
         args.audit_dir.mkdir(parents=True, exist_ok=True)
         round1_model = gemini_config_round1.model if gemini_config_round1 is not None else gemini_config.model
         print(
@@ -1387,6 +1528,7 @@ def main() -> None:
                 catalog_force_refresh=args.force_catalog_refresh,
                 catalog_max_age_days=args.catalog_max_age_days,
                 review_renderer=review_renderer,
+                provider_chips_dirs=provider_chips_dirs,
             )
         except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
             state = _record_orchestrator_failure(anchor, args.scan_states_dir, exc)

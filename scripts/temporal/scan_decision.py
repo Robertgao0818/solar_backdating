@@ -42,6 +42,7 @@ from scripts.temporal.scan_state import (
 class VintageEntry:
     capture_date: str
     version: int
+    provider: str = "TM"
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,13 @@ def select_evenly_spaced_picks(
         unique_indices.sort()
         chosen = [vintages[i] for i in unique_indices]
     return [
-        Pick(chip_index=i + 1, capture_date=v.capture_date, version=v.version, requested_zoom=requested_zoom)
+        Pick(
+            chip_index=i + 1,
+            capture_date=v.capture_date,
+            version=v.version,
+            requested_zoom=requested_zoom,
+            provider=v.provider,
+        )
         for i, v in enumerate(chosen)
     ]
 
@@ -276,6 +283,7 @@ def plan_tail_round(
             capture_date=v.capture_date,
             version=v.version,
             requested_zoom=config.download_zoom_ladder[0],
+            provider=v.provider,
         )
         for i, v in enumerate(candidates)
     ]
@@ -321,6 +329,7 @@ def plan_bisection_round(
             capture_date=v.capture_date,
             version=v.version,
             requested_zoom=config.download_zoom_ladder[0],
+            provider=v.provider,
         )
         for i, v in enumerate(candidates)
     ]
@@ -360,6 +369,7 @@ def plan_anchor_recovery_round(
         capture_date=pick_v.capture_date,
         version=pick_v.version,
         requested_zoom=config.download_zoom_ladder[0],
+        provider=pick_v.provider,
     )
     return Round(
         round_id=round_id,

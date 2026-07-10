@@ -60,6 +60,7 @@ class Pick:
     capture_date: str
     version: int
     requested_zoom: int
+    provider: str = "TM"
 
 
 @dataclass
@@ -75,6 +76,7 @@ class RoundResult:
     notes: str = ""
     chip_path: str = ""
     actual_zoom: int | None = None
+    provider: str = "TM"
 
 
 @dataclass
@@ -209,6 +211,16 @@ def save_scan_state(state: ScanState, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     state.updated_at = now_iso()
     payload = asdict(state)
+    # Provider metadata is additive for merged-source scans. Omit the historical
+    # TM default so ordinary scan-state bytes and downstream fixtures remain
+    # unchanged; non-TM picks/results retain the explicit provider on disk.
+    for rnd in payload.get("rounds", []):
+        for pick in rnd.get("picks", []):
+            if pick.get("provider") == "TM":
+                pick.pop("provider", None)
+        for result in rnd.get("results", []):
+            if result.get("provider") == "TM":
+                result.pop("provider", None)
     fd, tmp_path = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

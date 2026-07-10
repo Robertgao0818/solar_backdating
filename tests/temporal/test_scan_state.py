@@ -83,11 +83,56 @@ def test_round_with_results_serializes(tmp_state_dir: Path, sample_anchor: dict[
     path = state_path_for(state.anchor_id, tmp_state_dir)
     save_scan_state(state, path)
 
+    raw = json.loads(path.read_text())
+    assert "provider" not in raw["rounds"][0]["picks"][0]
+    assert "provider" not in raw["rounds"][0]["results"][0]
+
     loaded = load_scan_state(path)
     assert loaded is not None
     assert len(loaded.rounds) == 1
     assert loaded.rounds[0].results[0].pv_present is False
     assert loaded.is_terminal
+
+
+def test_non_tm_provider_is_persisted(tmp_state_dir: Path, sample_anchor: dict[str, str]) -> None:
+    state = create_scan_state(sample_anchor)
+    state.rounds.append(
+        Round(
+            round_id=1,
+            round_type="initial",
+            window_start_date="2020-01-01",
+            window_end_date="2020-01-01",
+            picks=[
+                Pick(
+                    chip_index=1,
+                    capture_date="2020-01-01",
+                    version=1,
+                    requested_zoom=19,
+                    provider="Wayback",
+                )
+            ],
+            results=[
+                RoundResult(
+                    chip_index=1,
+                    capture_date="2020-01-01",
+                    version=1,
+                    pv_present=True,
+                    confidence=0.9,
+                    quality_flag="usable",
+                    decision_source="dry_run_stub",
+                    provider="Wayback",
+                )
+            ],
+            completed=True,
+        )
+    )
+    path = state_path_for(state.anchor_id, tmp_state_dir)
+
+    save_scan_state(state, path)
+
+    raw = json.loads(path.read_text())
+    assert raw["rounds"][0]["picks"][0]["provider"] == "Wayback"
+    assert raw["rounds"][0]["results"][0]["provider"] == "Wayback"
 
 
 def test_load_rejects_spec_mismatch(tmp_state_dir: Path, sample_anchor: dict[str, str]) -> None:
