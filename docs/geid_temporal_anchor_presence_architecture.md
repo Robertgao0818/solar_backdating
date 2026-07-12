@@ -143,7 +143,18 @@ Backbone order for the first real scoring experiment:
 2. DINOv2 ViT-S/14 frozen encoder with patch-token MIL / top-k pooling and a small three-class MLP head.
 3. ConvNeXt-Tiny frozen encoder as the CNN local-texture baseline.
 
-Do not use a Siamese / change-detection architecture in Phase 1. The project has spatial anchors, not a same-sensor current GEID reference image for every anchor. Current aerial/Vexcel imagery is useful for anchor geometry, but cross-sensor difference features are expected to be dominated by sensor/domain gap.
+**Phase-1 default remains single-frame presence** (no requirement to ship
+Siamese). A hard ban on all pairing is **superseded (2026-07-10)**:
+
+- **Still rejected:** pixel-space GEHI−Vexcel (or GEHI−GEHI) differencing —
+  domain gap + inter-vintage displacement dominate (ISSUE-23).
+- **Allowed as a frozen-backbone pilot:** embedding-space pairing with the
+  **Vexcel census present crop** as a known-PRESENT template (DeepSolar++
+  polarity; FP filter), or GEHI absent refs as ablations — see
+  [`dinov3_scorer/DATA-anchor-pair-v2-prereg-2026-07-10.md`](dinov3_scorer/DATA-anchor-pair-v2-prereg-2026-07-10.md).
+  Domain-gap smoke must pass before head train. Vexcel remains the spatial
+  anchor for geometry; it may also be a **scorer reference**, not only a
+  polygon source.
 
 Calibration policy:
 

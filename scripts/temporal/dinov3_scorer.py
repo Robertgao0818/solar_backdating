@@ -604,6 +604,49 @@ class Dinov3PresenceScorer:
             return np.zeros((0, embed_dim), dtype=np.float32)
         return np.concatenate(blocks, axis=0).astype(np.float32)
 
+    def embed_patch_grids(
+        self, chip_paths: "Sequence[str]", batch_size: int = 16
+    ) -> Any:
+        """Batched frozen patch-token grids → ``float16 [N, G, G, C]`` on CPU.
+
+        Same preprocessing as ``embed_chips`` / ``_infer_probs``, but **without**
+        centre pooling — the spatial grid is the ChangeDINO-shaped input for
+        pairing-v2 (``DATA-anchor-pair-v2-prereg``). Row order matches
+        ``chip_paths``. Raises on missing/unreadable chips (strict, like
+        ``embed_chips``).
+        """
+        import numpy as np
+        import torch
+
+        self._ensure_model()
+        blocks: list[Any] = []
+        grid_side: int | None = None
+        channels: int | None = None
+        for start in range(0, len(chip_paths), batch_size):
+            batch_paths = chip_paths[start : start + batch_size]
+            tensors = [self._load_chip_tensor(p) for p in batch_paths]
+            batch = torch.cat(tensors, dim=0)
+            with torch.inference_mode():
+                feats = self._encoder.forward_features(batch)
+                prefix = int(getattr(self._encoder, "num_prefix_tokens", 0))
+                patch_tokens = feats[:, prefix:, :]  # [B, P, C]
+            b, num_patches, c = patch_tokens.shape
+            g = int(round(num_patches**0.5))
+            if g * g != num_patches:
+                raise ValueError(
+                    f"patch-token count {num_patches} is not a perfect square"
+                )
+            if grid_side is None:
+                grid_side, channels = g, int(c)
+            grid = patch_tokens.reshape(b, g, g, c)
+            blocks.append(grid.detach().to("cpu", dtype=torch.float16).numpy())
+        if not blocks:
+            # empty — unknown grid; use input_size/patch as best guess
+            g = self.input_size // self.patch_size
+            c = int(getattr(self._encoder, "num_features", 0) or 0)
+            return np.zeros((0, g, g, c), dtype=np.float16)
+        return np.concatenate(blocks, axis=0)
+
     def _observe(self, chip_path: str) -> _ChipVerdict:
         """Score one chip, funnelling both surfaces. Never raises on a bad chip.
 
