@@ -47,7 +47,7 @@ adaptive_scan:
   census2023_zoom_ladder: [19, 18]
   require_complete_coverage_for_catalog: true
   require_complete_coverage_for_download: true
-  catalog_min_date: "2009-01-01"
+  catalog_min_date: "2019-01-01"
   # Per-anchor catalog cutoff = census_imagery_mid_date plus this many newer
   # vintages retained for human review. These reference frames are never
   # decoder/termination evidence (ISSUE-26). catalog_max_date remains a hard cap.

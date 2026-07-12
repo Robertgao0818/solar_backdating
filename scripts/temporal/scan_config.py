@@ -43,7 +43,7 @@ class AdaptiveScanConfig:
     census2023_zoom_ladder: tuple[int, ...] = (19, 18)
     require_complete_coverage_for_catalog: bool = True
     require_complete_coverage_for_download: bool = True
-    catalog_min_date: str = "2009-01-01"
+    catalog_min_date: str = "2019-01-01"
     catalog_max_date: str = "2025-12-31"
     post_census_reference_frames: int = 3
     availability_parallel: int = 4
@@ -150,7 +150,7 @@ def load_config(path: Path | None = None) -> AdaptiveScanConfig:
         census2023_zoom_ladder=census2023_ladder,
         require_complete_coverage_for_catalog=bool(section.get("require_complete_coverage_for_catalog", True)),
         require_complete_coverage_for_download=bool(section.get("require_complete_coverage_for_download", True)),
-        catalog_min_date=str(section.get("catalog_min_date", "2009-01-01")),
+        catalog_min_date=str(section.get("catalog_min_date", "2019-01-01")),
         catalog_max_date=str(section.get("catalog_max_date", "2025-12-31")),
         post_census_reference_frames=int(
             section.get("post_census_reference_frames", 3)
