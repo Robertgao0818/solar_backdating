@@ -30,6 +30,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | 6 | Fidelity gate (three numbers, both backbones; baseline = Phase-0 decoder under D8) — **DONE 2026-07-10**: gate-1 PASS both (self-repro 1.0); gate-2 FAIL both (`A_LSAT=0.6392`, `A_floor=0.6542` ≪ ceiling 0.7724, `S=0.0116`); gate-3 EQUIVALENT; SAT/L bet **FALSIFIED** (floor +1.5 pp). Verdict: [ISSUE-06-gate-verdict-2026-07-06](ISSUE-06-gate-verdict-2026-07-06.md). Gemini stays default → slice 7 still blocked on a future pass | ✅ | 4 ✅, 5 ✅, [replan_v2 2](../replan_v2/ISSUE-02-changepoint-posterior-decoder.md) ✅ | [ISSUE-06](ISSUE-06-fidelity-gate.md) |
 | 7 | Feature-flag rollout + ops profile | ⛔ | 6 (gate-2 FAIL — no production swap) | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
 | 8 | Bonus: deterministic run-to-run experiment (not gated) | ⬜ | 4 | [ISSUE-08](ISSUE-08-determinism-experiment.md) |
+| 9 | Path C0: training-free census-anchored reverse template matching (latent match + monotone changepoint decode; new-prereg lane per revival memo) | 🟡 | round-2 lit survey (2026-07-12) | [ISSUE-09](ISSUE-09-c0-reverse-template-matching.md) |
 
 ## Dependency graph
 
@@ -116,6 +117,104 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
 
 ## Progress log
 
+- 2026-07-12 — **ISSUE-09 (Path C0) opened** under the revival memo's
+  new-prereg lane: training-free census-anchored reverse template matching
+  (footprint patch-token latent match against latest same-sensor present
+  frame + monotone changepoint decode). No trained head — does not reopen
+  A/A′/A″/B (delta table in the issue). Round-2 literature survey dispatched
+  (matching metric math, short-series changepoint methods, DINOv3 small-size
+  matrix incl. SAT-domain availability). Prereg must land before any eval run.
+  **Same day:** survey returned; prereg drafted —
+  [DATA-c0-reverse-template-prereg-2026-07-12](DATA-c0-reverse-template-prereg-2026-07-12.md)
+  (TCM footprint-vs-ring contrast + key-facet cosine + Bayesian
+  single-changepoint posterior; smoke bar AUC ≥ 0.75; kill rule `c0_r1`).
+  SAT-493M confirmed L/7B only → small-model arms must use web-domain
+  DINOv3-S or DINOv2-S. Awaiting owner sign-off on numeric bars.
+  **Owner reframe (same day):** no triage for now; banked Gemini verdicts
+  are dirty (pre-rebuild) → C0 repositioned as a **paired independent
+  channel** vs a fresh Gemini round on the rebuilt full-GEHI stacks
+  (C0 locked blind first; judged by replicate-equivalence to fresh rep↔rep
+  + blind disagreement adjudication). Prereg + ISSUE-09 updated. Smoke can
+  run pre-rebuild; main eval waits on download + fresh round. Anchor rule
+  refined (owner): nearest-frame both-sides around census date — right side
+  eligible at any distance (low removal prior), left side only within
+  12 months + anchor-consistency gate vs nearest right frame.
+  **Harness landed (same day):**
+  `scripts/validation/pilot_c0_reverse_template_2026_07_12.py` — stages
+  embed/curve/decode/smoke live, eval = paired-vs-fresh stub (fails closed
+  with instructions); `c0_s0`/`c0_r1` machine rules + tests green
+  (48 passed, incl. existing gate suite). Blind-lock via config-hash-tagged
+  artifacts + `lock_<tag>.json` sha256 manifest.
+- 2026-07-10 — **Path A″ executed — SMOKE_GO then R3 KILL.** Harness
+  `scripts/validation/pilot_anchor_pair_a2_2026_07_10.py`; artifacts
+  `~/zasolar_data/geid_temporal/pilot_anchor_pair_a2_20260710/`. Same-sensor
+  smoke n=63: median cos non-ref-present↔ref=**0.784** > early-absent 0.591
+  > other-target 0.581 → GO. Heads trained CUDA, 3 seeds, param ratio 1.032.
+  Arm P vs B pooled: TB FP 0.129 vs 0.104 (**−24%** red), FN 0.114 vs 0.115
+  (+1.6%), overall agr 0.803 < 0.817. Machine `anchor_pair_a2_r1` KILL; no
+  gate-2 re-run. H2 polarity fails (B best FP). **Pairing line fully closed**
+  (A/A′/A″); with B also closed, frozen head-only student revival has no live
+  path. Prereg+results:
+  [DATA-anchor-pair-a2-same-sensor-prereg-2026-07-10](DATA-anchor-pair-a2-same-sensor-prereg-2026-07-10.md).
+- 2026-07-10 — **Path A″ pre-registered (was live primary pairing bet).** Same-sensor
+  latest teacher-`present` GEHI template; no Vexcel; patch-token head; smoke
+  H3 then Arm P vs param-matched B (R3). Prereg:
+  [DATA-anchor-pair-a2-same-sensor-prereg-2026-07-10](DATA-anchor-pair-a2-same-sensor-prereg-2026-07-10.md).
+  Checker rule `anchor_pair_a2_r1` added.
+- 2026-07-10 — **Path B sequence-level distillation pilot corrected and
+  executed — B-R1 KILL; frame-bar FAIL.** Pre-reg + result:
+  [DATA-sequence-head-pilot-prereg-2026-07-10](DATA-sequence-head-pilot-prereg-2026-07-10.md);
+  harness `scripts/validation/pilot_sequence_head_2026_07_10.py`; artifacts
+  `~/zasolar_data/geid_temporal/pilot_sequence_head_20260710_corrected/`.
+  Target = cached raw Gemini verdicts decoded by the adopted Phase-0
+  changepoint decoder (locked emissions + EB prior), not thresholded
+  `label_3class`; the earlier unsuffixed artifact is invalidated audit-only.
+  Frozen pooled 384-d embeddings; 2-layer temporal transformer (668,933 params) vs
+  parameter-matched independent-frame control (668,746; ratio 1.00028), seeds
+  0/1/2, all 163 heldout anchors, paired anchor-cluster bootstrap. Exact
+  interval agreement improved 0.1963→0.2904 (Δ +0.0941, 95% CI
+  +0.0491..+0.1391), but transition FP reduction was only 9.8% with CI crossing
+  zero and FN worsened 0.0733→0.1258 (+71.7%). Overall decided agreement
+  regressed 0.8340→0.8210. Arm A frame bar was only transition 0.7107 /
+  overall 0.8210 (<0.90 both).
+  Machine verdict KILL; no gate-2 rerun licensed and no rescue sweep.
+- 2026-07-10 — **Pairing-v2 executed → H3 SMOKE_KILL (no head train).**
+  Harness `pilot_anchor_pair_v2_2026_07_10.py`; artifacts
+  `~/zasolar_data/geid_temporal/pilot_anchor_pair_v2_20260710/`. Patch grids
+  extracted (8496 GEHI + 742 Vexcel). Domain-gap smoke n=80: median
+  cos(late GEHI present, Vexcel)=**0.314**, cos(early absent, Vexcel)=0.214
+  (ranking OK), cos(other Vexcel, Vexcel)=**0.888** → fails s_pos>s_neg.
+  Cross-sensor template blocked under frozen dinov2. Path B becomes live
+  primary student bet. Results in
+  [DATA-anchor-pair-v2-prereg-2026-07-10](DATA-anchor-pair-v2-prereg-2026-07-10.md).
+- 2026-07-10 — **Pairing-v2 pre-registered (polarity pivot).** Full lock:
+  [DATA-anchor-pair-v2-prereg-2026-07-10](DATA-anchor-pair-v2-prereg-2026-07-10.md).
+  Primary ref = **Vexcel census present**; domain-gap smoke before head train.
+  Checker rule `anchor_pair_v2_r1` added. Architecture Phase-1 Siamese ban
+  narrowed to pixel-space only.
+- 2026-07-10 — **Anchor-pair pilot three-way review**
+  ([DATA-anchor-pair-pilot-review-2026-07-10](DATA-anchor-pair-pilot-review-2026-07-10.md)):
+  v1 R1 KILL **upheld as executed** but **scope-limited** — kills only
+  global-pooled-embedding pairing with fixed earliest-absent anchor, single
+  underpowered run; does **not** kill the pairing mechanism. Literature gaps:
+  ChangeDINO/SemDINO difference dense multi-scale patch features (pilot
+  pooled first); DeepSolar++ Siamese is known-PRESENT HR reference (reverse
+  polarity); Kruitwagen load-bearing step is CNN→RNN (path B). Fair-test
+  skeleton absorbed into pairing-v2 prereg (with Vexcel polarity pivot).
+- 2026-07-10 — **Anchor-pair student pilot executed — R1 KILL (v1 variant).**
+  Pre-reg
+  [DATA-anchor-pair-pilot-prereg-2026-07-10](DATA-anchor-pair-pilot-prereg-2026-07-10.md);
+  harness `scripts/validation/pilot_anchor_pair_2026_07_10.py`; artifacts
+  `~/zasolar_data/geid_temporal/pilot_anchor_pair_20260710/`. Frozen
+  dinov2_floor `nomarker_bilinear518_k6` embeddings; Arm A pair MLP
+  `[cand, anchor, cand−anchor]` vs Arm B capacity-control MLP on `emb_cand`
+  (seed=0, hidden 512/256). Eligible 756/764 anchors (inelig: 5
+  `done_appears` + 3 `done_already_present_before_geid_history`). Report-half
+  transition band (n=357): FP 14→13 (−7%), FN 14→12 (−14%) — both fail the
+  ≥30% dual bar; overall decided-agr 0.812→0.816 and unusable-recall
+  within −2pp pass. Slice-5 linear context: TB FP/FN 21/13. Superseded as
+  the live frame bet by pairing-v2 (Vexcel present). Stage-B gate-2 re-run
+  not licensed by v1.
 - 2026-07-10 — **Gate-2 residual audit (a): hard-example strips + counterfactual
   on `done_appears`.** Script
   `scripts/validation/hard_example_strips_gate2.py`; DATA
