@@ -368,7 +368,7 @@ _ENDTOEND_ROOT = Path.home() / "zasolar_data/geid_temporal/llm_endtoend_20260623
 _REP1_DIRS = [_ENDTOEND_ROOT / "rep1" / "L0" / "scan_states",
               _ENDTOEND_ROOT / "rep1" / "L1" / "scan_states"]
 _VEXCEL_CSV = Path(
-    "/home/gaosh/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
+    "/home/gao/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
 )
 
 

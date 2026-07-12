@@ -386,7 +386,7 @@ def test_run_all_synthetic_tree(tmp_path):
 # --------------------------------------------------------------------------- #
 _PROD = Path.home() / "zasolar_data/geid_temporal/jhb_full382_fpcut_scan_2026-06-02"
 _VEXCEL = Path(
-    "/home/gaosh/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
+    "/home/gao/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
 )
 
 
