@@ -92,6 +92,19 @@ class GehiCommonTests(unittest.TestCase):
         text = decode_gehi_output(raw)
         self.assertEqual(parse_availability_output(text), ["2015-08-30", "2015-11-30"])
 
+    def test_parse_availability_output_letter_selector_keys(self):
+        """Chooser keys continue [a], [b], ... past the tenth date; those dates must not be dropped."""
+        text = (
+            "[0]  2025/05/30  [1]  2025/02/28  [2]  2024/02/29  [3]  2023/01/30  "
+            "[4]  2022/03/30  [5]  2021/08/30  [6]  2021/07/30  [7]  2021/06/30  "
+            "[8]  2021/04/30  [9]  2020/05/31  [a]  2020/03/31  [b]  2019/06/30  "
+            "[Esc]  Exit"
+        )
+        dates = parse_availability_output(text)
+        self.assertEqual(len(dates), 12)
+        self.assertIn("2020-03-31", dates)
+        self.assertIn("2019-06-30", dates)
+
     def test_expand_candidate_dates_uses_all_labels_for_download(self):
         row = {
             "anchor_id": "a1",

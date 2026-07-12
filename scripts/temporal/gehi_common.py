@@ -28,7 +28,10 @@ INFO_DATE_RE = re.compile(r"date\s*=\s*(?P<date>\d{4}/\d{2}/\d{2}),\s*version\s*
 INFO_WAYBACK_RE = re.compile(
     r"layer_date\s*=\s*(?P<layer>\d{4}/\d{2}/\d{2}),\s*captured\s*=\s*(?P<captured>\d{4}/\d{2}/\d{2})"
 )
-AVAIL_DATE_RE = re.compile(r"\[\d+\]\s*(?P<date>\d{4}/\d{2}/\d{2})")
+# Chooser selector keys are single alphanumerics: [0]-[9] then [a]-[z]/[A]-[Z].
+# Matching digits only silently drops every date past the tenth (found 2026-07-12:
+# 2019-2025 JHB windows carry p50=14 dates, so the truncation bit every anchor).
+AVAIL_DATE_RE = re.compile(r"\[[0-9a-zA-Z]+\]\s*(?P<date>\d{4}/\d{2}/\d{2})")
 TILE_AVAIL_DATE_RE = re.compile(r"Tile availability on\s+(?P<date>\d{4}/\d{2}/\d{2})")
 
 
