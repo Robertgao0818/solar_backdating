@@ -324,9 +324,20 @@ def parse_args() -> argparse.Namespace:
         "--census-mid-date-override",
         type=str,
         default=None,
-        help="Override census_imagery_mid_date lookup from regions.yaml. ISO YYYY-MM-DD. "
-        "Used as the GT-prior anchor for Gemini calibration prompts. Default: lookup from "
-        "core.region_registry per anchor's region_key.",
+        help="Override the per-anchor census date. ISO YYYY-MM-DD. "
+        "Used as the GT-prior anchor for Gemini calibration prompts and the ISSUE-26 cutoff base. "
+        "Wins over --vexcel-capture-csv and the regions.yaml lookup.",
+    )
+    parser.add_argument(
+        "--vexcel-capture-csv",
+        type=Path,
+        default=None,
+        help="Per-grid Vexcel capture-date CSV (columns grid_id,...,last_capture_date,...). When "
+        "given, each anchor's census date resolves to its grid's real flight date (max over "
+        "source_grids for multi-grid chip groups) instead of the region-wide "
+        "census_imagery_mid_date, so the ISSUE-26 per-anchor catalog cutoff brackets the true "
+        "capture. Grids missing from the CSV fall back to the regions.yaml lookup. "
+        "JHB table: data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv (ZAsolar repo).",
     )
     parser.add_argument(
         "--provider",
@@ -1326,8 +1337,29 @@ def summarize(states: Iterable[ScanState]) -> None:
             print(f"  {label}: {n} ({100.0 * n / total_zoom:.1f}%)")
 
 
-def _resolve_census_mid_date(anchor: dict[str, str], override: str | None) -> str | None:
-    """Look up census_imagery_mid_date for the anchor's region.
+def _anchor_grid_ids(anchor: Mapping[str, str]) -> list[str]:
+    """Every grid an anchor touches: ``source_grids`` (';'-joined) or ``grid_id``."""
+    raw = str(anchor.get("source_grids", "") or "").strip()
+    if not raw:
+        raw = str(anchor.get("grid_id", "") or "").strip()
+    return [g.strip() for g in raw.split(";") if g.strip()]
+
+
+def _resolve_census_mid_date(
+    anchor: dict[str, str],
+    override: str | None,
+    *,
+    grid_capture_dates: Mapping[str, date] | None = None,
+) -> str | None:
+    """Look up the per-anchor census date (ISSUE-26 cutoff / GT-prior anchor).
+
+    Precedence: explicit ``--census-mid-date-override`` > per-grid Vexcel
+    ``last_capture_date`` (``--vexcel-capture-csv``) > region-level
+    ``census_imagery_mid_date`` from regions.yaml. The per-grid date is the
+    real flight date of the imagery the detection ran on, so the ISSUE-26
+    "census + N reference frames" cutoff brackets the true capture, not the
+    region-wide mid-year fallback. Multi-grid chip groups take the max over
+    their grids — the date by which the whole group is certainly imaged.
 
     For Phase-0 we hardcode the mapping region_key -> default census layer.
     Real workflow will pass --layer-id explicitly, but this smoke run only has
@@ -1335,6 +1367,14 @@ def _resolve_census_mid_date(anchor: dict[str, str], override: str | None) -> st
     """
     if override:
         return override
+    if grid_capture_dates:
+        hits = [
+            grid_capture_dates[g]
+            for g in _anchor_grid_ids(anchor)
+            if g in grid_capture_dates
+        ]
+        if hits:
+            return max(hits).isoformat()
     try:
         from core.region_registry import get_imagery_layer  # type: ignore[import-not-found]
     except Exception:  # noqa: BLE001
@@ -1445,8 +1485,21 @@ def main() -> None:
     marker = "[DRY]" if args.dry_run else "[RUN]"
     # Resolve census mid-date per anchor up front (main thread): cheap, and warms
     # the region_registry cache so concurrent anchor workers don't race its first load.
+    grid_capture_dates: Mapping[str, date] | None = None
+    if args.vexcel_capture_csv is not None:
+        if not args.vexcel_capture_csv.exists():
+            raise SystemExit(f"--vexcel-capture-csv not found: {args.vexcel_capture_csv}")
+        from scripts.temporal.infer_install_dates import load_vexcel_capture_dates
+
+        grid_capture_dates = load_vexcel_capture_dates(args.vexcel_capture_csv)
+        if not grid_capture_dates:
+            raise SystemExit(
+                f"--vexcel-capture-csv yielded 0 usable rows: {args.vexcel_capture_csv}"
+            )
     census_by_anchor = {
-        anchor["anchor_id"]: _resolve_census_mid_date(anchor, args.census_mid_date_override)
+        anchor["anchor_id"]: _resolve_census_mid_date(
+            anchor, args.census_mid_date_override, grid_capture_dates=grid_capture_dates
+        )
         for anchor in anchors
     }
     print_lock = threading.Lock()

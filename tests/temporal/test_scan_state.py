@@ -284,6 +284,59 @@ def test_cape_town_catalog_bound_resolves_from_region_registry(monkeypatch) -> N
     assert catalog.catalog_max_date == "2025-12-01"
 
 
+def test_census_mid_date_prefers_per_grid_vexcel_capture_date() -> None:
+    from datetime import date
+
+    from scripts.temporal.run_adaptive_scan import _resolve_census_mid_date
+
+    table = {"JNB0001": date(2024, 4, 19), "JNB0002": date(2024, 2, 17)}
+
+    # Single-grid anchor: the grid's real flight date, not the region mid-date.
+    assert (
+        _resolve_census_mid_date(
+            {"region_key": "johannesburg", "grid_id": "JNB0001"},
+            override=None,
+            grid_capture_dates=table,
+        )
+        == "2024-04-19"
+    )
+    # Multi-grid chip group: max over source_grids (whole group certainly imaged).
+    assert (
+        _resolve_census_mid_date(
+            {
+                "region_key": "johannesburg",
+                "grid_id": "JNB0002",
+                "source_grids": "JNB0002;JNB0001",
+            },
+            override=None,
+            grid_capture_dates=table,
+        )
+        == "2024-04-19"
+    )
+    # Explicit CLI override still wins over the per-grid table.
+    assert (
+        _resolve_census_mid_date(
+            {"region_key": "johannesburg", "grid_id": "JNB0001"},
+            override="2024-06-30",
+            grid_capture_dates=table,
+        )
+        == "2024-06-30"
+    )
+
+
+def test_census_mid_date_missing_grid_falls_back_to_region_registry() -> None:
+    from datetime import date
+
+    from scripts.temporal.run_adaptive_scan import _resolve_census_mid_date
+
+    resolved = _resolve_census_mid_date(
+        {"region_key": "cape_town", "grid_id": "CPT9999"},
+        override=None,
+        grid_capture_dates={"JNB0001": date(2024, 4, 19)},
+    )
+    assert resolved == "2025-06-30"
+
+
 def test_orchestrator_failure_persists_terminal_state(
     tmp_state_dir: Path, sample_anchor: dict[str, str]
 ) -> None:
