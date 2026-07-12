@@ -22,7 +22,7 @@ SOLAR_BACKDATING_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export SOLAR_BACKDATING_ROOT
 
 # Resolve main repo root (overridable)
-ZASOLAR_ROOT="${ZASOLAR_ROOT:-/home/gaosh/projects/ZAsolar}"
+ZASOLAR_ROOT="${ZASOLAR_ROOT:-/home/gao/projects/ZAsolar}"
 export ZASOLAR_ROOT
 
 if [[ ! -d "$ZASOLAR_ROOT" ]]; then

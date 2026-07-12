@@ -186,11 +186,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument(
         "--long-banked", type=Path,
-        default=Path("/home/gaosh/zasolar_data/geid_temporal/fullstack_noscan_20260630/long_all.csv"),
+        default=Path("/home/gao/zasolar_data/geid_temporal/fullstack_noscan_20260630/long_all.csv"),
     )
     ap.add_argument(
         "--long-tight", type=Path,
-        default=Path("/home/gaosh/zasolar_data/geid_temporal/panel_repair_20260703/tightcrop_failed/long_all.csv"),
+        default=Path("/home/gao/zasolar_data/geid_temporal/panel_repair_20260703/tightcrop_failed/long_all.csv"),
     )
     ap.add_argument("--chips", default="c0009952,c0010157")
     ap.add_argument("--out-dir", type=Path, required=True)

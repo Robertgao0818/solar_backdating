@@ -11,7 +11,7 @@ at runtime via `PYTHONPATH`. This document is the contract.
 
 1. `$SOLAR_BACKDATING_ROOT`
 2. `$SOLAR_BACKDATING_ROOT/src`
-3. `$ZASOLAR_ROOT` (default: `/home/gaosh/projects/ZAsolar`)
+3. `$ZASOLAR_ROOT` (default: `/home/gao/projects/ZAsolar`)
 
 So in-repo `from scripts.temporal.geid_temporal_common import ...` resolves
 to **this** repo's copy, while `from core.region_registry import ...` falls
@@ -69,7 +69,7 @@ artifact (GPKG/CSV), not as a Python import.
 ## Override paths
 
 - `ZASOLAR_ROOT` env var — set if main repo lives outside
-  `/home/gaosh/projects/ZAsolar` (e.g., on RunPod the canonical path is
+  `/home/gao/projects/ZAsolar` (e.g., on RunPod the canonical path is
   `/workspace/ZAsolar/`).
 - `SOLAR_BACKDATING_ROOT` env var — auto-derived by `activate_env.sh` from
   `BASH_SOURCE`; override only if invoking outside the script.

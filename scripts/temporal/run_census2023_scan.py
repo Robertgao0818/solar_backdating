@@ -521,7 +521,7 @@ def _default_env_file() -> Path:
     local = PROJECT_ROOT / ".env.gemini.local"
     if local.exists():
         return local
-    zasolar_root = Path(os.environ.get("ZASOLAR_ROOT", "/home/gaosh/projects/ZAsolar"))
+    zasolar_root = Path(os.environ.get("ZASOLAR_ROOT", "/home/gao/projects/ZAsolar"))
     main_local = zasolar_root / ".env.gemini.local"
     return main_local if main_local.exists() else local
 

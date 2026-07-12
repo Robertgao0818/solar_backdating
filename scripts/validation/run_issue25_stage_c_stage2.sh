@@ -6,13 +6,13 @@
 # gated on stage2_winner_decision.json + .stage2_winner_confirmed.
 set -euo pipefail
 
-cd /home/gaosh/projects/solar_backdating
+cd /home/gao/projects/solar_backdating
 source scripts/activate_env.sh
 
-ROOT="${ROOT:-/home/gaosh/zasolar_data/geid_temporal/issue25_teacher_geometry_20260710}"
+ROOT="${ROOT:-/home/gao/zasolar_data/geid_temporal/issue25_teacher_geometry_20260710}"
 RUN_ROOT="${RUN_ROOT:-$ROOT/stage_c}"
 MANIFEST="${MANIFEST:-docs/replan_v2/issue25_manifest_20260710/target_anchors_96m.csv}"
-CHIP_TARGETS="${CHIP_TARGETS:-/home/gaosh/zasolar_data/geid_temporal/jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01_chipgroups/chip_targets.csv}"
+CHIP_TARGETS="${CHIP_TARGETS:-/home/gao/zasolar_data/geid_temporal/jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01_chipgroups/chip_targets.csv}"
 ANALYSIS="${ANALYSIS:-$RUN_ROOT/stage1_analysis.json}"
 DECISION="${DECISION:-$RUN_ROOT/stage2_winner_decision.json}"
 SENTINEL="${SENTINEL:-$RUN_ROOT/.stage2_winner_confirmed}"

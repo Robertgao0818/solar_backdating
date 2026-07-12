@@ -59,7 +59,7 @@ from scripts.temporal.dino_coarse_match import (
     patch_token_grid,
 )
 
-GT_ROOT = Path("/home/gaosh/zasolar_data/geid_temporal")
+GT_ROOT = Path("/home/gao/zasolar_data/geid_temporal")
 AUDIT_DIR = GT_ROOT / "gehi_displacement_audit_2026-07-06"
 OFFSETS_CSV = AUDIT_DIR / "per_chipdate_offsets.csv"
 BIAS_CSV = AUDIT_DIR / "gehi_vs_vexcel_bias.csv"
@@ -72,7 +72,7 @@ MAX_COARSE_SEARCH_M = 30.0  # comfortably above estimate_shift's 27m guard
 
 DEFAULT_BACKBONE = "vit_small_patch14_dinov2.lvd142m"  # dinov2_floor, ViT-S/14
 DEFAULT_INPUT_SIZE = 518
-DEFAULT_WEIGHTS_CACHE = Path("/home/gaosh/zasolar_data/models/dinov2_floor/hf_cache")
+DEFAULT_WEIGHTS_CACHE = Path("/home/gao/zasolar_data/models/dinov2_floor/hf_cache")
 
 # Production-scale extrapolation constants (from the handoff conversation).
 PROD_N_ANCHORS = 15_800

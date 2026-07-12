@@ -2,14 +2,14 @@
 # ISSUE-25 Stage C / B0 model bridge: new model on exact banked96 frame sets.
 set -euo pipefail
 
-cd /home/gaosh/projects/solar_backdating
+cd /home/gao/projects/solar_backdating
 source scripts/activate_env.sh
 
-ROOT="${ROOT:-/home/gaosh/zasolar_data/geid_temporal/issue25_teacher_geometry_20260710}"
+ROOT="${ROOT:-/home/gao/zasolar_data/geid_temporal/issue25_teacher_geometry_20260710}"
 RUN_ROOT="${RUN_ROOT:-$ROOT/stage_c}"
-BANK="${BANK:-/home/gaosh/zasolar_data/geid_temporal/llm_endtoend_storebacked_20260704}"
+BANK="${BANK:-/home/gao/zasolar_data/geid_temporal/llm_endtoend_storebacked_20260704}"
 SAMPLE="${SAMPLE:-docs/replan_v2/issue25_manifest_20260710/sample_manifest.csv}"
-GROUP_ANCHORS="${GROUP_ANCHORS:-/home/gaosh/zasolar_data/geid_temporal/jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01_chipgroups/chip_groups_as_anchors.csv}"
+GROUP_ANCHORS="${GROUP_ANCHORS:-/home/gao/zasolar_data/geid_temporal/jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01_chipgroups/chip_groups_as_anchors.csv}"
 MODEL="${MODEL:-gemini-3.1-flash-lite}"
 WORKERS="${WORKERS:-40}"
 QPS="${QPS:-20}"

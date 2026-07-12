@@ -6,4 +6,4 @@ for `AGENT.md`. The canonical agent guidance is in
 
 This repo is the V1.4 install-date sub-line of ZAsolar. It is **not** the
 old `geid_bbox` GEID bbox detection prototype — that has been archived
-under `/home/gaosh/projects/_archive/geid_bbox_legacy_2026-05-05/`.
+under `/home/gao/projects/_archive/geid_bbox_legacy_2026-05-05/`.

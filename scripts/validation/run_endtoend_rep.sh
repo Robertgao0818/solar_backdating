@@ -10,15 +10,15 @@
 set -uo pipefail
 REP="${1:?usage: run_endtoend_rep.sh <rep_index>}"
 
-cd /home/gaosh/projects/solar_backdating
+cd /home/gao/projects/solar_backdating
 source scripts/activate_env.sh
 
-ROOT="${ROOT:-/home/gaosh/zasolar_data/geid_temporal/llm_endtoend_20260623}"
+ROOT="${ROOT:-/home/gao/zasolar_data/geid_temporal/llm_endtoend_20260623}"
 REF=$ROOT/reference.csv
 WL=$ROOT/work_lists
 REPDIR=$ROOT/rep$REP
-VEXCEL=/home/gaosh/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv
-PROD_NR=/home/gaosh/zasolar_data/geid_temporal/jhb_full382_fpcut_scan_2026-06-02/norecent_pertarget
+VEXCEL=/home/gao/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv
+PROD_NR=/home/gao/zasolar_data/geid_temporal/jhb_full382_fpcut_scan_2026-06-02/norecent_pertarget
 
 ANCHOR_WORKERS=${ANCHOR_WORKERS:-30}
 QPS=${QPS:-8}

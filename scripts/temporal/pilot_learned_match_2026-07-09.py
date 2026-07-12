@@ -62,7 +62,7 @@ from scripts.temporal.audit_gehi_displacement import (
     load_targets,
 )
 
-GT_ROOT = Path("/home/gaosh/zasolar_data/geid_temporal")
+GT_ROOT = Path("/home/gao/zasolar_data/geid_temporal")
 AUDIT_DIR = GT_ROOT / "gehi_displacement_audit_2026-07-06"
 OFFSETS_CSV = AUDIT_DIR / "per_chipdate_offsets.csv"
 VEXCEL_CROPS = AUDIT_DIR / "vexcel_crops"

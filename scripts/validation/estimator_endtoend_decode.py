@@ -106,7 +106,7 @@ from solar_backdating.eval.scan_state_io import load_scan_observations
 DEFAULT_ROOT = Path.home() / "zasolar_data/geid_temporal/llm_endtoend_20260623"
 DEFAULT_OUT = DEFAULT_ROOT / "analysis_decoder"
 DEFAULT_VEXCEL_CSV = Path(
-    "/home/gaosh/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
+    "/home/gao/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
 )
 
 # --- DECISION-A / PRD-AMENDMENT-P1 (A4) signed production working point ------

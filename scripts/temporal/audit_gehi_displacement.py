@@ -54,7 +54,7 @@ from pathlib import Path
 
 import numpy as np
 
-ZASOLAR_ROOT = Path(os.environ.get("ZASOLAR_ROOT", "/home/gaosh/projects/ZAsolar"))
+ZASOLAR_ROOT = Path(os.environ.get("ZASOLAR_ROOT", "/home/gao/projects/ZAsolar"))
 GT_ROOT = Path(os.path.expanduser("~/zasolar_data/geid_temporal"))
 
 DISTILL_CHIPS = GT_ROOT / "dinov3_distill_20260705" / "chips"

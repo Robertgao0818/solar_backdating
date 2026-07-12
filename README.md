@@ -16,7 +16,7 @@ it light up?"
 ## Status (2026-07-03)
 
 V1.4 sub-line. Replaces the now-archived `geid_bbox` GEID free-detection
-prototype (see `/home/gaosh/projects/_archive/geid_bbox_legacy_2026-05-05/`).
+prototype (see `/home/gao/projects/_archive/geid_bbox_legacy_2026-05-05/`).
 
 Milestones:
 - **2026-06-04** — full JHB back-dating run complete: 92.7% of the FP-cut

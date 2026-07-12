@@ -7,7 +7,7 @@ installation polygon, estimate when it appeared by scanning historical
 satellite vintages (GEID / GEHistoricalImagery / etc.) at that location.
 
 **Not** a free-detection repo. The legacy `geid_bbox` GEID free-detection
-prototype lives at `/home/gaosh/projects/_archive/geid_bbox_legacy_2026-05-05/`
+prototype lives at `/home/gao/projects/_archive/geid_bbox_legacy_2026-05-05/`
 (cold archive, not git-initialized).
 
 ## Plugin contract
@@ -58,9 +58,9 @@ python scripts/temporal/score_anchor_presence.py --help
 - Plugin runtime contract: [`SHARED_FROM_ZASOLAR.md`](SHARED_FROM_ZASOLAR.md)
 - Phase-0 architecture (historical — superseded 2026-05-13 by the GEHI plan):
   [`docs/geid_temporal_anchor_presence_architecture.md`](docs/geid_temporal_anchor_presence_architecture.md)
-- Main project rules: `/home/gaosh/projects/ZAsolar/CLAUDE.md`
-- V1.4 validation framework: `/home/gaosh/projects/ZAsolar/docs/validation_strategy.md`
-- Region registry: `/home/gaosh/projects/ZAsolar/configs/datasets/regions.yaml`
+- Main project rules: `/home/gao/projects/ZAsolar/CLAUDE.md`
+- V1.4 validation framework: `/home/gao/projects/ZAsolar/docs/validation_strategy.md`
+- Region registry: `/home/gao/projects/ZAsolar/configs/datasets/regions.yaml`
 
 ## Environment
 
@@ -68,4 +68,4 @@ python scripts/temporal/score_anchor_presence.py --help
 - CUDA GPU only required if running full presence scoring on long stacks;
   Phase-0 anchor-presence scoring is mostly CPU + I/O bound
 - `ZASOLAR_ROOT` env var overrides default path to main repo
-  (defaults to `/home/gaosh/projects/ZAsolar`)
+  (defaults to `/home/gao/projects/ZAsolar`)

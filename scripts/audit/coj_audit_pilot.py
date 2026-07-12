@@ -52,7 +52,7 @@ from scripts.audit.coj_audit_join import (  # noqa: E402
     sample_pilot,
 )
 
-DATA_ROOT = Path("/home/gaosh/zasolar_data/geid_temporal")
+DATA_ROOT = Path("/home/gao/zasolar_data/geid_temporal")
 DEFAULT_OUTPUT_ROOT = DATA_ROOT / "coj_audit_pilot_20260703"
 
 DEFAULT_INTERVALS_CSV = (

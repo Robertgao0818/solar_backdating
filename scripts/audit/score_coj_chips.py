@@ -34,14 +34,14 @@ import torch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # solar_backdating/
 ZASOLAR_ROOT = Path(
-    __import__("os").environ.get("ZASOLAR_ROOT", "/home/gaosh/projects/ZAsolar")
+    __import__("os").environ.get("ZASOLAR_ROOT", "/home/gao/projects/ZAsolar")
 )
 if str(ZASOLAR_ROOT) not in sys.path:
     sys.path.insert(0, str(ZASOLAR_ROOT))
 
 DEFAULT_CHECKPOINT = ZASOLAR_ROOT / "checkpoints/exp_unified_reviewall_A/best_model.pth"
 SOLAR_CLS_ROOT = Path(
-    __import__("os").environ.get("SOLAR_CLS_ROOT", "/home/gaosh/projects/solar_cls")
+    __import__("os").environ.get("SOLAR_CLS_ROOT", "/home/gao/projects/solar_cls")
 )
 DEFAULT_CLS_CHECKPOINT = Path(
     "~/zasolar_data/cls/checkpoints/cls_pv_thermal_v2_dinov2_vits14_adaptive/best_cls.pth"

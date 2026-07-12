@@ -100,7 +100,7 @@ from scripts.audit.coj_cohort_join import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 DATA_ROOT = Path("~/zasolar_data/geid_temporal").expanduser()
-ZASOLAR_ROOT = Path(os.environ.get("ZASOLAR_ROOT", "/home/gaosh/projects/ZAsolar"))
+ZASOLAR_ROOT = Path(os.environ.get("ZASOLAR_ROOT", "/home/gao/projects/ZAsolar"))
 
 DEFAULT_OUTPUT_ROOT = DATA_ROOT / "coj_audit_cohort_20260704"
 DEFAULT_SEED = 20260704

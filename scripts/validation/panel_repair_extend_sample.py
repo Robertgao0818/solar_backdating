@@ -32,15 +32,15 @@ import random
 from pathlib import Path
 
 CHIPGROUPS = Path(
-    "/home/gaosh/zasolar_data/geid_temporal/"
+    "/home/gao/zasolar_data/geid_temporal/"
     "jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01_chipgroups"
 )
 SCAN_STATES = Path(
-    "/home/gaosh/zasolar_data/geid_temporal/"
+    "/home/gao/zasolar_data/geid_temporal/"
     "jhb_full382_fpcut_scan_2026-06-02/scan_states"
 )
 BANKED_SAMPLE = Path(
-    "/home/gaosh/zasolar_data/geid_temporal/mini_reliability_20260624/sample"
+    "/home/gao/zasolar_data/geid_temporal/mini_reliability_20260624/sample"
 )
 STRATUM = "done_appears"
 

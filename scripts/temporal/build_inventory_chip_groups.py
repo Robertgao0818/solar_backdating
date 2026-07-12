@@ -44,7 +44,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.temporal.geid_temporal_common import write_csv_rows
 
-ZASOLAR_ROOT = Path("/home/gaosh/projects/ZAsolar")
+ZASOLAR_ROOT = Path("/home/gao/projects/ZAsolar")
 # FP-cut inventory (Gemini two-stage false-positive review, 2026-06-01):
 # 47,465 -> 41,393 polygons across 356 grids. Drop-in for the raw merge01_c0925
 # inventory (same layer `solar_predictions` / schema / EPSG:32735). Provenance:

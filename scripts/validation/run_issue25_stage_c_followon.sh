@@ -2,10 +2,10 @@
 # Wait for Stage-1, select the winner, then run Stage-2 and B0 sequentially.
 set -euo pipefail
 
-cd /home/gaosh/projects/solar_backdating
+cd /home/gao/projects/solar_backdating
 source scripts/activate_env.sh
 
-ROOT="${ROOT:-/home/gaosh/zasolar_data/geid_temporal/issue25_teacher_geometry_20260710}"
+ROOT="${ROOT:-/home/gao/zasolar_data/geid_temporal/issue25_teacher_geometry_20260710}"
 RUN_ROOT="${RUN_ROOT:-$ROOT/stage_c}"
 MODEL="${MODEL:-gemini-3.1-flash-lite}"
 STAGE1_ANCHORS="$RUN_ROOT/stage1_anchors_96m.csv"

@@ -93,7 +93,7 @@ DEFAULT_PANEL_A_LONG = (
     Path.home() / "zasolar_data/geid_temporal/fullstack_noscan_20260630/long_all.csv"
 )
 DEFAULT_VEXCEL_CSV = Path(
-    "/home/gaosh/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
+    "/home/gao/projects/ZAsolar/data/analysis/vexcel_jhb_per_grid_capture_dates_2026-06-04.csv"
 )
 DEFAULT_OUT = Path.home() / "zasolar_data/geid_temporal/issue03_gates_20260704"
 

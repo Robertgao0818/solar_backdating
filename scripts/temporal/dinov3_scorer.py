@@ -111,7 +111,7 @@ DEFAULT_CENTER_POOL_K = 3
 DEFAULT_UPSCALE_POLICY = "bilinear"  # small chips upscale to input_size with this
 VALID_UPSCALE_POLICIES = frozenset({"bilinear", "bicubic"})
 DEFAULT_HEAD_SEED = 20260703
-DEFAULT_WEIGHTS_CACHE_DIR = Path("/home/gaosh/zasolar_data/models/dinov3_sat/hf_cache")
+DEFAULT_WEIGHTS_CACHE_DIR = Path("/home/gao/zasolar_data/models/dinov3_sat/hf_cache")
 _WEIGHTS_ENV_VAR = "SOLAR_DINOV3_WEIGHTS_DIR"
 DEFAULT_PATCH_SIZE = 16  # fallback when a backbone id embeds no patchNN token
 
@@ -120,7 +120,7 @@ DEFAULT_PATCH_SIZE = 16  # fallback when a backbone id embeds no patchNN token
 # never collides with the 303M DINOv3-L-SAT cache.
 DEFAULT_DINOV2_BACKBONE_MODEL_ID = "vit_small_patch14_dinov2.lvd142m"
 DEFAULT_DINOV2_INPUT_SIZE = 518
-DEFAULT_DINOV2_WEIGHTS_CACHE_DIR = Path("/home/gaosh/zasolar_data/models/dinov2_floor/hf_cache")
+DEFAULT_DINOV2_WEIGHTS_CACHE_DIR = Path("/home/gao/zasolar_data/models/dinov2_floor/hf_cache")
 _DINOV2_WEIGHTS_ENV_VAR = "SOLAR_DINOV2_WEIGHTS_DIR"
 
 # Head-bundle class order (contract v1): logit index 0/1/2. FIXED — matches the

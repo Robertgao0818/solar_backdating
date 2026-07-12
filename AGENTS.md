@@ -3,7 +3,7 @@
 This repo is the V1.4 install-date sub-line of the ZAsolar project. **Not**
 a free-standing solar-panel detector; not the `geid_bbox` prototype (that
 repo is archived under
-`/home/gaosh/projects/_archive/geid_bbox_legacy_2026-05-05/`).
+`/home/gao/projects/_archive/geid_bbox_legacy_2026-05-05/`).
 
 ## What this repo does
 
@@ -24,7 +24,7 @@ repo is archived under
 ## Plugin runtime contract
 
 This repo expects the ZAsolar main repo to live at
-`/home/gaosh/projects/ZAsolar/` (override with `ZASOLAR_ROOT` env var). It
+`/home/gao/projects/ZAsolar/` (override with `ZASOLAR_ROOT` env var). It
 does not have its own venv; it shares main repo's `.venv` and reads
 `core.region_registry`, `core.annotation_loader`, `core.grid_utils`,
 `configs/datasets/regions.yaml` via `PYTHONPATH`. See
@@ -84,5 +84,5 @@ PYTHONPATH order is enforced by `scripts/activate_env.sh`:
 ## Memory & cross-review
 
 This repo uses the main project's auto-memory at
-`~/.claude/projects/-home-gaosh-projects-ZAsolar/memory/`. Don't spawn a
+`~/.claude/projects/-home-gao-projects-ZAsolar/memory/`. Don't spawn a
 separate memory tree.

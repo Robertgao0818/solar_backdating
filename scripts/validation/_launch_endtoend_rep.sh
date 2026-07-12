@@ -2,8 +2,8 @@
 # tmux entry wrapper: run one end-to-end replica with timestamped file logging + exit marker.
 # Usage (inside tmux): _launch_endtoend_rep.sh <rep_index>
 REP="${1:?rep index}"
-cd /home/gaosh/projects/solar_backdating
-ROOT=/home/gaosh/zasolar_data/geid_temporal/llm_endtoend_20260623
+cd /home/gao/projects/solar_backdating
+ROOT=/home/gao/zasolar_data/geid_temporal/llm_endtoend_20260623
 LOG="$ROOT/rep${REP}.log"
 : > "$LOG"
 ANCHOR_WORKERS="${ANCHOR_WORKERS:-30}" QPS="${QPS:-8}" \

@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Mapping, Sequence
 
-DEFAULT_GEHI_EXE = Path("/home/gaosh/zasolar_data/tools/GEHistoricalImagery/GEHistoricalImagery")
+DEFAULT_GEHI_EXE = Path("/home/gao/zasolar_data/tools/GEHistoricalImagery/GEHistoricalImagery")
 DEFAULT_PROVIDER = "TM"
 DEFAULT_PROBE_ZOOM = 19
 
