@@ -45,6 +45,9 @@ python scripts/temporal/score_anchor_presence.py --help
 5. **Sub-task only.** This repo is downstream of ZAsolar's census output.
    Do not redefine V1.4 task semantics here; refer to
    `ZAsolar/docs/validation_strategy.md`.
+6. **Use tmux for long tasks** (probes, downloads, scans >30 min):
+   `tmux new -d -s <name> '<cmd>'` with resumable scripts, progress read
+   from logs — never tie them to an agent session's lifetime.
 
 ## Key references
 
