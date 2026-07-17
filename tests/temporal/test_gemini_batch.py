@@ -171,6 +171,32 @@ def test_batch_first_attempt_success(picks, gemini_config) -> None:
     assert audit_records[0]["stage"] == "batch_attempt_1"
 
 
+def test_batch_audit_records_rendered_prompt_and_image_order(picks, gemini_config) -> None:
+    """Provenance amendment 2026-07-16: every batch attempt persists the exact
+    rendered prompt and the request image order in the audit sidecar."""
+    sent_prompts: list[str] = []
+
+    def poster(**kwargs: Any) -> dict[str, Any]:
+        sent_prompts.append(kwargs["prompt"])
+        return _native_response(_full_response_for_picks(picks, [True, False, True]))
+
+    audit_records: list[dict] = []
+    score_batch_with_fallback(
+        picks, config=gemini_config, audit_writer=audit_records.append, poster=poster
+    )
+    rec = audit_records[0]
+    assert rec["prompt"] == sent_prompts[0]
+    assert rec["image_order"] == [1, 2, 3]
+
+
+def test_batch_rejects_out_of_order_picks(picks, gemini_config) -> None:
+    """Image order IS chip_index order (IMAGE_ORDER_RULE) — fail loud otherwise."""
+    with pytest.raises(ValueError, match="chip_index order"):
+        score_batch_with_fallback(
+            list(reversed(picks)), config=gemini_config, poster=lambda **k: {}
+        )
+
+
 def test_batch_retries_when_first_attempt_partial(picks, gemini_config) -> None:
     """Attempt 1 returns only 2/3 valid rows; attempt 2 returns full → all gemini_batch."""
     attempt = {"n": 0}

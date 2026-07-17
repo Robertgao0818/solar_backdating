@@ -69,6 +69,15 @@ def test_get_scorer_unknown_name_raises_clear_error() -> None:
         get_scorer("nope")
 
 
+def test_gemini_fingerprint_pins_request_identity_fields() -> None:
+    """Provenance amendment 2026-07-16: temperature / preprocessing / image
+    order are instruction identity and must enter the prompt-config hash."""
+    fp = get_scorer("gemini").prompt_config_fingerprint("batch", None)
+    assert fp["temperature"] == 0
+    assert fp["image_preprocessing"] == "raw_bytes_base64_no_transform"
+    assert fp["image_order_rule"] == "picks_order_chip_index_1based"
+
+
 def test_register_scorer_is_additive() -> None:
     sentinel = object()
 

@@ -307,6 +307,9 @@ class GeminiPresenceScorer:
             BATCH_CENSUS_CALIBRATION_SUFFIX,
             BATCH_PROMPT_TEMPLATE,
             DEFAULT_PROMPT,
+            GENERATION_TEMPERATURE,
+            IMAGE_ORDER_RULE,
+            IMAGE_PREPROCESSING,
             MATRIX_PROMPT_TEMPLATE,
             SEQUENCE_PROMPT_TEMPLATE,
         )
@@ -325,6 +328,11 @@ class GeminiPresenceScorer:
             "max_tokens_per_chip": getattr(config, "max_tokens_per_chip", None),
             "thinking_level": getattr(config, "thinking_level", None),
             "thinking_budget": getattr(config, "thinking_budget", None),
+            # Provenance amendment 2026-07-16 (ISSUE-09 final review P0-2):
+            # request identity previously hardcoded/implicit, now hashed.
+            "temperature": GENERATION_TEMPERATURE,
+            "image_preprocessing": IMAGE_PREPROCESSING,
+            "image_order_rule": IMAGE_ORDER_RULE,
         }
         if mode == "matrix":
             payload["matrix_json_mode"] = getattr(config, "matrix_json_mode", None)

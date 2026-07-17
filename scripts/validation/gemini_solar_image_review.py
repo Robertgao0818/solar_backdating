@@ -13,6 +13,7 @@ import csv
 import json
 import mimetypes
 import os
+import random
 import re
 import shlex
 import shutil
@@ -211,6 +212,13 @@ BATCH_CENSUS_CALIBRATION_SUFFIX = (
     "using chip {ref_idx} only as appearance-calibration reference.\n"
 )
 
+# Provenance-pinned request identity (prereg amendment 2026-07-16). These are
+# part of the prompt-config fingerprint: changing any of them changes
+# `prompt_config_hash` for every subsequent row, on purpose.
+GENERATION_TEMPERATURE = 0
+IMAGE_PREPROCESSING = "raw_bytes_base64_no_transform"
+IMAGE_ORDER_RULE = "picks_order_chip_index_1based"
+
 
 class RateLimiter:
     """Thread-safe global request pacer shared across worker threads.
@@ -235,6 +243,162 @@ class RateLimiter:
                 time.sleep(self._next_at - now)
                 now = time.monotonic()
             self._next_at = now + self.interval
+
+
+# Transport-level retry policy (incident 2026-07-16 22:46-23:30 NZST: a real
+# sub2api gateway outage — 221x upstream 502, 84x 429 — fossilized into
+# permanent `gemini_failed` anchors because the existing Q5.6 (a') retry
+# policy (batch attempt 1 -> attempt 2 -> salvage -> per-image fallback) has
+# zero backoff and does not distinguish transient transport errors from
+# schema/row-count failures. This layer retries *only* the HTTP request
+# itself, underneath that policy, so every call shape (batch, per-image,
+# sequence, matrix) benefits without changing Q5.6 semantics or the
+# "gemini_failed" sentinel.
+RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 502, 503, 504})
+TRANSPORT_MAX_ATTEMPTS = 5
+TRANSPORT_BASE_DELAY_SEC = 2.0
+TRANSPORT_BACKOFF_MULTIPLIER = 3.0
+TRANSPORT_MAX_DELAY_SEC = 60.0
+
+# Whole-account-pool-exhaustion retry policy (incident 2026-07-17 11:37-14:43
+# NZST: all 11 sub2api accounts hit a shared per-model Gemini rate limit
+# simultaneously; the gateway returned an instant 503 "No available Gemini
+# accounts: no available accounts" on every request for ~3h05m). This is a
+# distinct condition from a generic retryable status — it means the ENTIRE
+# account pool is temporarily out of capacity, not that one upstream call
+# hiccuped — so it gets a second, much more patient, flat-interval retry
+# phase layered on top of the transport retry above (which is sized for
+# single-account transient blips, ~1-2min worst case, and exhausted
+# immediately during the incident, fossilizing 1,786 anchors into
+# done_ambiguous_gemini_failed). Engages per HTTP call, so worst case across
+# one anchor's up-to-7 Q5.6 calls is bounded to roughly 7x this budget, not
+# unbounded; a sufficiently long outage (this incident's included) will
+# still eventually exhaust it and fall through to gemini_failed as before —
+# this narrows the blast radius, it does not make the run outage-proof.
+POOL_EXHAUSTED_STATUS_CODE = 503
+POOL_EXHAUSTED_MESSAGE_MARKER = "no available accounts"
+POOL_EXHAUSTED_MAX_ATTEMPTS = 8
+POOL_EXHAUSTED_RETRY_INTERVAL_SEC = 45.0
+
+
+def _is_pool_exhausted_response(response: "requests.Response") -> bool:
+    """Detect sub2api's whole-account-pool-exhaustion signature.
+
+    Distinguishes "every account in the gateway's pool is temporarily
+    unavailable" (self-clearing in minutes-to-hours, worth waiting out) from
+    a generic retryable 503 (e.g. a single upstream hiccup).
+    """
+    if response.status_code != POOL_EXHAUSTED_STATUS_CODE:
+        return False
+    try:
+        body = response.text
+    except Exception:  # noqa: BLE001 - defensive; response.text should not raise
+        return False
+    return POOL_EXHAUSTED_MESSAGE_MARKER in body.lower()
+
+
+def _transport_backoff_delay(
+    attempt: int,
+    *,
+    base_delay: float = TRANSPORT_BASE_DELAY_SEC,
+    multiplier: float = TRANSPORT_BACKOFF_MULTIPLIER,
+    cap: float = TRANSPORT_MAX_DELAY_SEC,
+) -> float:
+    """Full-jitter exponential backoff delay after a failed ``attempt`` (1-based).
+
+    Returns a uniform-random delay in ``[0, min(cap, base_delay * multiplier**(attempt-1))]``.
+    """
+    ceiling = min(cap, base_delay * (multiplier ** (attempt - 1)))
+    return random.uniform(0, ceiling)
+
+
+def _is_retryable_transport_exception(exc: Exception) -> bool:
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+
+
+def _post_with_transport_retry(
+    do_post: Callable[[], "requests.Response"],
+    *,
+    max_attempts: int = TRANSPORT_MAX_ATTEMPTS,
+    base_delay: float = TRANSPORT_BASE_DELAY_SEC,
+    multiplier: float = TRANSPORT_BACKOFF_MULTIPLIER,
+    cap: float = TRANSPORT_MAX_DELAY_SEC,
+    pool_exhausted_max_attempts: int = POOL_EXHAUSTED_MAX_ATTEMPTS,
+    pool_exhausted_interval: float = POOL_EXHAUSTED_RETRY_INTERVAL_SEC,
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> tuple["requests.Response", int]:
+    """Issue ``do_post()`` with retry + exponential backoff for transient errors.
+
+    Retryable: HTTP 429/502/503/504 responses, connection errors, timeouts.
+    Everything else (other HTTP statuses, e.g. 400/401/403, or any other
+    exception type) is returned/raised immediately on the first attempt, so
+    callers keep today's exact error shape for non-transport failures —
+    schema/parse failures never reach this function at all, since it only
+    wraps the raw ``requests`` call, not response parsing.
+
+    If every attempt above is exhausted and the final response is
+    specifically sub2api's whole-account-pool-exhaustion signature (see
+    ``_is_pool_exhausted_response``), a second, much longer flat-interval
+    retry phase engages automatically before finally giving up (incident
+    2026-07-17). Any other outcome — success, or a different error — returns
+    or raises after the first phase only, unchanged from before this phase
+    existed.
+
+    Re-acquires ``limiter`` (if given) before every attempt, including
+    retries in both phases, so a shared QPS pacer is respected on each resend.
+
+    Returns ``(response, retries)`` where ``retries`` is the number of
+    retries actually performed across both phases combined (0 if the first
+    attempt's result was used). On exhausted retries for a connection/timeout
+    exception, the original exception is re-raised with a
+    ``transport_retries`` attribute attached so callers can still report how
+    many retries were attempted.
+    """
+    response: requests.Response | None = None
+    retries = 0
+    for attempt in range(1, max_attempts + 1):
+        if limiter is not None:
+            limiter.wait()
+        try:
+            response = do_post()
+        except Exception as exc:  # noqa: BLE001 - re-raised below, only gated on retryability.
+            if not _is_retryable_transport_exception(exc) or attempt >= max_attempts:
+                exc.transport_retries = attempt - 1  # type: ignore[attr-defined]
+                raise
+            sleep_fn(
+                _transport_backoff_delay(attempt, base_delay=base_delay, multiplier=multiplier, cap=cap)
+            )
+            continue
+
+        retries = attempt - 1
+        if response.status_code in RETRYABLE_HTTP_STATUS_CODES and attempt < max_attempts:
+            sleep_fn(
+                _transport_backoff_delay(attempt, base_delay=base_delay, multiplier=multiplier, cap=cap)
+            )
+            continue
+        break
+    else:  # pragma: no cover - unreachable, the last attempt always breaks or raises
+        raise RuntimeError("transport retry loop exited unexpectedly")
+
+    if response is None or not _is_pool_exhausted_response(response):
+        return response, retries
+
+    for pe_attempt in range(1, pool_exhausted_max_attempts + 1):
+        sleep_fn(pool_exhausted_interval)
+        if limiter is not None:
+            limiter.wait()
+        try:
+            response = do_post()
+        except Exception as exc:  # noqa: BLE001 - already committed to riding out the outage.
+            if pe_attempt >= pool_exhausted_max_attempts:
+                exc.transport_retries = retries + pe_attempt  # type: ignore[attr-defined]
+                raise
+            continue
+        retries += 1
+        if not _is_pool_exhausted_response(response):
+            return response, retries
+    return response, retries
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -362,11 +526,14 @@ def post_chat_completion(
     image_paths: list[Path],
     max_tokens: int | None,
     timeout: int,
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    max_transport_attempts: int = TRANSPORT_MAX_ATTEMPTS,
 ) -> dict[str, Any]:
     endpoint = f"{normalize_openai_url(base_url)}/chat/completions"
     payload = {
         "model": model,
-        "temperature": 0,
+        "temperature": GENERATION_TEMPERATURE,
         "messages": [
             {
                 "role": "user",
@@ -377,20 +544,28 @@ def post_chat_completion(
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
 
-    response = requests.post(
-        endpoint,
-        headers=auth_headers(api_key),
-        data=json.dumps(payload),
-        timeout=timeout,
+    response, retries = _post_with_transport_retry(
+        lambda: requests.post(
+            endpoint,
+            headers=auth_headers(api_key),
+            data=json.dumps(payload),
+            timeout=timeout,
+        ),
+        max_attempts=max_transport_attempts,
+        limiter=limiter,
+        sleep_fn=sleep_fn,
     )
     try:
         response.raise_for_status()
     except requests.HTTPError as exc:
         body = response.text[:2000]
-        raise RuntimeError(
-            f"{response.status_code} {response.reason} from {endpoint}: {body}"
-        ) from exc
-    return response.json()
+        err = RuntimeError(f"{response.status_code} {response.reason} from {endpoint}: {body}")
+        err.transport_retries = retries  # type: ignore[attr-defined]
+        raise err from exc
+    result = response.json()
+    if retries:
+        result["_transport_retries"] = retries
+    return result
 
 
 def post_native_generate_content(
@@ -408,6 +583,9 @@ def post_native_generate_content(
     routing_salt: str | None = None,
     thinking_level: str | None = None,
     thinking_budget: int | None = None,
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    max_transport_attempts: int = TRANSPORT_MAX_ATTEMPTS,
 ) -> dict[str, Any]:
     if thinking_level and thinking_budget is not None:
         raise ValueError("thinking_level and thinking_budget cannot both be set")
@@ -422,7 +600,7 @@ def post_native_generate_content(
             }
         ],
         "generationConfig": {
-            "temperature": 0,
+            "temperature": GENERATION_TEMPERATURE,
         },
     }
     if max_tokens is not None:
@@ -439,20 +617,28 @@ def post_native_generate_content(
     if thinking_config:
         payload["generationConfig"]["thinkingConfig"] = thinking_config
 
-    response = requests.post(
-        endpoint,
-        headers=auth_headers(api_key),
-        data=json.dumps(payload),
-        timeout=timeout,
+    response, retries = _post_with_transport_retry(
+        lambda: requests.post(
+            endpoint,
+            headers=auth_headers(api_key),
+            data=json.dumps(payload),
+            timeout=timeout,
+        ),
+        max_attempts=max_transport_attempts,
+        limiter=limiter,
+        sleep_fn=sleep_fn,
     )
     try:
         response.raise_for_status()
     except requests.HTTPError as exc:
         body = response.text[:2000]
-        raise RuntimeError(
-            f"{response.status_code} {response.reason} from {endpoint}: {body}"
-        ) from exc
-    return response.json()
+        err = RuntimeError(f"{response.status_code} {response.reason} from {endpoint}: {body}")
+        err.transport_retries = retries  # type: ignore[attr-defined]
+        raise err from exc
+    result = response.json()
+    if retries:
+        result["_transport_retries"] = retries
+    return result
 
 
 def response_text(response_json: dict[str, Any]) -> str:
@@ -1234,8 +1420,15 @@ def _call_gemini(
     response_schema: dict[str, Any] | None = None,
     routing_salt: str | None = None,
     poster: Callable[..., dict[str, Any]] | None = None,
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> tuple[str, dict[str, Any]]:
-    """Call Gemini via agy / native / openai format. Returns (response_text, raw_response_json)."""
+    """Call Gemini via agy / native / openai format. Returns (response_text, raw_response_json).
+
+    ``limiter`` / ``sleep_fn`` only apply to the HTTP-backed native/openai
+    paths (transport-level retry with backoff); ``poster`` test doubles and
+    the agy (subprocess) path ignore them.
+    """
     if config.api_format == "agy":
         if poster is None:
             raw = post_agy_print(
@@ -1271,6 +1464,8 @@ def _call_gemini(
                 routing_salt=routing_salt,
                 thinking_level=config.thinking_level or None,
                 thinking_budget=config.thinking_budget,
+                limiter=limiter,
+                sleep_fn=sleep_fn,
             )
         else:
             raw = poster(
@@ -1299,6 +1494,8 @@ def _call_gemini(
             image_paths=image_paths,
             max_tokens=max_tokens,
             timeout=config.timeout,
+            limiter=limiter,
+            sleep_fn=sleep_fn,
         )
     else:
         raw = poster(
@@ -1369,27 +1566,33 @@ def _attempt_batch(
     poster: Callable[..., dict[str, Any]] | None,
     census_mid_date_iso: str | None = None,
     routing_salt: str | None = None,
-) -> tuple[list[dict[str, Any]], list[int], str, str | None]:
-    """Single batch attempt. Returns (valid_parsed, missing_indices, raw_text, error)."""
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> tuple[list[dict[str, Any]], list[int], str, str | None, int]:
+    """Single batch attempt. Returns (valid_parsed, missing_indices, raw_text, error, transport_retries)."""
     prompt = _build_batch_prompt(picks, census_mid_date_iso=census_mid_date_iso)
     max_tokens = config.max_tokens_per_chip * len(picks) + 256
     try:
-        raw_text, _raw_json = _call_gemini(
+        raw_text, raw_json = _call_gemini(
             image_paths=[p.chip_path for p in picks],
             prompt=prompt,
             config=config,
             max_tokens=max_tokens,
             poster=poster,
             routing_salt=routing_salt,
+            limiter=limiter,
+            sleep_fn=sleep_fn,
         )
     except Exception as exc:  # noqa: BLE001 - retry layer treats all errors uniformly.
-        return [], [p.chip_index for p in picks], "", f"{type(exc).__name__}: {exc}"
+        retries = getattr(exc, "transport_retries", 0)
+        return [], [p.chip_index for p in picks], "", f"{type(exc).__name__}: {exc}", retries
 
     parsed, missing = parse_jsonl_lenient(raw_text, len(picks))
     valid = [p for p in parsed if validate_observation_schema(p)]
     valid_indices = {int(p["chip_index"]) for p in valid}
     final_missing = [i for i in range(1, len(picks) + 1) if i not in valid_indices]
-    return valid, final_missing, raw_text, None
+    retries = raw_json.get("_transport_retries", 0) if isinstance(raw_json, dict) else 0
+    return valid, final_missing, raw_text, None, retries
 
 
 def _attempt_per_image(
@@ -1398,31 +1601,41 @@ def _attempt_per_image(
     config: GeminiClientConfig,
     poster: Callable[..., dict[str, Any]] | None,
     routing_salt: str | None = None,
-) -> GeminiObservation:
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> tuple[GeminiObservation, int]:
+    """Returns (observation, transport_retries)."""
     prompt = DEFAULT_PROMPT
     try:
-        raw_text, _raw = _call_gemini(
+        raw_text, raw_json = _call_gemini(
             image_paths=[pick.chip_path],
             prompt=prompt,
             config=config,
             max_tokens=config.max_tokens_per_chip,
             poster=poster,
             routing_salt=routing_salt,
+            limiter=limiter,
+            sleep_fn=sleep_fn,
         )
     except Exception as exc:  # noqa: BLE001
-        return _failed_observation(pick.chip_index, f"per_image_call_error: {type(exc).__name__}: {exc}")
+        retries = getattr(exc, "transport_retries", 0)
+        return (
+            _failed_observation(pick.chip_index, f"per_image_call_error: {type(exc).__name__}: {exc}"),
+            retries,
+        )
 
+    retries = raw_json.get("_transport_retries", 0) if isinstance(raw_json, dict) else 0
     try:
         parsed = extract_json_object(raw_text)
     except Exception as exc:  # noqa: BLE001
-        return _failed_observation(pick.chip_index, f"per_image_parse_error: {exc}")
+        return _failed_observation(pick.chip_index, f"per_image_parse_error: {exc}"), retries
 
     if not isinstance(parsed, dict):
-        return _failed_observation(pick.chip_index, "per_image_response_not_object")
+        return _failed_observation(pick.chip_index, "per_image_response_not_object"), retries
     parsed.setdefault("chip_index", pick.chip_index)
     if not validate_observation_schema(parsed):
-        return _failed_observation(pick.chip_index, f"per_image_schema_invalid: {raw_text[:300]}")
-    return _to_observation(parsed, decision_source="gemini_per_image", raw=raw_text)
+        return _failed_observation(pick.chip_index, f"per_image_schema_invalid: {raw_text[:300]}"), retries
+    return _to_observation(parsed, decision_source="gemini_per_image", raw=raw_text), retries
 
 
 def score_batch_with_fallback(
@@ -1433,6 +1646,8 @@ def score_batch_with_fallback(
     poster: Callable[..., dict[str, Any]] | None = None,
     census_mid_date_iso: str | None = None,
     routing_salt: str | None = None,
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> list[GeminiObservation]:
     """Score N chips in one batch call following Q5.6 (a') retry policy:
 
@@ -1449,9 +1664,22 @@ def score_batch_with_fallback(
     if not picks:
         return []
 
-    valid1, missing1, raw1, err1 = _attempt_batch(
+    # Provenance amendment 2026-07-16: request image order IS chip_index order
+    # (IMAGE_ORDER_RULE). Enforce it fail-loud rather than assuming it, and
+    # persist the exact rendered prompt (the census-calibration suffix is the
+    # only place a rendered capture-date string reaches the model in batch
+    # mode) so every request is reconstructable from the audit sidecar.
+    image_order = [p.chip_index for p in picks]
+    if image_order != list(range(1, len(picks) + 1)):
+        raise ValueError(
+            "picks must arrive in chip_index order 1..N "
+            f"({IMAGE_ORDER_RULE}); got {image_order}"
+        )
+    prompt_rendered = _build_batch_prompt(picks, census_mid_date_iso=census_mid_date_iso)
+
+    valid1, missing1, raw1, err1, retries1 = _attempt_batch(
         picks, config=config, poster=poster, census_mid_date_iso=census_mid_date_iso,
-        routing_salt=routing_salt,
+        routing_salt=routing_salt, limiter=limiter, sleep_fn=sleep_fn,
     )
     if audit_writer is not None:
         audit_writer(
@@ -1462,15 +1690,18 @@ def score_batch_with_fallback(
                 "missing_indices": missing1,
                 "error": err1,
                 "raw_response": raw1,
+                "prompt": prompt_rendered,
+                "image_order": image_order,
+                "transport_retries": retries1,
             }
         )
 
     if len(valid1) == len(picks) and not missing1:
         return [_to_observation(p, decision_source="gemini_batch", raw=raw1) for p in valid1]
 
-    valid2, missing2, raw2, err2 = _attempt_batch(
+    valid2, missing2, raw2, err2, retries2 = _attempt_batch(
         picks, config=config, poster=poster, census_mid_date_iso=census_mid_date_iso,
-        routing_salt=routing_salt,
+        routing_salt=routing_salt, limiter=limiter, sleep_fn=sleep_fn,
     )
     if audit_writer is not None:
         audit_writer(
@@ -1481,6 +1712,9 @@ def score_batch_with_fallback(
                 "missing_indices": missing2,
                 "error": err2,
                 "raw_response": raw2,
+                "prompt": prompt_rendered,
+                "image_order": image_order,
+                "transport_retries": retries2,
             }
         )
 
@@ -1496,7 +1730,10 @@ def score_batch_with_fallback(
     for pick in picks:
         if pick.chip_index in salvaged_indices:
             continue
-        per_image = _attempt_per_image(pick, config=config, poster=poster, routing_salt=routing_salt)
+        per_image, per_image_retries = _attempt_per_image(
+            pick, config=config, poster=poster, routing_salt=routing_salt,
+            limiter=limiter, sleep_fn=sleep_fn,
+        )
         if audit_writer is not None:
             audit_writer(
                 {
@@ -1509,6 +1746,7 @@ def score_batch_with_fallback(
                         "error": per_image.error,
                         "raw_response": per_image.raw_response,
                     },
+                    "transport_retries": per_image_retries,
                 }
             )
         fallback_obs.append(per_image)
@@ -1585,10 +1823,12 @@ def _attempt_sequence_batch(
     poster: Callable[..., dict[str, Any]] | None,
     max_tokens: int | None,
     routing_salt: str | None = None,
-) -> tuple[dict[str, Any] | None, str, str | None]:
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> tuple[dict[str, Any] | None, str, str | None, int]:
     prompt = _build_sequence_prompt(date_picks)
     try:
-        raw_text, _raw_json = _call_gemini(
+        raw_text, raw_json = _call_gemini(
             image_paths=[p.chip_path for p in date_picks],
             prompt=prompt,
             config=config,
@@ -1597,15 +1837,18 @@ def _attempt_sequence_batch(
             response_schema=_sequence_response_schema(date_picks),
             poster=poster,
             routing_salt=routing_salt,
+            limiter=limiter,
+            sleep_fn=sleep_fn,
         )
     except Exception as exc:  # noqa: BLE001
-        return None, "", f"{type(exc).__name__}: {exc}"
+        return None, "", f"{type(exc).__name__}: {exc}", getattr(exc, "transport_retries", 0)
 
+    retries = raw_json.get("_transport_retries", 0) if isinstance(raw_json, dict) else 0
     try:
         parsed = parse_sequence_json_strict(raw_text, date_picks=date_picks)
     except Exception as exc:  # noqa: BLE001
-        return None, raw_text, f"{type(exc).__name__}: {exc}"
-    return parsed, raw_text, None
+        return None, raw_text, f"{type(exc).__name__}: {exc}", retries
+    return parsed, raw_text, None, retries
 
 
 def score_single_target_sequence(
@@ -1616,6 +1859,8 @@ def score_single_target_sequence(
     poster: Callable[..., dict[str, Any]] | None = None,
     max_tokens: int | None = None,
     routing_salt: str | None = None,
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> GeminiSequenceResult:
     """Score one target across an ordered date window.
 
@@ -1628,12 +1873,14 @@ def score_single_target_sequence(
 
     last_error: str | None = None
     for attempt in (1, 2):
-        parsed, raw, err = _attempt_sequence_batch(
+        parsed, raw, err, retries = _attempt_sequence_batch(
             date_picks,
             config=config,
             poster=poster,
             max_tokens=max_tokens,
             routing_salt=routing_salt,
+            limiter=limiter,
+            sleep_fn=sleep_fn,
         )
         if audit_writer is not None:
             audit_writer(
@@ -1645,6 +1892,7 @@ def score_single_target_sequence(
                     "error": err,
                     "raw_response": raw,
                     "parsed": parsed,
+                    "transport_retries": retries,
                 }
             )
         if parsed is not None and err is None:
@@ -1698,13 +1946,15 @@ def _attempt_matrix_batch(
     *,
     config: GeminiClientConfig,
     poster: Callable[..., dict[str, Any]] | None,
-) -> tuple[list[dict[str, Any]], list[tuple[int, str]], str, str | None]:
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> tuple[list[dict[str, Any]], list[tuple[int, str]], str, str | None, int]:
     prompt = _build_matrix_prompt(date_picks, targets)
     cell_count = len(date_picks) * len(targets)
     max_tokens = max(config.max_tokens_per_chip * len(date_picks), cell_count * 180 + 256)
     expected_missing = [(p.date_index, t.target_label) for p in date_picks for t in targets]
     try:
-        raw_text, _raw_json = _call_gemini(
+        raw_text, raw_json = _call_gemini(
             image_paths=[p.chip_path for p in date_picks],
             prompt=prompt,
             config=config,
@@ -1712,10 +1962,13 @@ def _attempt_matrix_batch(
             response_mime_type="application/json" if config.matrix_json_mode else None,
             response_schema=_matrix_response_schema(targets) if config.matrix_json_mode else None,
             poster=poster,
+            limiter=limiter,
+            sleep_fn=sleep_fn,
         )
     except Exception as exc:  # noqa: BLE001
-        return [], expected_missing, "", f"{type(exc).__name__}: {exc}"
+        return [], expected_missing, "", f"{type(exc).__name__}: {exc}", getattr(exc, "transport_retries", 0)
 
+    retries = raw_json.get("_transport_retries", 0) if isinstance(raw_json, dict) else 0
     try:
         if config.matrix_json_mode:
             parsed, missing = parse_matrix_json_strict(
@@ -1730,8 +1983,8 @@ def _attempt_matrix_batch(
                 targets=targets,
             )
     except Exception as exc:  # noqa: BLE001
-        return [], expected_missing, raw_text, f"{type(exc).__name__}: {exc}"
-    return parsed, missing, raw_text, None
+        return [], expected_missing, raw_text, f"{type(exc).__name__}: {exc}", retries
+    return parsed, missing, raw_text, None, retries
 
 
 def score_target_date_matrix(
@@ -1745,6 +1998,8 @@ def score_target_date_matrix(
     max_targets: int = DEFAULT_MAX_MATRIX_TARGETS,
     hard_max_targets: int = HARD_MAX_MATRIX_TARGETS,
     hard_max_cells: int = HARD_MAX_MATRIX_CELLS,
+    limiter: RateLimiter | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> list[GeminiMatrixObservation]:
     """Score a bounded date x target matrix from shared chip images.
 
@@ -1766,8 +2021,8 @@ def score_target_date_matrix(
         hard_max_cells=hard_max_cells,
     )
 
-    valid1, missing1, raw1, err1 = _attempt_matrix_batch(
-        date_picks, targets, config=config, poster=poster
+    valid1, missing1, raw1, err1, retries1 = _attempt_matrix_batch(
+        date_picks, targets, config=config, poster=poster, limiter=limiter, sleep_fn=sleep_fn,
     )
     if audit_writer is not None:
         audit_writer(
@@ -1780,14 +2035,15 @@ def score_target_date_matrix(
                 "missing_cells": [f"{d}:{t}" for d, t in missing1],
                 "error": err1,
                 "raw_response": raw1,
+                "transport_retries": retries1,
             }
         )
 
     if len(valid1) == len(date_picks) * len(targets) and not missing1:
         return [_to_matrix_observation(p, decision_source="gemini_matrix", raw=raw1) for p in valid1]
 
-    valid2, missing2, raw2, err2 = _attempt_matrix_batch(
-        date_picks, targets, config=config, poster=poster
+    valid2, missing2, raw2, err2, retries2 = _attempt_matrix_batch(
+        date_picks, targets, config=config, poster=poster, limiter=limiter, sleep_fn=sleep_fn,
     )
     if audit_writer is not None:
         audit_writer(
@@ -1800,6 +2056,7 @@ def score_target_date_matrix(
                 "missing_cells": [f"{d}:{t}" for d, t in missing2],
                 "error": err2,
                 "raw_response": raw2,
+                "transport_retries": retries2,
             }
         )
 
