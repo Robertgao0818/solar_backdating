@@ -30,7 +30,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | 6 | Fidelity gate (three numbers, both backbones; baseline = Phase-0 decoder under D8) — **DONE 2026-07-10**: gate-1 PASS both (self-repro 1.0); gate-2 FAIL both (`A_LSAT=0.6392`, `A_floor=0.6542` ≪ ceiling 0.7724, `S=0.0116`); gate-3 EQUIVALENT; SAT/L bet **FALSIFIED** (floor +1.5 pp). Verdict: [ISSUE-06-gate-verdict-2026-07-06](ISSUE-06-gate-verdict-2026-07-06.md). Gemini stays default → slice 7 still blocked on a future pass | ✅ | 4 ✅, 5 ✅, [replan_v2 2](../replan_v2/ISSUE-02-changepoint-posterior-decoder.md) ✅ | [ISSUE-06](ISSUE-06-fidelity-gate.md) |
 | 7 | Feature-flag rollout + ops profile | ⛔ | 6 (gate-2 FAIL — no production swap) | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
 | 8 | Bonus: deterministic run-to-run experiment (not gated) | ⬜ | 4 | [ISSUE-08](ISSUE-08-determinism-experiment.md) |
-| 9 | Path C0: training-free census-anchored reverse template matching (latent match + monotone changepoint decode; new-prereg lane per revival memo) | 🟡 | round-2 lit survey (2026-07-12) | [ISSUE-09](ISSUE-09-c0-reverse-template-matching.md) |
+| 9 | Path C0: training-free census-anchored reverse template matching (latent match + amended census-conditioned one-sided decode; new-prereg lane per revival memo) | ⛔ | 2026-07-15 mathematical amendment implementation + calibration lock + mandatory tests | [ISSUE-09](ISSUE-09-c0-reverse-template-matching.md) |
 
 ## Dependency graph
 
@@ -117,6 +117,97 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
 
 ## Progress log
 
+- 2026-07-16 — **ISSUE-09 (Path C0) consolidated final review + P0 amendment
+  landed.** Cross-compared the archived external review against the 2026-07-15
+  amendment with two independent verification passes
+  ([`ISSUE-09-c0-final-review-2026-07-16.md`](ISSUE-09-c0-final-review-2026-07-16.md)):
+  both binding fixtures reproduced bit-exact from the real decoder (shared root
+  cause: the noise prior is derived from the signal it must detect); the M4
+  weighted-likelihood adjudication confirmed by derivation and numerically
+  (power vs proper marginal diverges materially under non-unit weights); M12's
+  shift-search correction and the binary patch-center mask confirmed in code.
+  Two P0 blockers found beyond the amendment and resolved same-day per
+  [prereg Amendment 2026-07-16](DATA-c0-reverse-template-prereg-2026-07-12.md#c0-p0-amendment-2026-07-16):
+  (1) `c0_r1` rule 2 rebuilt as a Jeffreys posterior gate
+  `P(p>1/3|k,n) ≥ 0.95` with `n ≥ 150` (harness had a bare point estimate
+  despite the prereg's "CI bounds respected"; verified: a CI reading of the
+  old n=40 bar would demand 50% observed); (2) fresh-Gemini request identity
+  completed — temperature/image-preprocessing/image-order now hashed into
+  `prompt_config_hash` (intentional hash break, pre-launch), rendered batch
+  prompt + image order persisted per attempt, chip_index order enforced
+  fail-loud, and "batch mode sends no per-chip dates" documented in the RUN
+  doc. Un-adopted external-review ideas registered as P1 (fractional token
+  weights, exact-gap diagnostic, extra Stage-0 diagnostics, shift entropy) and
+  P2 (multi-prototype bank, pairwise block changepoint, AnyChange, low-level
+  channels, date-nuisance correction, Student-t) — each still requires its own
+  pre-run amendment before entering the method.
+- 2026-07-15 — **ISSUE-09 (Path C0) mathematical audit amendment adopted;
+  current decoder blocked before Stage-0/held-out use.** Three independent
+  mathematical reviews plus direct source-level reproduction found that the
+  weighted NIG implementation is a power likelihood rather than the documented
+  precision-scaled Gaussian; per-target empirical priors make canonical `T=3`
+  steps amplitude-invariant and make larger exact `T=4` steps increasingly
+  no-change; and the decoder can place clean interval mass after the known-
+  present census date. New blockers beyond the original eight audit questions:
+  template self-scoring contaminates smoke AUC and decode; the alternative is
+  an unordered mean-and-variance change rather than an upward install step;
+  `present_before_window` is an uncalibrated sign rule; the named isotonic
+  cross-check is only GLR plus a direction veto; persistence can certify an
+  alternating/reverting post sequence; and quality weights are inconsistent
+  across filtering, likelihood, prior fitting, and mandatory cross-checks.
+  The original concern that `log(total_days)` makes long windows favor
+  no-change was refuted: for valid distinct day dates it already encodes fixed
+  `P(H_empty)=0.5`. Binding amendment landed in
+  [`DATA-c0-reverse-template-prereg-2026-07-12.md`](DATA-c0-reverse-template-prereg-2026-07-12.md#c0-math-amendment-2026-07-15):
+  census-conditioned support; anchor leave-out; proper one-sided shared-
+  variance precision-weighted regression; explicit boundary/failure states;
+  separate detection/localization confidence; corrected weighted constrained
+  cross-check and monotone persistence; `T=3–4` excluded from clean; strict
+  dedup/domain checks; robust-ring/correlation sensitivities; applied phase
+  registration, non-null anchor gate, train-only whitener, complete run hash;
+  and 14 mandatory regression/property tests. Slice 9 moved from 🟡 to ⛔ until
+  implementation, deterministic calibration/smoke manifests, numeric lock,
+  and tests land. Existing 48 C0 tests still pass but are pre-amendment coverage
+  only; no current decode result counts as prereg-conformant evidence.
+- 2026-07-13 — **ISSUE-09 (Path C0) basemap96 stack adapter landed** (the
+  basemap rebuild wiped every `scan_states` dir and legacy chip stack the
+  2026-07-12 harness assumed; only `chip_targets.csv`/`chip_groups.gpkg`
+  geometry survived). `pilot_c0_reverse_template_2026_07_12.py` embed/curve
+  now support the rebuild's `basemap_rebuild_2026-07-13/chips/<target_id>/
+  z<zoom>/<target_id>_<capture_ymd>_v<vintage_ymd>.tif` layout via
+  `--stack-format basemap96`: per-frame `.tfw` world-file parsing (verified
+  EPSG:3857, GEHI z19 tile resolution, cross-checked against
+  `anchors_per_target_96m.csv`), exact TFW-projected footprint masks
+  (`_footprint_mask_tfw`, replacing the aeqd approximation for this stack
+  format), no render-crop (the per-target tif IS the geometry — new,
+  distinct `geometry_version basemap96_z19_v1` so config-hash provenance
+  can't conflate it with `chip_geom_v2_tight12`), and fail-closed per-frame
+  skip handling for the concurrently-running download (missing `.tfw`,
+  unreadable/partial `.tif`). **Finding en route:** the census polygon GPKG
+  (`full382_merge01_2026-05-15/...gpkg`, `solar_predictions` layer) is
+  EPSG:32735 (UTM 35S), not EPSG:4326 — the legacy `_footprint_mask`'s aeqd
+  path hardcodes EPSG:4326 for this same GPKG and so silently mis-transforms
+  it on every real target (always falls back to `radius_disk`); left
+  untouched (out of scope), but the new TFW path reads the GPKG's own
+  `.crs`. Smoke's label source (legacy scan-states, now dead) replaced by
+  `--labels-csv` (manual target_id/frame_date/present-absent-unsure
+  annotation) with an unchanged AUC≥0.75 / ≥60-anchor bar, plus a
+  `--stage label_template` sampler (`n=150`, fixed seed 20260713, drawn from
+  `gehi_vintage_candidates_pilot2023.csv`) that both emits the fill-in
+  template and creates the main-eval exclusion (reserved-target) list —
+  full methodology in the prereg's "Amendment 2026-07-13" sections. Verified
+  end to end on 3 real targets with 2 downloaded vintages each: embed →
+  curve ran clean (zero frame skips, `fp_source=tfw_polygon` on all 3,
+  realized crop ~95-97 m vs nominal 96 m); decode correctly reports
+  `insufficient_frames` (needs ≥3, download still in progress — expected,
+  not a bug). Tests: `tests/validation/test_c0_pilot.py` extended from 27 to
+  48 collected cases (TFW parsing/roundtrip, stack enumeration + skip reasons,
+  polygon-to-grid projection incl. non-square-resize stretch, labels-CSV
+  parsing, label-template sampling determinism, end-to-end smoke-with-CSV
+  AUC); `tests/temporal/test_chip_geometry.py` extended for the new
+  registry entry. Full repo gate: 1194 passed (one pre-existing, unrelated
+  failure from the rebuild wiping `panel_repair_20260703/` data, confirmed
+  via `git stash` to predate this work).
 - 2026-07-12 — **ISSUE-09 (Path C0) opened** under the revival memo's
   new-prereg lane: training-free census-anchored reverse template matching
   (footprint patch-token latent match against latest same-sensor present

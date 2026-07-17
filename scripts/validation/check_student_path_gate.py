@@ -85,9 +85,32 @@ MIN_PAIR_A2_SEEDS = 3
 C0_SMOKE_AUC_MIN = 0.75
 C0_SMOKE_MIN_ANCHORS = 60
 C0_REPLICATE_EQUIV_MIN_DELTA_PP = -5.0
-C0_ADJUDICATION_MIN_SHARE = 1.0 / 3.0
-C0_ADJUDICATION_MIN_N = 40
+C0_ADJUDICATION_SHARE_THRESHOLD = 1.0 / 3.0
+# Amendment 2026-07-16 (prereg + ISSUE-09-c0-final-review-2026-07-16): rule 2
+# is a Bayesian posterior gate, not a point estimate — P(p > 1/3 | k, n) with a
+# Jeffreys Beta(1/2, 1/2) prior must clear 0.95. At the old n=40 a point
+# estimate of 14/40 could pass on noise; the posterior gate at n>=150 passes
+# from an observed win share of ~0.40 (k=60/150 -> 0.957).
+C0_ADJUDICATION_MIN_N = 150
+C0_ADJUDICATION_POSTERIOR_MIN = 0.95
+C0_ADJUDICATION_PRIOR_ALPHA = 0.5
+C0_ADJUDICATION_PRIOR_BETA = 0.5
+C0_ADJUDICATION_SHARE_CONSISTENCY_TOL = 0.005
 C0_SAFETY_POLARITY_MAX_RATE = 0.005
+
+
+def _beta_posterior_above(threshold: float, k: float, n: float) -> float:
+    """P(p > threshold | k successes of n), Beta-Binomial with Jeffreys prior."""
+    from scipy.stats import beta  # lazy: only the c0_r1 rule needs scipy
+
+    return float(
+        1.0
+        - beta.cdf(
+            threshold,
+            C0_ADJUDICATION_PRIOR_ALPHA + k,
+            C0_ADJUDICATION_PRIOR_BETA + (n - k),
+        )
+    )
 
 
 def _get(metrics: dict, key: str, missing: list[str]) -> float | None:
@@ -351,17 +374,34 @@ def check_c0_s0(metrics: dict) -> tuple[bool, list[str]]:
 
 
 def check_c0_r1(metrics: dict) -> tuple[bool, list[str]]:
-    """Path C0 main paired-eval bars (vs FRESH Gemini round, post-rebuild)."""
+    """Path C0 main paired-eval bars (vs FRESH Gemini round, post-rebuild).
+
+    Rule 2 amended 2026-07-16: the adjudication bar is a posterior gate
+    `P(p_C0 > 1/3 | k, n) >= 0.95` (Jeffreys prior) on the integer win count
+    `c0_adjudication_correct_n`, with the minimum sample raised to 150. The
+    reported share is cross-checked against k/n and fails closed on mismatch.
+    """
     missing: list[str] = []
     delta = _get(metrics, "c0_replicate_equiv_delta_pp", missing)
     delta_ci_low = _get(metrics, "c0_replicate_equiv_delta_ci_low_pp", missing)
     adj_share = _get(metrics, "c0_adjudication_correct_share", missing)
+    adj_k = _get(metrics, "c0_adjudication_correct_n", missing)
     adj_n = _get(metrics, "c0_adjudication_n", missing)
     safety_rate = _get(metrics, "c0_safety_polarity_rate", missing)
     safety_inspected = _get(metrics, "c0_safety_all_inspected", missing)
     if missing:
         return False, [f"FAIL-CLOSED missing keys: {', '.join(missing)}"]
+    if not (adj_n > 0 and 0 <= adj_k <= adj_n):
+        return False, [
+            f"FAIL-CLOSED invalid adjudication counts: k={adj_k}, n={adj_n}"
+        ]
+    if abs(adj_share - adj_k / adj_n) > C0_ADJUDICATION_SHARE_CONSISTENCY_TOL:
+        return False, [
+            f"FAIL-CLOSED adjudication share {adj_share:.4f} inconsistent with "
+            f"k/n = {adj_k:.0f}/{adj_n:.0f} = {adj_k / adj_n:.4f}"
+        ]
 
+    posterior = _beta_posterior_above(C0_ADJUDICATION_SHARE_THRESHOLD, adj_k, adj_n)
     checks = [
         (
             delta_ci_low >= C0_REPLICATE_EQUIV_MIN_DELTA_PP,
@@ -369,9 +409,10 @@ def check_c0_r1(metrics: dict) -> tuple[bool, list[str]]:
             f" >= {C0_REPLICATE_EQUIV_MIN_DELTA_PP}pp",
         ),
         (
-            adj_share >= C0_ADJUDICATION_MIN_SHARE,
-            f"adjudicated C0-correct share {adj_share:.3f} >= "
-            f"{C0_ADJUDICATION_MIN_SHARE:.3f}",
+            posterior >= C0_ADJUDICATION_POSTERIOR_MIN,
+            f"adjudication posterior P(p > 1/3 | {adj_k:.0f}/{adj_n:.0f}) = "
+            f"{posterior:.4f} >= {C0_ADJUDICATION_POSTERIOR_MIN} "
+            f"(share {adj_share:.3f}, Jeffreys prior)",
         ),
         (
             adj_n >= C0_ADJUDICATION_MIN_N,

@@ -30,6 +30,7 @@ import dataclasses
 import hashlib
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,180 @@ class C0Config:
     def hash(self) -> str:
         blob = json.dumps(dataclasses.asdict(self), sort_keys=True).encode()
         return hashlib.sha256(blob).hexdigest()[:12]
+
+
+# --------------------------------------------------------------------------
+# basemap96 stack adapter (2026-07-13 basemap rebuild layout).
+#
+# The pre-rebuild scan_states + legacy chip dirs this harness originally
+# targeted were wiped by the 2026-07-13 basemap rebuild. The rebuild's
+# `chips/<target_id>/z<zoom>/<target_id>_<capture_ymd>_v<vintage_ymd>.tif`
+# layout ships a sibling `.tfw` ESRI world file per frame, which gives EXACT
+# per-frame georeferencing -- strictly better than the legacy path's aeqd
+# approximation + positional GPKG join (`_footprint_mask` below). CRS check
+# (2026-07-13): GEHI z19 world-file pixel scale is 0.29858214173896974,
+# exactly `156543.03392804097 / 2**19` -- the standard Web-Mercator (EPSG:3857)
+# z19 tile resolution -- and the world-file origin of an arbitrary target's
+# frame reproduces that target's `chip_lon_min`/`chip_lat_max` in
+# anchors_per_target_96m.csv to 1e-7 deg after EPSG:3857 -> EPSG:4326 inverse
+# projection. Confirmed EPSG:3857, not a plain equirectangular degree grid.
+# --------------------------------------------------------------------------
+
+BASEMAP_TIF_RE = re.compile(r"^(?P<target>.+)_(?P<capture>\d{8})_v(?P<vintage>\d{8})\.tif$")
+BASEMAP_ZOOM_DIR_RE = re.compile(r"^z(\d+)$")
+
+
+@dataclass(frozen=True)
+class TfwAffine:
+    """A parsed ESRI world file: pixel (col, row) <-> map (x, y).
+
+    Field names follow the 6 world-file lines in file order exactly, so
+    ``TfwAffine(*six_floats)`` is correct with no reordering:
+    line1 ``a`` = x-scale (map-x per pixel col), line2 ``d`` = rotation
+    (map-y per pixel col, 0 for north-up), line3 ``b`` = rotation (map-x per
+    pixel row, 0 for north-up), line4 ``e`` = y-scale (map-y per pixel row,
+    negative for north-up), line5 ``c`` = x-origin, line6 ``f`` = y-origin
+    -- ``c``/``f`` are the map coords of the CENTER of pixel (col=0, row=0).
+    """
+
+    a: float
+    d: float
+    b: float
+    e: float
+    c: float
+    f: float
+
+    def to_map(self, col: float, row: float) -> tuple[float, float]:
+        x = self.a * col + self.b * row + self.c
+        y = self.d * col + self.e * row + self.f
+        return x, y
+
+    def to_pixel(self, x: float, y: float) -> tuple[float, float]:
+        det = self.a * self.e - self.b * self.d
+        if abs(det) < 1e-12:
+            raise ValueError("singular TFW affine (a*e - b*d ~= 0)")
+        dx, dy = x - self.c, y - self.f
+        col = (self.e * dx - self.b * dy) / det
+        row = (-self.d * dx + self.a * dy) / det
+        return col, row
+
+
+def parse_tfw(path: Path) -> TfwAffine:
+    """Parse a 6-line ESRI world file. Raises ValueError on malformed input
+    (caller treats this as a per-frame skip, never a crash -- the basemap
+    rebuild download this reads from is running concurrently)."""
+    lines = [ln.strip() for ln in path.read_text().splitlines() if ln.strip()]
+    if len(lines) < 6:
+        raise ValueError(f"expected 6 world-file lines, got {len(lines)}")
+    try:
+        vals = [float(x) for x in lines[:6]]
+    except ValueError as exc:
+        raise ValueError(f"non-numeric world-file line: {exc}") from None
+    return TfwAffine(*vals)
+
+
+def enumerate_basemap_stack(target_dir: Path) -> tuple[list[dict], list[dict]]:
+    """Enumerate one target's basemap_rebuild_2026-07-13 vintage stack.
+
+    Layout: ``<target_dir>/z<zoom>/<target_id>_<capture_ymd>_v<vintage_ymd>.tif``
+    with a sibling ``.tfw``. The download populating this tree runs
+    concurrently with the pilot -- a file may not exist yet, the .tfw may lag
+    the .tif, or the .tif may be a partial write -- so every per-file failure
+    is a *skip* with a reason, never a raised exception. Returns
+    ``(good, skipped)``, sorted by ``(capture_ymd, vintage_ymd)``. Each
+    ``good`` entry carries the parsed ``TfwAffine`` and the tif's own
+    (pre-resize) pixel size, so the curve stage can project the census
+    footprint exactly per frame.
+    """
+    from PIL import Image
+
+    good: list[dict] = []
+    skipped: list[dict] = []
+    for tif_path in sorted(target_dir.rglob("*.tif")):
+        m = BASEMAP_TIF_RE.match(tif_path.name)
+        if not m:
+            skipped.append({"path": tif_path, "skip_reason": "name_no_match"})
+            continue
+        zoom = 0
+        zm = BASEMAP_ZOOM_DIR_RE.match(tif_path.parent.name)
+        if zm:
+            zoom = int(zm.group(1))
+        tfw_path = tif_path.with_suffix(".tfw")
+        if not tfw_path.exists():
+            skipped.append({"path": tif_path, "skip_reason": "missing_tfw"})
+            continue
+        try:
+            tfw = parse_tfw(tfw_path)
+        except Exception as exc:  # noqa: BLE001 -- concurrent download, any parse failure is a skip
+            skipped.append({"path": tif_path, "skip_reason": f"bad_tfw:{exc}"})
+            continue
+        try:
+            with Image.open(tif_path) as img:
+                img.load()
+                img_w, img_h = img.size
+        except Exception as exc:  # noqa: BLE001 -- partial/corrupt write mid-download
+            skipped.append({"path": tif_path, "skip_reason": f"unreadable_tif:{exc}"})
+            continue
+        if img_w <= 0 or img_h <= 0:
+            skipped.append({"path": tif_path, "skip_reason": "empty_image"})
+            continue
+        good.append({
+            "path": tif_path, "tfw_path": tfw_path,
+            "capture_ymd": int(m.group("capture")), "vintage_ymd": int(m.group("vintage")),
+            "zoom": zoom, "tfw": tfw, "img_w": img_w, "img_h": img_h,
+        })
+    good.sort(key=lambda e: (e["capture_ymd"], e["vintage_ymd"]))
+    return good, skipped
+
+
+def pick_reference_basemap(stack: list[dict]) -> dict | None:
+    """Latest capture at the highest zoom -- basemap96 stack's present-day proxy
+    (mirrors ``audit_gehi_displacement.pick_reference`` for the new layout)."""
+    if not stack:
+        return None
+    max_zoom = max(e["zoom"] for e in stack)
+    cands = [e for e in stack if e["zoom"] == max_zoom]
+    return max(cands, key=lambda e: e["capture_ymd"])
+
+
+_WGS84_TO_MERC = None
+
+
+def _wgs84_to_web_mercator():
+    """Cached EPSG:4326 -> EPSG:3857 transform (matches the GEHI z19 chips)."""
+    global _WGS84_TO_MERC
+    if _WGS84_TO_MERC is None:
+        import pyproj
+
+        _WGS84_TO_MERC = pyproj.Transformer.from_crs(
+            "EPSG:4326", "EPSG:3857", always_xy=True).transform
+    return _WGS84_TO_MERC
+
+
+def _basemap_tif_to_png(tif_path: Path, cache_dir: Path) -> Path:
+    """TIF -> PNG transcode for the basemap96 stack: no crop, no marker overlay
+    (the per-target tif IS the geometry; see ``geometry_version
+    basemap96_z19_v1``). Writes into ``cache_dir`` (the pilot's own output
+    tree) -- NEVER beside the source tif, since basemap_rebuild_2026-07-13 is
+    a live download directory that must stay read-only while it is in flight.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    png_path = cache_dir / f"{tif_path.stem}.png"
+    try:
+        if (
+            png_path.exists()
+            and png_path.stat().st_size > 0
+            and png_path.stat().st_mtime >= tif_path.stat().st_mtime
+        ):
+            return png_path
+    except OSError:
+        pass
+    from PIL import Image
+
+    with Image.open(tif_path) as img:
+        img = img.convert("RGB") if img.mode != "RGB" else img.copy()
+        img.save(png_path, format="PNG")
+    return png_path
 
 
 # --------------------------------------------------------------------------
@@ -378,6 +553,13 @@ def _embed_key_grids(scorer, paths: list[str], *, batch_size: int) -> np.ndarray
 
 
 def run_embed(args: argparse.Namespace, cfg: C0Config) -> None:
+    if args.stack_format == "basemap96":
+        _run_embed_basemap96(args, cfg)
+    else:
+        _run_embed_legacy(args, cfg)
+
+
+def _run_embed_legacy(args: argparse.Namespace, cfg: C0Config) -> None:
     import pandas as pd
     from scripts.temporal.audit_gehi_displacement import enumerate_stack, pick_reference
     from scripts.temporal.chip_displacement import estimate_shift, to_gray
@@ -461,6 +643,103 @@ def run_embed(args: argparse.Namespace, cfg: C0Config) -> None:
             grad_energy=np.array(grad_energy, np.float32))
         n_done += 1
     print(f"[embed] arm={args.arm} facet={cfg.facet} done={n_done} skipped={n_skip} -> {out_dir}")
+
+
+def _run_embed_basemap96(args: argparse.Namespace, cfg: C0Config) -> None:
+    """embed stage, basemap_rebuild_2026-07-13 per-target chips/<id>/z<zoom>/
+    layout. No render-crop: each per-target tif IS the geometry (see
+    ``geometry_version basemap96_z19_v1``); this only transcodes tif -> png
+    (into the pilot's own output tree, never beside the source tif) and
+    extracts patch grids + registration/quality metrics, same as legacy.
+    """
+    import pandas as pd
+    from scripts.temporal.chip_displacement import estimate_shift, to_gray
+    from scripts.temporal.effective_resolution import normalized_gradient_energy
+    from PIL import Image
+
+    targets = pd.read_csv(args.chip_targets)
+    by_anchor = {str(r.anchor_id): r for r in targets.itertuples()}
+
+    device = args.device or _auto_device()
+    scorer = _build_scorer(args.arm, device)
+    out_dir = Path(args.out) / "embeds" / f"{args.arm}_{cfg.facet}_{cfg.hash()}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    png_cache_root = Path(args.out) / "png_cache" / "basemap96"
+
+    chips_root = Path(args.chips_root)
+    target_dirs = sorted(p for p in chips_root.iterdir() if p.is_dir())
+    if args.limit:
+        target_dirs = target_dirs[: args.limit]
+
+    n_done = n_skip_no_row = n_skip_too_few = 0
+    frame_skip_reasons: dict[str, int] = {}
+    for target_dir in target_dirs:
+        target_id = target_dir.name
+        row = by_anchor.get(target_id)
+        if row is None:
+            n_skip_no_row += 1
+            continue
+        npz_path = out_dir / f"{target_id}.npz"
+        if npz_path.exists() and not args.force:
+            continue
+        stack, skipped = enumerate_basemap_stack(target_dir)
+        for s in skipped:
+            frame_skip_reasons[s["skip_reason"]] = frame_skip_reasons.get(s["skip_reason"], 0) + 1
+        if len(stack) < args.min_embed_frames:
+            n_skip_too_few += 1
+            continue
+
+        pngs, dates, zooms, versions = [], [], [], []
+        img_w_list, img_h_list, tfw_list = [], [], []
+        for entry in stack:
+            png = _basemap_tif_to_png(entry["path"], png_cache_root / target_id)
+            pngs.append(str(png))
+            dates.append(int(entry["capture_ymd"]))
+            zooms.append(int(entry["zoom"]))
+            versions.append(int(entry["vintage_ymd"]))
+            img_w_list.append(int(entry["img_w"]))
+            img_h_list.append(int(entry["img_h"]))
+            tfw_list.append(entry["tfw"])
+
+        grids = _extract_grids(scorer, pngs, cfg.facet, args.batch_size)
+
+        arrays = [np.asarray(Image.open(p).convert("RGB")) for p in pngs]
+        ref = pick_reference_basemap(stack)
+        ref_i = next(i for i, e in enumerate(stack) if e["path"] == ref["path"])
+        ref_gray = to_gray(arrays[ref_i])
+        reg_dx, reg_dy, reg_psr, reg_ok = [], [], [], []
+        for i, arr in enumerate(arrays):
+            if i == ref_i:
+                reg_dx.append(0.0); reg_dy.append(0.0); reg_psr.append(99.0); reg_ok.append(True)
+                continue
+            res = estimate_shift(ref_gray, to_gray(arr))
+            reg_dx.append(res.dx_px); reg_dy.append(res.dy_px)
+            reg_psr.append(res.psr); reg_ok.append(res.ok)
+        grad_energy = [normalized_gradient_energy(to_gray(a)) for a in arrays]
+
+        np.savez_compressed(
+            npz_path, grids=grids,
+            dates=np.array(dates, dtype=np.int64),
+            zooms=np.array(zooms, dtype=np.int16),
+            versions=np.array(versions, dtype=np.int32),
+            png_paths=np.array(pngs), ref_index=np.int64(ref_i),
+            reg_dx_px=np.array(reg_dx, np.float32), reg_dy_px=np.array(reg_dy, np.float32),
+            reg_psr=np.array(reg_psr, np.float32), reg_ok=np.array(reg_ok, bool),
+            grad_energy=np.array(grad_energy, np.float32),
+            stack_format=np.array("basemap96"),
+            input_size=np.int64(scorer.input_size),
+            img_w_px=np.array(img_w_list, dtype=np.int32),
+            img_h_px=np.array(img_h_list, dtype=np.int32),
+            tfw_a=np.array([t.a for t in tfw_list], dtype=np.float64),
+            tfw_d=np.array([t.d for t in tfw_list], dtype=np.float64),
+            tfw_b=np.array([t.b for t in tfw_list], dtype=np.float64),
+            tfw_e=np.array([t.e for t in tfw_list], dtype=np.float64),
+            tfw_c=np.array([t.c for t in tfw_list], dtype=np.float64),
+            tfw_f=np.array([t.f for t in tfw_list], dtype=np.float64))
+        n_done += 1
+    print(f"[embed:basemap96] arm={args.arm} facet={cfg.facet} done={n_done} "
+          f"skip_no_chip_targets_row={n_skip_no_row} skip_too_few_frames={n_skip_too_few} "
+          f"(min={args.min_embed_frames}) frame_skip_reasons={frame_skip_reasons} -> {out_dir}")
 
 
 def _auto_device() -> str:
@@ -556,6 +835,172 @@ def _realized_crop_size_m(row: Any, geom) -> float:
         chip_size_m=float(row.chip_size_m))
 
 
+def _project_polygon_to_grid(
+    poly_map: Any, tfw: TfwAffine, grid_side: int,
+    img_w_px: int, img_h_px: int, input_size: int,
+) -> np.ndarray:
+    """Patch-center-sampled containment mask for a polygon already in the
+    TFW's own map CRS (EPSG:3857 for GEHI). Pure grid/affine math, no I/O --
+    kept separate from ``_footprint_mask_tfw`` so it is unit-testable without
+    a real GPKG or a real WGS84->3857 transform.
+
+    Each patch's center is mapped through the SAME resize the scorer applies
+    (``img.resize((input_size, input_size))``, which stretches non-uniformly
+    when ``img_w_px != img_h_px``) before the TFW converts it back to map
+    coordinates -- so the projection is exact even though the token grid is
+    forced square over a non-square source chip.
+    """
+    from shapely.geometry import Point
+
+    patch_px_resized = input_size / grid_side
+    sx = img_w_px / input_size   # original px per resized px, x axis
+    sy = img_h_px / input_size   # original px per resized px, y axis
+    mask = np.zeros((grid_side, grid_side), dtype=bool)
+    for gy in range(grid_side):
+        for gx in range(grid_side):
+            col = (gx + 0.5) * patch_px_resized * sx
+            row_px = (gy + 0.5) * patch_px_resized * sy
+            x, y = tfw.to_map(col, row_px)
+            if poly_map.contains(Point(x, y)):
+                mask[gy, gx] = True
+    return mask
+
+
+_CRS_TO_MERC_CACHE: dict[str, Any] = {}
+
+
+def _to_web_mercator(crs: Any):
+    """Cached ``crs`` -> EPSG:3857 transform for an arbitrary source CRS.
+
+    2026-07-13 finding: the census polygon GPKG's ``solar_predictions`` layer
+    (``jhb_full382_unified_A_merge01_c0925_fpcut_2026-06-01.gpkg``) is stored
+    in EPSG:32735 (UTM 35S), NOT EPSG:4326 -- ``geopandas.read_file(...).crs``
+    confirms it. The legacy ``_footprint_mask`` hardcodes an EPSG:4326 source
+    CRS for this same GPKG (see its ``pyproj.Transformer.from_crs("EPSG:4326"
+    , ...)`` call), so it silently mis-transforms the polygon on every real
+    target (garbage/empty geometry -> always falls back to ``radius_disk``);
+    left untouched here (out of this adapter's scope; legacy already stays
+    on its own aeqd path unconditionally either way), but this function reads
+    the GPKG's OWN ``.crs`` instead of assuming EPSG:4326.
+    """
+    key = str(crs)
+    if key not in _CRS_TO_MERC_CACHE:
+        import pyproj
+
+        _CRS_TO_MERC_CACHE[key] = pyproj.Transformer.from_crs(
+            crs, "EPSG:3857", always_xy=True).transform
+    return _CRS_TO_MERC_CACHE[key]
+
+
+def _footprint_mask_tfw(
+    row: Any, tfw: TfwAffine, grid_side: int,
+    img_w_px: int, img_h_px: int, input_size: int,
+) -> tuple[np.ndarray, str]:
+    """Exact TFW-projected footprint mask for the basemap96 stack format.
+
+    Projects the census polygon (its OWN native CRS, per the GPKG -- see
+    ``_to_web_mercator``) -> EPSG:3857 -> this frame's own TFW affine -> the
+    patch-token grid (``_project_polygon_to_grid``). This replaces
+    ``_footprint_mask``'s aeqd approximation + positional GPKG join for
+    basemap96 frames, since the TFW is the frame's REAL georeferencing, not
+    an approximation centred on an assumed crop.
+
+    Falls back to a disk centred on the target's own centroid (``row.
+    centroid_lon``/``centroid_lat``, genuinely WGS84 degrees per
+    chip_targets.csv -- NOT the shared chip-group download box's centre,
+    which may not even contain this target when several targets share one
+    chip-group tif) when the polygon is unavailable.
+    """
+    gpkg = getattr(row, "source_inventory_path", None)
+    try:
+        polygon = _load_polygon(gpkg, int(row.source_feature_id))
+    except Exception:
+        polygon = None
+
+    if polygon is not None:
+        from shapely.ops import transform as shp_transform
+
+        cached_gdf = _POLY_CACHE.get(str(gpkg))
+        src_crs = cached_gdf.crs if cached_gdf is not None and cached_gdf.crs else "EPSG:4326"
+        poly_merc = shp_transform(_to_web_mercator(src_crs), polygon)
+        mask = _project_polygon_to_grid(poly_merc, tfw, grid_side, img_w_px, img_h_px, input_size)
+        if mask.any():
+            return mask, "tfw_polygon"
+
+    lat = float(row.centroid_lat)
+    cx, cy = _wgs84_to_web_mercator()(float(row.centroid_lon), lat)
+    col_c, row_c = tfw.to_pixel(cx, cy)
+    # EPSG:3857 units are Web-Mercator meters (isotropic in a/e, verified
+    # a == |e| exactly for GEHI z19); scale by cos(lat) for TRUE ground m.
+    ground_res_m = abs(tfw.a) * math.cos(math.radians(lat))
+    radius_px_orig = max(1.0, float(row.search_radius_m) / max(ground_res_m, 1e-9))
+    patch_px_resized = input_size / grid_side
+    sx = img_w_px / input_size
+    sy = img_h_px / input_size
+    mask = np.zeros((grid_side, grid_side), dtype=bool)
+    for gy in range(grid_side):
+        for gx in range(grid_side):
+            col = (gx + 0.5) * patch_px_resized * sx
+            row_px = (gy + 0.5) * patch_px_resized * sy
+            if (col - col_c) ** 2 + (row_px - row_c) ** 2 <= radius_px_orig ** 2:
+                mask[gy, gx] = True
+    return mask, "tfw_radius_disk"
+
+
+def _resolve_frame_geometry(
+    z: Mapping[str, np.ndarray], row: Any, grid_side: int, geom,
+) -> tuple[np.ndarray, str, float, float]:
+    """Dispatch fp_mask/patch_m/png_px_m by inspecting the npz's OWN content
+    (not a CLI flag) -- self-describing artifacts, so a curve run is correct
+    even if ``--stack-format`` is forgotten (only the config-hash/artifact
+    tag can then mismatch, which fails closed at the embed-dir lookup).
+
+    Returns ``(fp_mask, fp_source, patch_m, png_px_m)``:
+    ``patch_m`` = metres per patch for the shift-search / reg_disagree_m
+    scalar consumers in ``compute_curve``; for basemap96, x/y ground
+    resolution is identical (Web-Mercator, isotropic) but the patch grid is
+    forced square over a non-square chip, so patch_m is the geometric mean
+    of the anisotropic patch_m_x/patch_m_y -- an approximation ONLY for
+    that scalar shift-search consumer, never for the footprint mask itself
+    (which uses the full per-axis affine, exact).
+    """
+    if "tfw_a" in z.files:
+        input_size = int(z["input_size"])
+        img_w = int(z["img_w_px"][0])
+        img_h = int(z["img_h_px"][0])
+        tfw = TfwAffine(a=float(z["tfw_a"][0]), d=float(z["tfw_d"][0]), b=float(z["tfw_b"][0]),
+                        e=float(z["tfw_e"][0]), c=float(z["tfw_c"][0]), f=float(z["tfw_f"][0]))
+        fp_mask, fp_source = _footprint_mask_tfw(row, tfw, grid_side, img_w, img_h, input_size)
+        lat = float(row.centroid_lat)
+        ground_res_m = abs(tfw.a) * math.cos(math.radians(lat))
+        patch_px_resized = input_size / grid_side
+        patch_m_x = patch_px_resized * (img_w / input_size) * ground_res_m
+        patch_m_y = patch_px_resized * (img_h / input_size) * ground_res_m
+        patch_m = math.sqrt(max(patch_m_x, 1e-9) * max(patch_m_y, 1e-9))
+        png_px_m = ground_res_m  # registration ran on the untresized PNG (original px)
+        return fp_mask, fp_source, patch_m, png_px_m
+
+    crop_m = _realized_crop_size_m(row, geom)
+    patch_m = crop_m / grid_side
+    png_px_m = crop_m / geom.min_output_px
+    fp_mask, fp_source = _footprint_mask(row, grid_side, crop_m)
+    return fp_mask, fp_source, patch_m, png_px_m
+
+
+def _realized_crop_extent_m(z: Mapping[str, np.ndarray], row: Any) -> tuple[float, float] | None:
+    """basemap96 only: the frame's actual (width_m, height_m) from its TFW +
+    pixel size -- the realized geometry, since ``chip_size_m`` (96.0) in
+    chip_targets.csv is nominal and the tile-snapped download is usually
+    somewhat larger (see prereg amendment 2026-07-13)."""
+    if "tfw_a" not in z.files:
+        return None
+    lat = float(row.centroid_lat)
+    ground_res_m = abs(float(z["tfw_a"][0])) * math.cos(math.radians(lat))
+    w_m = float(z["img_w_px"][0]) * ground_res_m
+    h_m = float(z["img_h_px"][0]) * ground_res_m
+    return w_m, h_m
+
+
 def compute_curve(
     grids: np.ndarray, dates_days: np.ndarray, fp_mask: np.ndarray,
     cfg: C0Config, anchor_idx: int,
@@ -649,12 +1094,10 @@ def run_curve(args: argparse.Namespace, cfg: C0Config) -> None:
         grids = z["grids"].astype(np.float32)
         dates_days = np.array([_ymd_to_days(int(d)) for d in z["dates"]])
         grid_side = grids.shape[1]
-        crop_m = _realized_crop_size_m(row, geom)
-        patch_m = crop_m / grid_side
-        png_px_m = crop_m / geom.min_output_px
 
         usable = (z["grad_energy"] >= args.min_grad_energy) & z["reg_ok"]
-        fp_mask, fp_source = _footprint_mask(row, grid_side, crop_m)
+        fp_mask, fp_source, patch_m, png_px_m = _resolve_frame_geometry(z, row, grid_side, geom)
+        realized_extent = _realized_crop_extent_m(z, row)
 
         # Pass 1 (no gate) to learn which side wins; if left wins and a right
         # frame exists, compute the anchor-consistency cosine and re-select
@@ -678,7 +1121,9 @@ def run_curve(args: argparse.Namespace, cfg: C0Config) -> None:
                                 theta_anchor=cfg.theta_anchor)
         if sel["anchor_idx"] is None:
             anchor_rows.append({"anchor_id": anchor_id, "anchor_side": "none",
-                                "fp_source": fp_source})
+                                "fp_source": fp_source,
+                                "realized_crop_w_m": realized_extent[0] if realized_extent else None,
+                                "realized_crop_h_m": realized_extent[1] if realized_extent else None})
             continue
         a_idx = sel["anchor_idx"]
 
@@ -693,6 +1138,8 @@ def run_curve(args: argparse.Namespace, cfg: C0Config) -> None:
             "left_right_cos": lr_cos, "fp_source": fp_source,
             "n_frames": int(len(dates_days)), "n_usable": int(usable.sum()),
             "source_area_m2": float(row.source_area_m2),
+            "realized_crop_w_m": realized_extent[0] if realized_extent else None,
+            "realized_crop_h_m": realized_extent[1] if realized_extent else None,
         })
         for t in range(len(dates_days)):
             long_rows.append({
@@ -725,8 +1172,7 @@ def _fit_whitener_from_embeds(npzs, by_anchor, geom, cfg: C0Config) -> dict[str,
         z = np.load(npz_path, allow_pickle=False)
         grids = z["grids"].astype(np.float32)
         g = grids.shape[1]
-        crop_m = _realized_crop_size_m(row, geom)
-        fp, _ = _footprint_mask(row, g, crop_m)
+        fp, _, _, _ = _resolve_frame_geometry(z, row, g, geom)
         region = _dilate(fp, cfg.ring_outer_patches)
         toks = grids[:, region, :].reshape(-1, grids.shape[-1])
         take = min(len(toks), 400)
@@ -796,24 +1242,20 @@ def run_decode(args: argparse.Namespace, cfg: C0Config) -> None:
 # Stage: smoke (Stage-0 GO/KILL, legacy labels as noisy indicative reference)
 # --------------------------------------------------------------------------
 
-def run_smoke(args: argparse.Namespace, cfg: C0Config) -> None:
-    import pandas as pd
+def _labels_from_scan_states(scan_dir: Path, min_confidence: float) -> dict[str, dict[int, bool]]:
+    """Legacy label source: scan_states done_appears + confidence gate.
+
+    Dead post-basemap-rebuild (the dirs were wiped 2026-07-13) but kept for
+    any pre-rebuild artifact that still has scan_states on disk.
+    """
     from scripts.temporal.scan_state import load_scan_state
 
-    tag = f"{args.arm}_{cfg.facet}_{cfg.hash()}"
-    curves = pd.read_csv(Path(args.out) / f"curves_{tag}.csv")
-    anchors = pd.read_csv(Path(args.out) / f"curve_anchors_{tag}.csv")
-    area_by_anchor = dict(zip(anchors["anchor_id"], anchors.get("source_area_m2", np.nan)))
-
-    scan_dir = Path(args.scan_states)
     if not scan_dir.is_dir():
         raise SystemExit(
             f"[smoke] scan-states dir not found: {scan_dir} — the legacy dir may "
-            "have been wiped by the basemap rebuild; pass --scan-states explicitly")
-
-    pos, neg = [], []                     # (value, area) tuples
-    pos0, neg0 = [], []                   # delta=0 ablation
-    n_anchors = 0
+            "have been wiped by the basemap rebuild; pass --labels-csv instead "
+            "(see prereg amendment 2026-07-13)")
+    labels: dict[str, dict[int, bool]] = {}
     for state_path in sorted(scan_dir.glob("*.json")):
         try:
             state = load_scan_state(state_path)
@@ -821,16 +1263,69 @@ def run_smoke(args: argparse.Namespace, cfg: C0Config) -> None:
             continue
         if getattr(state, "status", None) != "done_appears":
             continue
-        anchor_id = state_path.stem
-        g = curves[curves["anchor_id"] == anchor_id]
-        if g.empty:
-            continue
-        labels = {}
+        per_anchor: dict[int, bool] = {}
         for obs in state.usable_observations():
             conf = obs.confidence if obs.confidence is not None else 0.0
-            if conf >= args.min_confidence:
-                labels[int(str(obs.capture_date).replace("-", ""))] = bool(obs.pv_present)
+            if conf >= min_confidence:
+                per_anchor[int(str(obs.capture_date).replace("-", ""))] = bool(obs.pv_present)
+        if per_anchor:
+            labels[state_path.stem] = per_anchor
+    return labels
+
+
+def _labels_from_csv(path: Path) -> dict[str, dict[int, bool]]:
+    """Manual-annotation smoke labels (amendment 2026-07-13): target_id,
+    frame_date,label with label in {present, absent, unsure}. ``unsure``
+    rows are excluded. Malformed rows raise (fail-closed) rather than being
+    silently skipped -- this is a small hand-curated file where a silent
+    skip would hide a typo class rather than surface it.
+    """
+    import csv as _csv
+
+    if not path.is_file():
+        raise SystemExit(f"[smoke] labels CSV not found: {path}")
+    labels: dict[str, dict[int, bool]] = {}
+    with path.open(newline="") as f:
+        reader = _csv.DictReader(f)
+        missing = {"target_id", "frame_date", "label"} - set(reader.fieldnames or [])
+        if missing:
+            raise SystemExit(f"[smoke] labels CSV missing columns: {sorted(missing)}")
+        for i, r in enumerate(reader):
+            label = (r["label"] or "").strip().lower()
+            if label in ("", "unsure"):
+                continue
+            if label not in ("present", "absent"):
+                raise SystemExit(
+                    f"[smoke] labels CSV row {i}: bad label {r['label']!r} "
+                    "(expected present|absent|unsure)")
+            ymd = int(r["frame_date"].replace("-", ""))
+            labels.setdefault(r["target_id"], {})[ymd] = (label == "present")
+    return labels
+
+
+def run_smoke(args: argparse.Namespace, cfg: C0Config) -> None:
+    import pandas as pd
+
+    tag = f"{args.arm}_{cfg.facet}_{cfg.hash()}"
+    curves = pd.read_csv(Path(args.out) / f"curves_{tag}.csv")
+    anchors = pd.read_csv(Path(args.out) / f"curve_anchors_{tag}.csv")
+    area_by_anchor = dict(zip(anchors["anchor_id"], anchors.get("source_area_m2", np.nan)))
+
+    if args.labels_csv:
+        labels_by_anchor = _labels_from_csv(Path(args.labels_csv))
+        label_source = "manual_csv_2026_07_13"
+    else:
+        labels_by_anchor = _labels_from_scan_states(Path(args.scan_states), args.min_confidence)
+        label_source = "legacy_scan_states"
+
+    pos, neg = [], []                     # (value, area) tuples
+    pos0, neg0 = [], []                   # delta=0 ablation
+    n_anchors = 0
+    for anchor_id, labels in labels_by_anchor.items():
         if len(labels) < 3 or len(set(labels.values())) < 2:
+            continue
+        g = curves[curves["anchor_id"] == anchor_id]
+        if g.empty:
             continue
         n_anchors += 1
         area = area_by_anchor.get(anchor_id, float("nan"))
@@ -864,6 +1359,7 @@ def run_smoke(args: argparse.Namespace, cfg: C0Config) -> None:
         "c0_smoke_area_tertiles_m2": [t1, t2],
         "c0_smoke_auc_go_bar": cfg.smoke_auc_go,
         "c0_smoke_min_anchors_bar": cfg.smoke_min_anchors,
+        "c0_smoke_label_source": label_source,
         "arm": args.arm, "facet": cfg.facet, "config_hash": cfg.hash(),
     }
     out_path = Path(args.out) / f"smoke_metrics_{tag}.json"
@@ -876,6 +1372,86 @@ def run_smoke(args: argparse.Namespace, cfg: C0Config) -> None:
                              if not isinstance(v, (list, str))})
     print("\n".join(lines))
     print(f"[smoke] metrics -> {out_path}")
+
+
+# --------------------------------------------------------------------------
+# Stage: label_template (amendment 2026-07-13 — smoke label source)
+#
+# Draws a fixed-seed sample of target ids from the pilot2023 candidates list
+# for manual annotation, and writes both the fill-in template and the
+# "reserved" target-id list. The reservation is CREATED by this draw (there
+# was no pre-existing main-eval/smoke split to consume — pilot2023's anchor
+# set is identical to full's, see the amendment) -- once drawn, these ids
+# must be excluded from the main-eval target pool to keep the annotation
+# disjoint from main eval (zero-Gemini-overlap blind-lock).
+# --------------------------------------------------------------------------
+
+def sample_label_template_targets(candidates_csv: Path, *, n: int, seed: int) -> list[str]:
+    """Deterministic sample of ``n`` distinct target ids from a candidates CSV.
+
+    Uses ``random.Random(seed)`` over the SORTED distinct ``anchor_id`` set
+    so the draw is reproducible independent of the source CSV's row order.
+    """
+    import csv as _csv
+    import random
+
+    anchor_ids: set[str] = set()
+    with candidates_csv.open(newline="") as f:
+        for r in _csv.DictReader(f):
+            anchor_ids.add(r["anchor_id"])
+    pool = sorted(anchor_ids)
+    rng = random.Random(seed)
+    k = min(n, len(pool))
+    return sorted(rng.sample(pool, k))
+
+
+def emit_label_template(
+    candidates_csv: Path, out_csv: Path, *, n: int, seed: int,
+    reserved_out: Path | None = None,
+) -> Path:
+    """Write a ready-to-fill smoke-label annotation template: one row per
+    (target_id, available capture_date) in the sample, ``label`` left blank
+    for the annotator (present/absent/unsure, per ``_labels_from_csv``).
+    Optionally also writes the sampled target-id list (the main-eval
+    reservation) to ``reserved_out``.
+    """
+    import csv as _csv
+
+    sample = set(sample_label_template_targets(candidates_csv, n=n, seed=seed))
+    rows_by_target: dict[str, set[str]] = {}
+    with candidates_csv.open(newline="") as f:
+        for r in _csv.DictReader(f):
+            if r["anchor_id"] in sample:
+                rows_by_target.setdefault(r["anchor_id"], set()).add(r["capture_date"])
+
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    with out_csv.open("w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["target_id", "frame_date", "label"])
+        for target_id in sorted(rows_by_target):
+            for frame_date in sorted(rows_by_target[target_id]):
+                w.writerow([target_id, frame_date, ""])
+
+    if reserved_out is not None:
+        reserved_out.parent.mkdir(parents=True, exist_ok=True)
+        with reserved_out.open("w", newline="") as f:
+            w = _csv.writer(f)
+            w.writerow(["target_id"])
+            for target_id in sorted(rows_by_target):
+                w.writerow([target_id])
+    return out_csv
+
+
+def run_label_template(args: argparse.Namespace) -> None:
+    out = Path(args.label_template_out)
+    reserved = (
+        Path(args.label_template_reserved_out) if args.label_template_reserved_out
+        else out.with_name(out.stem + "_reserved_targets.csv"))
+    emit_label_template(
+        Path(args.pilot2023_candidates), out,
+        n=args.label_template_n, seed=args.label_template_seed, reserved_out=reserved)
+    print(f"[label_template] sampled {args.label_template_n} targets "
+          f"(seed={args.label_template_seed}) -> {out} (reserved list -> {reserved})")
 
 
 # --------------------------------------------------------------------------
@@ -899,31 +1475,66 @@ def run_eval(args: argparse.Namespace, cfg: C0Config) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--stage", required=True,
-                    choices=["embed", "curve", "decode", "smoke", "eval"])
+                    choices=["embed", "curve", "decode", "smoke", "eval", "label_template"])
     ap.add_argument("--arm", default="dinov2_floor", choices=sorted(ARMS))
     ap.add_argument("--facet", default=None, choices=["token", "key"],
                     help="override C0Config.facet")
     ap.add_argument("--out", default=str(OUT_DEFAULT))
+    ap.add_argument("--stack-format", default="legacy", choices=["legacy", "basemap96"],
+                    help="embed/curve stack layout: 'legacy' scan-based per-anchor dirs "
+                         "(chip_geom_v2_tight12), or 'basemap96' -- the "
+                         "basemap_rebuild_2026-07-13 chips/<target_id>/z<zoom>/ layout "
+                         "(geometry_version basemap96_z19_v1). Also sets the default "
+                         "geometry_version (override with --geometry-version); the curve "
+                         "stage's actual mask math is chosen from each npz's own content, "
+                         "not this flag, so it stays correct even if forgotten there.")
+    ap.add_argument("--geometry-version", default=None,
+                    help="override C0Config.geometry_version (default depends on --stack-format)")
+    ap.add_argument("--min-embed-frames", type=int, default=3,
+                    help="embed: skip a target with fewer usable stack frames than this")
     ap.add_argument("--chips-root", default=None,
-                    help="dir of per-anchor GEHI chip dirs (embed stage)")
+                    help="dir of per-anchor/per-target GEHI chip dirs (embed stage)")
     ap.add_argument("--chip-targets", default=None, help="chip_targets.csv path")
     ap.add_argument("--census-date", default=CENSUS_DATE_FALLBACK,
                     help="T_c (YYYY-MM-DD); per-grid flight date preferred when known")
     ap.add_argument("--scan-states", default=None,
-                    help="legacy scan_states dir (smoke stage only)")
+                    help="legacy scan_states dir (smoke stage; mutually exclusive with "
+                         "--labels-csv)")
+    ap.add_argument("--labels-csv", default=None,
+                    help="smoke stage: manual-annotation CSV (target_id,frame_date,label) "
+                         "-- amendment 2026-07-13 replacement for the wiped scan_states "
+                         "label source; mutually exclusive with --scan-states")
+    ap.add_argument("--pilot2023-candidates", default=None,
+                    help="label_template stage: gehi_vintage_candidates_pilot2023.csv path")
+    ap.add_argument("--label-template-out", default=None,
+                    help="label_template stage: output CSV path")
+    ap.add_argument("--label-template-reserved-out", default=None,
+                    help="label_template stage: output CSV of sampled (main-eval-reserved) "
+                         "target ids (default: <out>_reserved_targets.csv)")
+    ap.add_argument("--label-template-n", type=int, default=150,
+                    help="label_template stage: number of targets to sample")
+    ap.add_argument("--label-template-seed", type=int, default=20_260_713,
+                    help="label_template stage: RNG seed for the sample draw")
     ap.add_argument("--whitener", default=None, help="pre-fitted whitener npz")
     ap.add_argument("--fit-whitener", action="store_true")
     ap.add_argument("--min-grad-energy", type=float, default=0.02,
                     help="frame usability floor (normalized gradient energy)")
     ap.add_argument("--min-confidence", type=float, default=0.7,
-                    help="smoke: legacy label confidence floor")
+                    help="smoke: legacy scan-states label confidence floor")
     ap.add_argument("--device", default=None)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--limit", type=int, default=0, help="debug: cap anchors")
     ap.add_argument("--force", action="store_true", help="re-embed existing npz")
     args = ap.parse_args(argv)
 
-    cfg = C0Config() if args.facet is None else C0Config(facet=args.facet)
+    default_geometry_version = (
+        "basemap96_z19_v1" if args.stack_format == "basemap96" else "chip_geom_v2_tight12")
+    cfg_kwargs: dict[str, Any] = {
+        "geometry_version": args.geometry_version or default_geometry_version,
+    }
+    if args.facet is not None:
+        cfg_kwargs["facet"] = args.facet
+    cfg = C0Config(**cfg_kwargs)
     Path(args.out).mkdir(parents=True, exist_ok=True)
 
     if args.stage == "embed":
@@ -937,11 +1548,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.stage == "decode":
         run_decode(args, cfg)
     elif args.stage == "smoke":
-        if not args.scan_states:
-            ap.error("--stage smoke requires --scan-states")
+        if not args.scan_states and not args.labels_csv:
+            ap.error("--stage smoke requires --scan-states or --labels-csv")
+        if args.scan_states and args.labels_csv:
+            ap.error("--stage smoke: pass only one of --scan-states / --labels-csv")
         run_smoke(args, cfg)
     elif args.stage == "eval":
         run_eval(args, cfg)
+    elif args.stage == "label_template":
+        if not args.pilot2023_candidates or not args.label_template_out:
+            ap.error("--stage label_template requires --pilot2023-candidates and "
+                     "--label-template-out")
+        run_label_template(args)
     return 0
 
 
