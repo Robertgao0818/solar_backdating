@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+import rasterio
 from pyproj import Transformer
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BACKOFF_BASE_S = 1.0
 DEFAULT_BACKOFF_JITTER_FRAC = 0.3
 DEFAULT_POLITENESS_SLEEP_S = 0.4
+JPEG_COMPRESSION_QUALITY = 95
 
 _WGS84_TO_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
 
@@ -255,6 +257,28 @@ def fetch_chip(
     return None, last_outcome  # pragma: no cover - loop always returns internally
 
 
+def _write_jpeg_compressed_geotiff(raw_tiff_bytes: bytes, out_path: Path) -> None:
+    """Re-encode an ArcGIS ``format=tiff`` response as a JPEG-compressed GeoTIFF.
+
+    ArcGIS exportImage's uncompressed TIFF response is ~8-15x larger on disk
+    than the same footprint JPEG-compressed (see ZAsolar's
+    scripts/archive/imagery/_arcgis_fetch.py precedent). Recompressing
+    locally (rather than requesting format=jpg from the server) keeps the
+    embedded CRS/transform ArcGIS's TIFF response already carries.
+    """
+    with rasterio.MemoryFile(raw_tiff_bytes) as mem, mem.open() as src:
+        profile = src.profile.copy()
+        data = src.read()
+    profile.update(
+        driver="GTiff", compress="JPEG", jpeg_quality=JPEG_COMPRESSION_QUALITY,
+        tiled=True, blockxsize=512, blockysize=512,
+    )
+    if profile.get("count", 1) == 3:
+        profile["photometric"] = "YCBCR"
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(data)
+
+
 def fetch_and_save_chip(
     anchor_id: str,
     year: int,
@@ -292,7 +316,8 @@ def fetch_and_save_chip(
     )
     if body is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(body)
+        _write_jpeg_compressed_geotiff(body, out_path)
+        outcome.n_bytes = out_path.stat().st_size
     return outcome
 
 

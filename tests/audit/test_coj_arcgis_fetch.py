@@ -21,6 +21,7 @@ from scripts.audit.coj_arcgis_fetch import (
     FetchUnit,
     backoff_seconds,
     build_export_url,
+    fetch_and_save_chip,
     fetch_chip,
     fetch_units_concurrent,
     pixel_size_for_bbox,
@@ -213,6 +214,65 @@ def test_fetch_chip_exception_is_retried_then_reported():
     assert outcome.outcome == "exception"
     assert outcome.attempts == 3
     assert len(sleeps) == 2
+
+
+def _make_fake_arcgis_tiff_bytes(width: int = 64, height: int = 64) -> bytes:
+    """A smooth (highly JPEG-compressible), georeferenced 3-band uint8 TIFF,
+    standing in for what ArcGIS exportImage's format=tiff actually returns."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    gradient = np.linspace(0, 255, width, dtype="uint8")
+    data = np.tile(gradient, (3, height, 1))
+    profile = {
+        "driver": "GTiff", "height": height, "width": width,
+        "count": 3, "dtype": "uint8", "crs": "EPSG:3857",
+        "transform": from_bounds(0, 0, width * 0.15, height * 0.15, width, height),
+    }
+    with rasterio.MemoryFile() as mem:
+        with mem.open(**profile) as dst:
+            dst.write(data)
+        return bytes(mem.read())
+
+
+def test_fetch_and_save_chip_recompresses_to_jpeg_geotiff(tmp_path):
+    raw = _make_fake_arcgis_tiff_bytes()
+
+    def http_get(url):
+        return _FakeResponse(200, raw, {"Content-Type": "image/tiff"})
+
+    out_path = tmp_path / "chip.tif"
+    outcome = fetch_and_save_chip(
+        "a1", 2023, (0.0, 0.0, 0.01, 0.01), out_path,
+        http_get=http_get, sleep_fn=lambda s: None,
+    )
+
+    assert outcome.outcome == "ok"
+    assert out_path.exists()
+    assert out_path.stat().st_size < len(raw)
+    assert outcome.n_bytes == out_path.stat().st_size
+
+    import rasterio
+
+    with rasterio.open(out_path) as src:
+        assert "jpeg" in str(src.profile.get("compress", "")).lower()
+        assert src.crs is not None
+        assert src.count == 3
+
+
+def test_fetch_and_save_chip_skips_existing_non_empty_file(tmp_path):
+    out_path = tmp_path / "chip.tif"
+    out_path.write_bytes(b"already-here")
+
+    def http_get(url):
+        raise AssertionError("must not fetch when a non-empty chip already exists")
+
+    outcome = fetch_and_save_chip(
+        "a1", 2023, (0.0, 0.0, 0.01, 0.01), out_path,
+        http_get=http_get, sleep_fn=lambda s: None,
+    )
+    assert outcome.outcome == "skipped_existing"
 
 
 def test_fetch_outcome_is_jsonl_serializable():
