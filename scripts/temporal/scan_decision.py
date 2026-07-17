@@ -41,7 +41,9 @@ from scripts.temporal.scan_state import (
 @dataclass(frozen=True)
 class VintageEntry:
     capture_date: str
-    version: int
+    # int for live catalogs; "noversion" for offline-TM catalog entries (matches
+    # the pre-downloaded basemap chip filenames, which carry _vnoversion).
+    version: int | str
     provider: str = "TM"
 
 

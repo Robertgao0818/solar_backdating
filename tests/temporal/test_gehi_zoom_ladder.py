@@ -623,3 +623,213 @@ def test_manifest_zoom_is_requested_not_actual(anchor, tmp_path: Path, monkeypat
     assert row["actual_zoom"] == "19", "manifest `actual_zoom` must be the served zoom"
     assert row["zoom"] != row["actual_zoom"], "zoom (requested) must differ from actual_zoom on fallback"
     assert row["requested_zoom_ladder"] == "20,19"
+
+
+class _ZeroRng:
+    def uniform(self, a: float, b: float) -> float:
+        return 0.0
+
+
+def _fake_limiter(sleeps: list[float]):
+    """A GehiRateLimiter on a fake clock so tests never really sleep."""
+    from scripts.temporal.gehi_common import GehiRateLimiter
+
+    clock = {"t": 0.0}
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["t"] += seconds
+
+    return GehiRateLimiter(
+        min_interval_s=0.0,
+        soft_backoff_s=7.0,
+        hard_backoff_s=100.0,
+        hard_after=5,
+        sleep_fn=sleep,
+        monotonic_fn=lambda: clock["t"],
+        rng=_ZeroRng(),
+    )
+
+
+def test_default_runner_late_binds_stubbed_run_gehi(anchor, tmp_path: Path, monkeypatch) -> None:
+    """Calling without runner= must reach the module-global run_gehi at call time
+    (so monkeypatch — and therefore main()'s test seam — works), wrapped in the
+    throttle. The old def-time default froze the original run_gehi and made the
+    stub unreachable."""
+    from scripts.temporal import gehi_download
+
+    plan = {19: {"returncode": 0, "writes_file": True}}
+    stub = _make_runner(plan, tmp_path)
+    monkeypatch.setattr(gehi_download, "run_gehi", stub)
+
+    sleeps: list[float] = []
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2015-08-30",
+        version="277",
+        zoom_ladder=(19,),
+        output_root=tmp_path,
+        limiter=_fake_limiter(sleeps),
+    )
+    assert result.status == "ok"
+    assert len(stub.calls) == 1
+
+
+def test_blocked_response_retried_with_backoff(anchor, tmp_path: Path, monkeypatch) -> None:
+    """A 403 block signal on stderr must be retried at the SAME zoom after the
+    limiter's soft backoff, instead of burning the ladder rung."""
+    from scripts.temporal import gehi_download
+
+    calls: list[int] = []
+
+    def stub(cmd_args, *, executable, timeout):
+        calls.append(1)
+        out_path = Path(cmd_args[list(cmd_args).index("--output") + 1])
+        if len(calls) == 1:
+            return GehiRunResult(
+                args=tuple(str(a) for a in cmd_args),
+                returncode=1,
+                stdout="",
+                stderr="Response status code does not indicate success: 403 (Forbidden)",
+            )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(b"FAKE_TIFF_DATA_FOR_TEST")
+        return GehiRunResult(args=tuple(str(a) for a in cmd_args), returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(gehi_download, "run_gehi", stub)
+
+    sleeps: list[float] = []
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2015-08-30",
+        version="277",
+        zoom_ladder=(19,),
+        output_root=tmp_path,
+        limiter=_fake_limiter(sleeps),
+        max_attempts=3,
+    )
+    assert result.status == "ok"
+    assert result.actual_zoom == 19
+    assert len(calls) == 2
+    assert 7.0 in sleeps, "soft backoff must fire after the blocked attempt"
+
+
+# ---------------------------------------------------------------------------
+# JPEG-in-GeoTIFF recompression (disk-size optimization, CoJ precedent)
+# ---------------------------------------------------------------------------
+
+
+def _write_real_geotiff(path: Path, *, count: int = 3, dtype: str = "uint8") -> None:
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    gradient = np.linspace(0, 255, 64 * 64, dtype="float64").reshape(64, 64)
+    data = np.stack([gradient + i for i in range(count)]).clip(0, 255).astype(dtype)
+    with rasterio.open(
+        path, "w", driver="GTiff", width=64, height=64, count=count, dtype=dtype,
+        crs="EPSG:4326", transform=from_bounds(28.014, -26.184, 28.015, -26.183, 64, 64),
+    ) as dst:
+        dst.write(data)
+
+
+def test_recompress_helper_preserves_georeferencing_and_shrinks(tmp_path: Path) -> None:
+    import rasterio
+
+    from scripts.temporal.gehi_download import _recompress_jpeg_in_geotiff
+
+    chip = tmp_path / "chip.tif"
+    _write_real_geotiff(chip)
+    with rasterio.open(chip) as src:
+        crs_before, transform_before = src.crs, src.transform
+    size_before = chip.stat().st_size
+
+    assert _recompress_jpeg_in_geotiff(chip) is None
+    with rasterio.open(chip) as src:
+        assert src.profile["compress"].upper() == "JPEG"
+        assert src.crs == crs_before
+        assert src.transform == transform_before
+        assert src.count == 3
+    assert chip.stat().st_size < size_before
+
+    # Idempotent: already-JPEG chips are left untouched (resume safety).
+    sha_after = chip.read_bytes()
+    assert _recompress_jpeg_in_geotiff(chip) is None
+    assert chip.read_bytes() == sha_after
+
+
+def test_recompress_helper_refuses_unsupported_shapes(tmp_path: Path) -> None:
+    from scripts.temporal.gehi_download import _recompress_jpeg_in_geotiff
+
+    two_band = tmp_path / "two_band.tif"
+    _write_real_geotiff(two_band, count=2)
+    err = _recompress_jpeg_in_geotiff(two_band)
+    assert err is not None and "band count" in err
+
+    wide = tmp_path / "wide.tif"
+    _write_real_geotiff(wide, dtype="uint16")
+    err = _recompress_jpeg_in_geotiff(wide)
+    assert err is not None and "dtype" in err
+
+
+def test_ladder_recompresses_fresh_download(anchor, tmp_path: Path) -> None:
+    import rasterio
+
+    def runner(cmd_args, *, executable, timeout):
+        out_path = Path(cmd_args[cmd_args.index("--output") + 1])
+        _write_real_geotiff(out_path)
+        return GehiRunResult(args=tuple(str(a) for a in cmd_args), returncode=0, stdout="", stderr="")
+
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2024-06-15",
+        version=12345,
+        zoom_ladder=(19,),
+        output_root=tmp_path,
+        runner=runner,
+        recompress=True,
+    )
+    assert result.status == "ok"
+    with rasterio.open(result.path) as src:
+        assert src.profile["compress"].upper() == "JPEG"
+    # DownloadResult.sha256 must hash the recompressed bytes, not the originals.
+    assert result.sha256 == __import__("hashlib").sha256(result.path.read_bytes()).hexdigest()
+
+
+def test_ladder_recompress_failure_keeps_chip_and_logs(anchor, tmp_path: Path) -> None:
+    plan = {19: {"returncode": 0, "writes_file": True}}  # writes non-TIFF fake bytes
+    runner = _make_runner(plan, tmp_path)
+    records: list[dict] = []
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2024-06-15",
+        version=12345,
+        zoom_ladder=(19,),
+        output_root=tmp_path,
+        runner=runner,
+        recompress=True,
+        raw_log_callback=records.append,
+    )
+    assert result.status == "ok"
+    assert result.path.read_bytes() == b"FAKE_TIFF_DATA_FOR_TEST"
+    recompress_records = [r for r in records if "recompress_error" in r]
+    assert len(recompress_records) == 1
+
+
+def test_ladder_recompress_defaults_off_for_library_callers(anchor, tmp_path: Path) -> None:
+    plan = {19: {"returncode": 0, "writes_file": True}}
+    runner = _make_runner(plan, tmp_path)
+    records: list[dict] = []
+    result = download_chip_with_zoom_ladder(
+        anchor,
+        capture_date="2024-06-15",
+        version=12345,
+        zoom_ladder=(19,),
+        output_root=tmp_path,
+        runner=runner,
+        raw_log_callback=records.append,
+    )
+    assert result.status == "ok"
+    assert result.path.read_bytes() == b"FAKE_TIFF_DATA_FOR_TEST"
+    assert not any("recompress_error" in r for r in records)

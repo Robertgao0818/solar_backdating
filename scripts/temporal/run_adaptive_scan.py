@@ -29,12 +29,12 @@ import hashlib
 import json
 import sys
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Callable, Iterable, Mapping, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from scripts.temporal.verdict_store import VerdictStore
@@ -371,6 +371,88 @@ def parse_args() -> argparse.Namespace:
         "extent from the downloaded source raster. Default: score the legacy "
         "full-chip review PNG. Used by ISSUE-25 A24/A48/A96.",
     )
+    parser.add_argument(
+        "--tm-catalog-interval",
+        type=float,
+        default=0.0,
+        help="Minimum seconds between live TM (Google) catalog metadata calls "
+        "(availability/info), shared across all anchor workers, with 403/429 "
+        "backoff-and-retry. Wayback catalog calls and chip downloads are "
+        "unaffected. Default 0 = unthrottled (legacy behavior). Full-population "
+        "runs MUST set this (~1.0 = the validated ~60 calls/min-per-address-"
+        "family safe pace; the 2026-07-12 TM 403 ban fired at ~104/min "
+        "sustained ~1h). Live calls only happen on catalog-cache misses, so "
+        "this is a no-op for cache-warm reruns.",
+    )
+    parser.add_argument(
+        "--offline-tm-catalog-csv",
+        type=Path,
+        default=None,
+        help="Per-anchor TM capture-date CSV (build_gehi_candidates.py output; "
+        "anchor_id/capture_date/provider columns, TM rows used). When given, "
+        "the TM vintage catalog is built offline from these dates with zero "
+        "live TM metadata calls: bbox-completeness is delegated to the "
+        "download layer (the basemap rebuild already pulled these dates "
+        "through the zoom ladder), and offline picks carry version="
+        "'noversion' so they resolve the pre-downloaded _vnoversion chips. "
+        "Anchors absent from the CSV fall back to the live TM catalog path. "
+        "Wayback catalog calls are unaffected.",
+    )
+    parser.add_argument(
+        "--offline-wayback",
+        action="store_true",
+        help="Build the Wayback vintage catalog offline from the same "
+        "--offline-tm-catalog-csv (its Wayback rows: anchor_id/capture_date/"
+        "version/provider columns), with zero live Wayback info calls (z19/z18) "
+        "and no z20 lazy-query. Requires --offline-tm-catalog-csv (SystemExit if "
+        "given alone). Wayback rows carry a real numeric version (the layer "
+        "capture id), unlike offline TM's 'noversion' sentinel, so picks resolve "
+        "the real pre-downloaded _v<version>.tif chips. z20 is marked "
+        "unavailable rather than lazily fetched live (production Wayback z20 "
+        "coverage is ~97% absent) -- this is a deliberate behavior difference "
+        "from the live path, which does lazy-fetch z20 and occasionally hits. "
+        "Anchors absent from the CSV's Wayback rows fall back to the live "
+        "Wayback catalog path.",
+    )
+    parser.add_argument(
+        "--no-live-gehi",
+        action="store_true",
+        help="Zero-live-GEHI mode: guarantee this process NEVER spawns a GEHI "
+        "subprocess, so the only network traffic is the Gemini gateway. Added "
+        "after the 2026-07-16 a24_v6 khmdb-ban stall, whose root cause was a "
+        "live GEHI download fired by a chip missing from the pre-downloaded "
+        "basemap despite both offline catalog flags being set. Requires both "
+        "--offline-tm-catalog-csv and --offline-wayback (SystemExit if either "
+        "is missing -- simplest way to guarantee every catalog-build path is "
+        "offline). Under this flag: (1) a pick whose chip is absent from the "
+        "pre-downloaded basemap on disk is recorded status=all_zooms_failed "
+        "via the existing download_failed notes path, never live-downloaded; "
+        "(2) an anchor absent from the offline TM/Wayback catalog CSV surfaces "
+        "as a done_ambiguous_orchestrator_error scan_state (grep-able, "
+        "re-runnable via --force-restart once the anchor is added to the CSV) "
+        "instead of falling back to a live catalog fetch; (3) any other code "
+        "path that would still reach a live GEHI call raises loudly instead "
+        "of silently degrading.",
+    )
+    parser.add_argument(
+        "--offline-require-chip-on-disk",
+        action="store_true",
+        help="Filter BOTH offline catalogs (TM and Wayback) down to entries whose "
+        "chip file actually exists under the merged chips dirs (any ladder zoom "
+        "counts, same rule the download cache-scan uses) BEFORE the adaptive "
+        "picker or the ISSUE-26 cutoff walk ever see them. Closes the 2026-07-17 "
+        "forensics finding: a handful of 'phantom' dates are listed in the "
+        "offline CSV (the original live catalog call once reported them) but "
+        "were never actually captured to disk during the basemap download, so "
+        "even --no-live-gehi alone still burns a wasted download_failed pick "
+        "every time the adaptive scan selects one. Requires --no-live-gehi plus "
+        "both --offline-tm-catalog-csv and --offline-wayback (SystemExit "
+        "otherwise -- this is a stricter sub-mode of the same offline-only "
+        "guarantee). Logs a startup summary: per-provider dropped-entry counts, "
+        "top dropped dates, and any anchor that loses >50%% of its candidates "
+        "to the filter (a signal for a targeted TM/Wayback backfill before "
+        "rerunning, not something this flag fixes by itself).",
+    )
     add_catalog_cache_cli_args(parser)
     return parser.parse_args()
 
@@ -543,6 +625,8 @@ def make_vintage_check(
     catalog_cache: CatalogCache | None = None,
     catalog_force_refresh: bool = False,
     catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
+    tm_catalog_runner: Callable[..., object] | None = None,
+    no_live_gehi: bool = False,
 ) -> Callable[[int, str], bool]:
     """Build a vintage_check Callable for `download_chip_with_zoom_ladder`.
 
@@ -553,6 +637,21 @@ def make_vintage_check(
 
     `catalog_cache=None` (the default) makes zero behavior change: every
     lazy zoom lookup issues a live GEHI call exactly as before ISSUE-13.
+
+    `no_live_gehi=True` closes the one remaining lazy-fetch surface this
+    function owns: normally, a zoom absent from the pre-built
+    `available_dates_by_zoom` (e.g. a ladder rung the offline catalog builder
+    didn't cover) triggers a live `fetch_availability_for_anchor` /
+    `fetch_vintages_for_anchor` call on first lookup. With the flag set, that
+    branch raises loudly instead of ever reaching those live-call surfaces --
+    both `fetch_vintages_for_anchor`/`fetch_availability_for_anchor` default to
+    the raw (unthrottled) `run_gehi` and swallow arbitrary exceptions raised by
+    an injected `runner` in their no-cache path, so gating here (before the
+    call) rather than via a raising `runner=` is the only reliable way to make
+    this loud rather than a silent `[]` degrade. `download_chip_with_zoom_ladder`
+    already treats any `vintage_check` exception as "skip this zoom" (logged),
+    so the anchor still resolves to its normal `all_zooms_failed` / notes path
+    -- no new state shape.
     """
     effective_max_date = (catalog_max_date or config.catalog_max_date)[:10]
     catalogs: dict[int, set[str]] = {
@@ -560,8 +659,21 @@ def make_vintage_check(
         for zoom, dates in available_dates_by_zoom.items()
     }
 
+    # TM (Google khmdb) metadata calls are the 403-ban surface; Wayback is not.
+    runner_kwargs: dict[str, object] = (
+        {"runner": tm_catalog_runner}
+        if tm_catalog_runner is not None and config.provider == "TM"
+        else {}
+    )
+
     def check(zoom: int, capture_date: str) -> bool:
         if zoom not in catalogs:
+            if no_live_gehi:
+                raise RuntimeError(
+                    f"no_live_gehi: refusing live {config.provider} availability/info "
+                    f"fetch for anchor {anchor.get('anchor_id', '<unknown>')} at z={zoom} "
+                    "(zoom absent from the pre-built offline catalog)"
+                )
             if config.require_complete_coverage_for_download:
                 from scripts.temporal.gehi_availability import fetch_availability_for_anchor
 
@@ -576,6 +688,7 @@ def make_vintage_check(
                     catalog_cache=catalog_cache,
                     force_refresh=catalog_force_refresh,
                     max_age_days=catalog_max_age_days,
+                    **runner_kwargs,
                 )
             else:
                 from scripts.temporal.gehi_info import fetch_vintages_for_anchor
@@ -587,6 +700,7 @@ def make_vintage_check(
                     catalog_cache=catalog_cache,
                     force_refresh=catalog_force_refresh,
                     max_age_days=catalog_max_age_days,
+                    **runner_kwargs,
                 )
             catalogs[zoom] = {
                 str(r.get("capture_date", ""))[:10]
@@ -661,6 +775,22 @@ def _score_batch_picks_chunked(
     ``GeminiObservation`` results — and downstream CSV/scan_state bytes — are
     unchanged). Defaults to the registered ``gemini`` scorer when not supplied so
     legacy direct callers keep working.
+
+    ``limiter`` pacing (2026-07-17 gemini-retry-patch addendum): the Gemini
+    scorer's ``score_batch_with_fallback`` now re-acquires ``limiter`` before
+    EVERY HTTP attempt, including retries (see
+    ``_post_with_transport_retry`` in gemini_solar_image_review.py) — retry
+    bursts under transport 429/5xx now respect the shared qps gate too, not
+    just first attempts. Because of that, the OLD coarse per-chunk
+    ``limiter.wait()`` that used to run right before calling the scorer is
+    dropped for the Gemini scorer specifically: keeping both would pace the
+    first attempt of every chunk TWICE (the outer wait() plus the transport
+    layer's own first-attempt wait()), each call advancing the shared pacer's
+    "next allowed" cursor, which roughly halves effective qps. Non-Gemini
+    scorers (e.g. ``dinov3_frozen``: local-inference batch, no HTTP retry
+    ladder, accepts and ignores a ``limiter=`` kwarg) keep the original coarse
+    per-chunk wait() — they never re-acquire it themselves, so dropping it
+    there would silently un-throttle them.
     """
     from scripts.validation.gemini_solar_image_review import BatchPick
 
@@ -694,15 +824,17 @@ def _score_batch_picks_chunked(
             payload["batch_chunk_count"] = total_chunks
             audit_writer(payload)
 
-        if limiter is not None:
+        if limiter is not None and scorer.name != "gemini":
             limiter.wait()
         salt_kwargs = {} if routing_salt is None else {"routing_salt": routing_salt}
+        limiter_kwargs = {} if limiter is None else {"limiter": limiter}
         observations = scorer.batch(
             local_picks,
             config=gemini_config,
             audit_writer=_chunk_audit,
             census_mid_date_iso=census_mid_date_iso,
             **salt_kwargs,
+            **limiter_kwargs,
         )
         for obs in observations:
             original = local_to_original.get(obs.chip_index)
@@ -729,6 +861,7 @@ def execute_round_real(
     provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
     review_renderer: Callable[[Path, Mapping[str, str]], Path] | None = None,
     provider_chips_dirs: Mapping[str, Path] | None = None,
+    no_live_gehi: bool = False,
 ) -> Round:
     """Download chips for each pick (zoom ladder), batch-score via the injected
     scorer, return Round with results.
@@ -746,6 +879,12 @@ def execute_round_real(
     when supplied, receives one canonical chip-provenance record per download
     outcome (built via ``build_chip_provenance``); it must be safe to call
     concurrently across anchor workers.
+
+    ``no_live_gehi=True`` (zero-live-GEHI mode) is forwarded to every download
+    call: a pick whose chip is missing from the pre-downloaded basemap on disk
+    is recorded ``status="all_zooms_failed"`` without ever spawning a GEHI
+    subprocess, folding into the existing ``download_failed: ...`` notes path
+    below unchanged.
     """
     import json as _json
 
@@ -761,6 +900,8 @@ def execute_round_real(
         escape_kwargs["overwrite"] = True
     if min_cache_zoom is not None:
         escape_kwargs["min_cache_zoom"] = min_cache_zoom
+    if no_live_gehi:
+        escape_kwargs["no_live_gehi"] = True
 
     download_outcomes: list[tuple[Pick, object]] = []
     for pick in rnd.picks:
@@ -951,6 +1092,10 @@ def run_one_anchor(
     catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
     review_renderer: Callable[[Path, Mapping[str, str]], Path] | None = None,
     provider_chips_dirs: Mapping[str, Path] | None = None,
+    tm_catalog_runner: Callable[..., object] | None = None,
+    offline_tm_dates: Sequence[str] | None = None,
+    offline_wayback_entries: Sequence[tuple[str, str]] | None = None,
+    no_live_gehi: bool = False,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
     state_path = state_path_for(anchor_id, scan_states_dir)
@@ -1012,6 +1157,15 @@ def run_one_anchor(
             "catalog_force_refresh": catalog_force_refresh,
             "catalog_max_age_days": catalog_max_age_days,
         }
+    # Same guarded-kwarg pattern as the cache block: only forwarded when set,
+    # so fixed-arity test stubs of the two callees keep working.
+    if tm_catalog_runner is not None:
+        catalog_kwargs["tm_catalog_runner"] = tm_catalog_runner
+    # Same pattern again: forwarded to BOTH `_fetch_real_vintage_catalog` (via
+    # fetch_kwargs below) and `make_vintage_check` (via check_kwargs below),
+    # since both are built from this shared dict -- one flag, one place.
+    if no_live_gehi:
+        catalog_kwargs["no_live_gehi"] = True
     real_catalog: VintageCatalog | None = None
     if dry_run:
         vintages = dry_run_vintages(anchor_id)
@@ -1024,6 +1178,14 @@ def run_one_anchor(
         fetch_kwargs = dict(catalog_kwargs)
         if census_mid_date_iso is not None:
             fetch_kwargs["census_date"] = census_mid_date_iso
+        # Guarded like the cache kwargs: only forwarded when an offline TM
+        # catalog is active, so fixed-arity test stubs keep working.
+        if offline_tm_dates is not None:
+            fetch_kwargs["offline_tm_dates"] = offline_tm_dates
+        # Same guarded-kwarg pattern: only forwarded when an offline Wayback
+        # catalog is active, so fixed-arity test stubs keep working.
+        if offline_wayback_entries is not None:
+            fetch_kwargs["offline_wayback_entries"] = offline_wayback_entries
         real_catalog = _fetch_real_vintage_catalog(anchor, config, **fetch_kwargs)
         vintages = real_catalog.vintages
         catalog_max_date = (
@@ -1132,6 +1294,8 @@ def run_one_anchor(
                 issue18_kwargs["review_renderer"] = review_renderer
             if provider_chips_dirs is not None:
                 issue18_kwargs["provider_chips_dirs"] = provider_chips_dirs
+            if no_live_gehi:
+                issue18_kwargs["no_live_gehi"] = True
             rnd = execute_round_real(
                 rnd, anchor, config,
                 chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=round_config,
@@ -1158,6 +1322,10 @@ def _fetch_real_vintage_catalog(
     catalog_cache: CatalogCache | None = None,
     catalog_force_refresh: bool = False,
     catalog_max_age_days: float = DEFAULT_CATALOG_MAX_AGE_DAYS,
+    tm_catalog_runner: Callable[..., object] | None = None,
+    offline_tm_dates: Sequence[str] | None = None,
+    offline_wayback_entries: Sequence[tuple[str, str]] | None = None,
+    no_live_gehi: bool = False,
 ) -> VintageCatalog:
     """Fetch bbox-complete GEHI vintages for an anchor.
 
@@ -1169,6 +1337,19 @@ def _fetch_real_vintage_catalog(
 
     `catalog_cache=None` (the default) makes zero behavior change: every zoom
     in the ladder issues a live GEHI call exactly as before ISSUE-13.
+
+    `no_live_gehi=True` forbids reaching the live `fetch_vintages_for_anchor`
+    path below. The only way this function is normally called at all under
+    zero-live-GEHI mode is an anchor absent from the offline catalog CSV for
+    this provider (`offline_tm_dates`/`offline_wayback_entries` is `None` even
+    though the offline flag is active) -- everything else is intercepted
+    upstream by the two `offline_*` early-returns above. Rather than silently
+    degrading (both `gehi_info`/`gehi_availability`'s no-cache path swallow
+    arbitrary `runner` exceptions and return `[]`), this raises loudly so the
+    anchor surfaces as a `done_ambiguous_orchestrator_error` scan_state (the
+    existing `run_one_anchor` exception handling in `main()`'s `handle()`) with
+    the reason in `notes` -- grep-able, and re-runnable once the anchor is
+    added to the offline CSV (or via `--force-restart`).
     """
     if config.provider == "Merged":
         tm_config = dataclasses.replace(config, provider="TM")
@@ -1185,6 +1366,9 @@ def _fetch_real_vintage_catalog(
             catalog_cache=catalog_cache,
             catalog_force_refresh=catalog_force_refresh,
             catalog_max_age_days=catalog_max_age_days,
+            tm_catalog_runner=tm_catalog_runner,
+            offline_tm_dates=offline_tm_dates,
+            no_live_gehi=no_live_gehi,
         )
         wayback = _fetch_real_vintage_catalog(
             anchor,
@@ -1193,11 +1377,38 @@ def _fetch_real_vintage_catalog(
             catalog_cache=catalog_cache,
             catalog_force_refresh=catalog_force_refresh,
             catalog_max_age_days=catalog_max_age_days,
+            tm_catalog_runner=tm_catalog_runner,
+            offline_wayback_entries=offline_wayback_entries,
+            no_live_gehi=no_live_gehi,
         )
         return merge_provider_catalogs(tm, wayback)
 
+    if config.provider == "TM" and offline_tm_dates is not None:
+        return _build_offline_tm_catalog(
+            offline_tm_dates, config, census_date=census_date
+        )
+
+    if config.provider == "Wayback" and offline_wayback_entries is not None:
+        return _build_offline_wayback_catalog(
+            offline_wayback_entries, config, census_date=census_date
+        )
+
+    if no_live_gehi:
+        raise RuntimeError(
+            f"no_live_gehi: refusing live {config.provider} catalog fetch for anchor "
+            f"{anchor.get('anchor_id', '<unknown>')} (missing from the offline "
+            f"{config.provider} catalog CSV, or no offline catalog supplied for "
+            "this provider)"
+        )
+
     from scripts.temporal.gehi_info import fetch_vintages_for_anchor
 
+    # TM (Google khmdb) metadata calls are the 403-ban surface; Wayback is not.
+    runner_kwargs: dict[str, object] = (
+        {"runner": tm_catalog_runner}
+        if tm_catalog_runner is not None and config.provider == "TM"
+        else {}
+    )
     info_by_zoom: dict[int, dict[str, object]] = {}
     for zoom in config.discovery_zoom_ladder:
         info_rows = fetch_vintages_for_anchor(
@@ -1207,6 +1418,7 @@ def _fetch_real_vintage_catalog(
             catalog_cache=catalog_cache,
             force_refresh=catalog_force_refresh,
             max_age_days=catalog_max_age_days,
+            **runner_kwargs,
         )
         info_by_date: dict[str, object] = {}
         for row in info_rows:
@@ -1245,6 +1457,7 @@ def _fetch_real_vintage_catalog(
                     catalog_cache=catalog_cache,
                     force_refresh=catalog_force_refresh,
                     max_age_days=catalog_max_age_days,
+                    **runner_kwargs,
                 )
                 candidate_dates_by_zoom[int(zoom)] = {
                     str(row.get("capture_date", ""))[:10]
@@ -1299,6 +1512,360 @@ def _fetch_real_vintage_catalog(
         available_dates_by_zoom=available_dates_by_zoom,
         catalog_max_date=effective_max_date,
     )
+
+
+# Offline-TM catalog entries carry this sentinel version. It deliberately
+# matches the `or "noversion"` fallback in gehi_download's chip naming, so
+# offline picks resolve the pre-downloaded basemap chips (…_vnoversion.tif)
+# instead of re-downloading under a live numeric version.
+OFFLINE_TM_VERSION = "noversion"
+
+
+def _build_offline_tm_catalog(
+    offline_tm_dates: Sequence[str],
+    config: AdaptiveScanConfig,
+    *,
+    census_date: str | None,
+) -> VintageCatalog:
+    """Build the TM vintage catalog from pre-fetched dates, zero live TM calls.
+
+    Source is the download-phase candidates CSV (one capture_date list per
+    anchor). Completeness is assumed delegated to the download layer: the
+    basemap rebuild already downloaded these dates through the zoom ladder, and
+    any residual gap surfaces as a per-pick download failure, not a catalog
+    error. Every ladder zoom (discovery + download) is marked available so
+    `make_vintage_check` never lazy-fetches live TM availability either.
+
+    Mirrors the live coverage-gated cutoff walk: candidates advance until
+    `post_census_reference_frames` post-census dates fall inside the bound
+    (ISSUE-26 semantics), except "complete" is a given here.
+    """
+    dates = sorted(
+        {
+            str(d)[:10]
+            for d in offline_tm_dates
+            if str(d)[:10] >= config.catalog_min_date[:10]
+        }
+    )
+    cutoff_candidates = _catalog_cutoff_candidates(
+        dates, config, census_date=census_date
+    )
+    keep = max(0, int(config.post_census_reference_frames))
+    effective_max_date = cutoff_candidates[0]
+    allowed: set[str] = set()
+    for candidate_max_date in cutoff_candidates:
+        effective_max_date = candidate_max_date
+        allowed = {d for d in dates if d <= candidate_max_date}
+        reference_dates = {
+            d for d in allowed if census_date is not None and d > census_date[:10]
+        }
+        if census_date is None or len(reference_dates) >= keep:
+            break
+    ladder_zooms = {int(z) for z in config.discovery_zoom_ladder} | {
+        int(z) for z in config.download_zoom_ladder
+    }
+    return VintageCatalog(
+        vintages=[
+            VintageEntry(
+                capture_date=d, version=OFFLINE_TM_VERSION, provider="TM"
+            )
+            for d in sorted(allowed)
+        ],
+        available_dates_by_zoom={zoom: set(allowed) for zoom in ladder_zooms},
+        catalog_max_date=effective_max_date,
+    )
+
+
+def _build_offline_wayback_catalog(
+    offline_wayback_entries: Sequence[tuple[str, str]],
+    config: AdaptiveScanConfig,
+    *,
+    census_date: str | None,
+) -> VintageCatalog:
+    """Build the Wayback vintage catalog from pre-fetched (capture_date, version)
+    pairs, zero live Wayback info calls.
+
+    Precisely mirrors the live Wayback path's semantics
+    (`_fetch_real_vintage_catalog`'s final ``else:`` branch, which is what
+    Wayback always takes because `main()` forces
+    `require_complete_coverage_for_catalog=False` for `--provider Wayback`),
+    with ONE deliberate exception called out below.
+
+    - **Cutoff**: `effective_max_date` is `_catalog_cutoff_candidates(...)[0]`
+      taken directly -- unlike `_build_offline_tm_catalog`, there is NO
+      candidate-advance loop here. The live non-coverage-gated branch never
+      advances past the first cutoff candidate (that advance loop only exists
+      in the `require_complete_coverage_for_catalog=True` branch, which
+      Wayback never enters); copying the TM offline builder's loop here would
+      silently invent post-census-reference-frame behavior Wayback's live
+      path does not have.
+    - **z20 (or any download-only zoom)**: marked UNAVAILABLE (empty set)
+      rather than left to lazy-fetch. This is the one intentional divergence
+      from live: the live path leaves non-discovery download zooms out of
+      `available_dates_by_zoom` entirely, so `make_vintage_check` lazy-fetches
+      them live on first lookup (occasionally finding a hit). Production
+      Wayback z20 coverage is ~97% absent (see `census2023_zoom_ladder`'s
+      docstring in scan_config.py), so this offline path trades away those
+      rare live hits for zero live Wayback calls. Zoom keys are
+      `config.discovery_zoom_ladder | config.download_zoom_ladder`; any zoom
+      NOT in the discovery ladder gets the empty set (not hardcoded 19/18/20).
+    """
+    version_by_date: dict[str, int] = {}
+    for capture_date, version_raw in offline_wayback_entries:
+        d = str(capture_date)[:10]
+        if not d or d < config.catalog_min_date[:10]:
+            continue
+        try:
+            version_by_date[d] = int(version_raw)
+        except (TypeError, ValueError):
+            continue
+
+    dates = sorted(version_by_date)
+    effective_max_date = _catalog_cutoff_candidates(
+        dates, config, census_date=census_date
+    )[0]
+    allowed = [d for d in dates if d <= effective_max_date]
+
+    discovery_zooms = {int(z) for z in config.discovery_zoom_ladder}
+    ladder_zooms = discovery_zooms | {int(z) for z in config.download_zoom_ladder}
+    available_dates_by_zoom = {
+        zoom: (set(allowed) if zoom in discovery_zooms else set())
+        for zoom in ladder_zooms
+    }
+
+    return VintageCatalog(
+        vintages=[
+            VintageEntry(
+                capture_date=d, version=version_by_date[d], provider="Wayback"
+            )
+            for d in allowed
+        ],
+        available_dates_by_zoom=available_dates_by_zoom,
+        catalog_max_date=effective_max_date,
+    )
+
+
+def load_offline_provider_catalogs(
+    path: Path,
+) -> tuple[dict[str, list[str]], dict[str, list[tuple[str, str]]]]:
+    """Single pass over the download-phase candidates CSV producing both the
+    offline-TM input (per-anchor capture-date list) and the offline-Wayback
+    input (per-anchor (capture_date, raw version string) pairs).
+
+    The CSV (`build_gehi_candidates.py` output; `anchor_id`/`capture_date`/
+    `version`/`provider` columns) is ~1.2M rows / ~43MB, so both offline
+    catalogs are built from one read rather than two. Wayback ``version`` is
+    kept as the raw CSV string here; `_build_offline_wayback_catalog` does the
+    `int()` validation and skip, matching where the live info-parsing loop
+    (`_fetch_real_vintage_catalog`'s `by_date` loop) does its own
+    `int(version_raw)` validation. Date strings are interned via a shared pool
+    — the corpus has only a few hundred distinct dates.
+    """
+    tm_dates_by_anchor: dict[str, list[str]] = {}
+    wayback_by_anchor: dict[str, list[tuple[str, str]]] = {}
+    date_pool: dict[str, str] = {}
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            provider = str(row.get("provider", "")).strip()
+            if provider not in ("TM", "Wayback"):
+                continue
+            anchor_id = str(row.get("anchor_id", "")).strip()
+            capture_date = str(row.get("capture_date", "")).strip()[:10]
+            if not anchor_id or not capture_date:
+                continue
+            capture_date = date_pool.setdefault(capture_date, capture_date)
+            if provider == "TM":
+                tm_dates_by_anchor.setdefault(anchor_id, []).append(capture_date)
+            else:
+                version_raw = str(row.get("version", "")).strip()
+                wayback_by_anchor.setdefault(anchor_id, []).append(
+                    (capture_date, version_raw)
+                )
+    return tm_dates_by_anchor, wayback_by_anchor
+
+
+def load_offline_tm_catalog(path: Path) -> dict[str, list[str]]:
+    """Load per-anchor TM capture dates from the download-phase candidates CSV.
+
+    Expects `build_gehi_candidates.py` output (`anchor_id`, `capture_date`,
+    `provider` columns); only TM rows are used. Date strings are interned via a
+    shared pool — the corpus is ~1.2M rows over a few hundred distinct dates.
+
+    Thin wrapper over `load_offline_provider_catalogs` kept for signature/
+    behavior back-compat with existing callers and tests; prefer the combined
+    loader when both offline TM and offline Wayback catalogs are needed from
+    the same CSV, to avoid reading it twice.
+    """
+    tm_dates_by_anchor, _ = load_offline_provider_catalogs(path)
+    return tm_dates_by_anchor
+
+
+def load_offline_wayback_catalog(path: Path) -> dict[str, list[tuple[str, str]]]:
+    """Load per-anchor Wayback (capture_date, raw version string) pairs from the
+    download-phase candidates CSV. Thin wrapper over
+    `load_offline_provider_catalogs`; see `load_offline_tm_catalog` for why the
+    combined loader is preferred when both maps are needed.
+    """
+    _, wayback_by_anchor = load_offline_provider_catalogs(path)
+    return wayback_by_anchor
+
+
+@dataclass(frozen=True)
+class OfflineDiskFilterStats:
+    """Summary of `filter_offline_catalogs_to_disk`'s effect, for the startup log."""
+
+    tm_before: int
+    tm_after: int
+    wayback_before: int
+    wayback_after: int
+    tm_dropped_dates: Counter[str]
+    wayback_dropped_dates: Counter[str]
+    # (anchor_id, candidates_before, candidates_after, frac_dropped), sorted by
+    # frac_dropped descending. Combined TM+Wayback per anchor (matches the
+    # 2026-07-17 forensics severity buckets, which bucket on combined loss).
+    anchors_over_50pct_loss: list[tuple[str, int, int, float]]
+
+
+def filter_offline_catalogs_to_disk(
+    tm_dates_by_anchor: Mapping[str, Sequence[str]],
+    wayback_by_anchor: Mapping[str, Sequence[tuple[str, str]]],
+    *,
+    tm_chips_dir: Path,
+    wayback_chips_dir: Path,
+    zoom_ladder: Sequence[int],
+) -> tuple[dict[str, list[str]], dict[str, list[tuple[str, str]]], OfflineDiskFilterStats]:
+    """Filter both offline catalogs down to entries with a chip file on disk.
+
+    Root cause this closes (2026-07-17 forensics addendum): the offline catalog
+    CSV documents dates the ORIGINAL live catalog metadata call once reported,
+    not dates the basemap download actually captured to disk -- for a small set
+    of "phantom" dates (ESRI/Google metadata claims coverage the real tile store
+    lacks), the adaptive scan still picks them, `download_chip_with_zoom_ladder`
+    finds no cached chip, and even under `--no-live-gehi` that pick becomes a
+    wasted `download_failed` row instead of never being offered at all. This
+    filter removes exactly those entries BEFORE the picker ever sees them, so a
+    clean rerun has zero download_failed rows from this cause.
+
+    Same filename-resolution rule the cache-scan in
+    `download_chip_with_zoom_ladder` uses: a chip counts as present if it exists
+    (non-empty) at ANY zoom in `zoom_ladder` -- pass `config.download_zoom_ladder`
+    (the exact ladder that function iterates), not the discovery ladder. TM
+    entries resolve via the `OFFLINE_TM_VERSION` ("noversion") sentinel
+    filename; Wayback entries via their real numeric version.
+
+    Every anchor_id key from the input dicts is preserved in the output, even
+    when every one of its entries gets filtered out (an empty list, not a
+    missing key) -- this matters downstream: `_fetch_real_vintage_catalog`
+    treats `offline_tm_dates=None`/`offline_wayback_entries=None` (anchor
+    entirely ABSENT from the source dict) as "not in the offline catalog at
+    all" (a `--no-live-gehi` hard error), which must stay reserved for anchors
+    genuinely missing from the CSV -- not conflated with "was in the CSV but
+    every candidate turned out un-downloadable", a legitimate (if unlucky)
+    empty-catalog-for-this-provider outcome that should NOT raise.
+
+    ISSUE-26 cutoff-walk ordering: this filter MUST run before
+    `_build_offline_tm_catalog`/`_build_offline_wayback_catalog`'s
+    `_catalog_cutoff_candidates` walk (it does -- callers filter the raw
+    per-anchor dicts here, then hand the FILTERED dicts down as
+    `offline_tm_dates`/`offline_wayback_entries`, so the walk only ever sees
+    obtainable dates). This is a deliberate, load-bearing ordering choice, not
+    an implementation detail: walking first and filtering after would let the
+    walk "spend" a post-census reference slot on a date that turns out
+    undownloadable, silently under-delivering `post_census_reference_frames`
+    without ever advancing to a later candidate to compensate (the existing
+    unfiltered code has exactly this latent bug). Filtering first means the
+    walk always advances until it finds N genuinely obtainable post-census
+    dates (or exhausts the filtered list and degrades to the last one --
+    already-tested behavior, see `test_offline_census_cutoff_short_tail_uses_last_available`).
+    So yes, this changes which cutoff candidate gets chosen versus the
+    unfiltered path whenever a would-be candidate is undownloadable -- and that
+    change is the fix, not a side effect to guard against.
+    """
+    from scripts.temporal.gehi_download import _chip_path_for
+
+    def _has_chip(chips_dir: Path, anchor_id: str, date: str, version: str) -> bool:
+        for zoom in zoom_ladder:
+            path = _chip_path_for(chips_dir, anchor_id, date, version, zoom)
+            try:
+                if path.exists() and path.stat().st_size > 0:
+                    return True
+            except OSError:
+                continue
+        return False
+
+    tm_dropped_dates: Counter[str] = Counter()
+    filtered_tm: dict[str, list[str]] = {}
+    for anchor_id, dates in tm_dates_by_anchor.items():
+        kept: list[str] = []
+        for d in dates:
+            if _has_chip(tm_chips_dir, anchor_id, d, OFFLINE_TM_VERSION):
+                kept.append(d)
+            else:
+                tm_dropped_dates[d] += 1
+        filtered_tm[anchor_id] = kept
+
+    wayback_dropped_dates: Counter[str] = Counter()
+    filtered_wayback: dict[str, list[tuple[str, str]]] = {}
+    for anchor_id, entries in wayback_by_anchor.items():
+        kept_wb: list[tuple[str, str]] = []
+        for d, v in entries:
+            if _has_chip(wayback_chips_dir, anchor_id, d, v):
+                kept_wb.append((d, v))
+            else:
+                wayback_dropped_dates[d] += 1
+        filtered_wayback[anchor_id] = kept_wb
+
+    anchors_over_50pct_loss: list[tuple[str, int, int, float]] = []
+    for anchor_id in set(tm_dates_by_anchor) | set(wayback_by_anchor):
+        before_n = len(tm_dates_by_anchor.get(anchor_id, ())) + len(wayback_by_anchor.get(anchor_id, ()))
+        after_n = len(filtered_tm.get(anchor_id, ())) + len(filtered_wayback.get(anchor_id, ()))
+        if before_n > 0:
+            frac_dropped = 1.0 - (after_n / before_n)
+            if frac_dropped > 0.5:
+                anchors_over_50pct_loss.append((anchor_id, before_n, after_n, frac_dropped))
+    anchors_over_50pct_loss.sort(key=lambda t: -t[3])
+
+    stats = OfflineDiskFilterStats(
+        tm_before=sum(len(v) for v in tm_dates_by_anchor.values()),
+        tm_after=sum(len(v) for v in filtered_tm.values()),
+        wayback_before=sum(len(v) for v in wayback_by_anchor.values()),
+        wayback_after=sum(len(v) for v in filtered_wayback.values()),
+        tm_dropped_dates=tm_dropped_dates,
+        wayback_dropped_dates=wayback_dropped_dates,
+        anchors_over_50pct_loss=anchors_over_50pct_loss,
+    )
+    return filtered_tm, filtered_wayback, stats
+
+
+def format_offline_disk_filter_summary(
+    stats: OfflineDiskFilterStats, *, top_n: int = 10, max_anchor_samples: int = 20
+) -> list[str]:
+    """Human-readable `[CFG]`-prefixed-by-caller lines documenting exactly what
+    `--offline-require-chip-on-disk` excluded, for the run log."""
+    lines: list[str] = []
+    tm_dropped = stats.tm_before - stats.tm_after
+    wb_dropped = stats.wayback_before - stats.wayback_after
+    lines.append(
+        f"offline_require_chip_on_disk: TM {tm_dropped}/{stats.tm_before} entries dropped "
+        f"({100.0 * tm_dropped / max(1, stats.tm_before):.2f}%), "
+        f"Wayback {wb_dropped}/{stats.wayback_before} dropped "
+        f"({100.0 * wb_dropped / max(1, stats.wayback_before):.2f}%)"
+    )
+    if stats.tm_dropped_dates:
+        top = ", ".join(f"{d}x{n}" for d, n in stats.tm_dropped_dates.most_common(top_n))
+        lines.append(f"  top dropped TM dates: {top}")
+    if stats.wayback_dropped_dates:
+        top = ", ".join(f"{d}x{n}" for d, n in stats.wayback_dropped_dates.most_common(top_n))
+        lines.append(f"  top dropped Wayback dates: {top}")
+    n_loss = len(stats.anchors_over_50pct_loss)
+    lines.append(f"  anchors losing >50% of their offline candidates to this filter: {n_loss}")
+    for anchor_id, before_n, after_n, frac in stats.anchors_over_50pct_loss[:max_anchor_samples]:
+        lines.append(
+            f"    {anchor_id}: {before_n} -> {after_n} candidates ({100.0 * frac:.0f}% dropped)"
+        )
+    if n_loss > max_anchor_samples:
+        lines.append(f"    ... and {n_loss - max_anchor_samples} more (see forensics memo for the full list)")
+    return lines
 
 
 def _fetch_real_vintages(anchor: dict[str, str], config: AdaptiveScanConfig) -> list[VintageEntry]:
@@ -1554,8 +2121,125 @@ def main() -> None:
         db_path = (args.catalog_cache_dir / DB_FILENAME) if args.catalog_cache_dir else None
         catalog_cache = CatalogCache(db_path)
 
+    if args.offline_wayback and args.offline_tm_catalog_csv is None:
+        raise SystemExit("--offline-wayback requires --offline-tm-catalog-csv (same CSV, Wayback rows)")
+
+    if args.no_live_gehi and not (args.offline_tm_catalog_csv is not None and args.offline_wayback):
+        raise SystemExit(
+            "--no-live-gehi requires both --offline-tm-catalog-csv and --offline-wayback "
+            "(every catalog-build path must be offline for the no-live-GEHI guarantee to hold)"
+        )
+
+    if args.offline_require_chip_on_disk and not (
+        args.no_live_gehi and args.offline_tm_catalog_csv is not None and args.offline_wayback
+    ):
+        raise SystemExit(
+            "--offline-require-chip-on-disk requires --no-live-gehi plus both "
+            "--offline-tm-catalog-csv and --offline-wayback (it is a stricter sub-mode "
+            "of the same offline-only guarantee)"
+        )
+
+    # Offline TM/Wayback catalogs (see --offline-tm-catalog-csv / --offline-wayback
+    # help): loaded once in the main thread from a single CSV pass, then handed
+    # to workers as per-anchor lists. Anchors missing from the CSV fall back to
+    # the corresponding live catalog path (logged below).
+    offline_tm_catalog: dict[str, list[str]] | None = None
+    offline_wayback_catalog: dict[str, list[tuple[str, str]]] | None = None
+    if args.offline_tm_catalog_csv is not None:
+        if not args.offline_tm_catalog_csv.exists():
+            raise SystemExit(
+                f"--offline-tm-catalog-csv not found: {args.offline_tm_catalog_csv}"
+            )
+        offline_tm_catalog, offline_wayback_catalog = load_offline_provider_catalogs(
+            args.offline_tm_catalog_csv
+        )
+        covered = sum(1 for a in anchors if a["anchor_id"] in offline_tm_catalog)
+        print(
+            f"[CFG] offline_tm_catalog={args.offline_tm_catalog_csv} "
+            f"anchors_covered={covered}/{len(anchors)}"
+        )
+        if covered == 0:
+            raise SystemExit(
+                "--offline-tm-catalog-csv matched 0 anchors - wrong CSV for this anchors file?"
+            )
+        if args.offline_wayback:
+            wb_covered = sum(1 for a in anchors if a["anchor_id"] in offline_wayback_catalog)
+            print(
+                f"[CFG] offline_wayback_catalog={args.offline_tm_catalog_csv} "
+                f"anchors_covered={wb_covered}/{len(anchors)}"
+            )
+            if wb_covered == 0:
+                raise SystemExit(
+                    "--offline-wayback matched 0 anchors in the offline TM catalog CSV's Wayback rows"
+                )
+        else:
+            offline_wayback_catalog = None
+
+    if args.offline_require_chip_on_disk:
+        assert offline_tm_catalog is not None and offline_wayback_catalog is not None  # enforced above
+        tm_chips_dir_for_filter = (
+            provider_chips_dirs["TM"] if provider_chips_dirs is not None else args.chips_dir
+        )
+        wayback_chips_dir_for_filter = (
+            provider_chips_dirs["Wayback"] if provider_chips_dirs is not None else args.chips_dir
+        )
+        offline_tm_catalog, offline_wayback_catalog, disk_filter_stats = filter_offline_catalogs_to_disk(
+            offline_tm_catalog,
+            offline_wayback_catalog,
+            tm_chips_dir=tm_chips_dir_for_filter,
+            wayback_chips_dir=wayback_chips_dir_for_filter,
+            zoom_ladder=config.download_zoom_ladder,
+        )
+        for line in format_offline_disk_filter_summary(disk_filter_stats):
+            print(f"[CFG] {line}")
+
+    if args.no_live_gehi:
+        print(
+            "[CFG] no_live_gehi=True -- this run will NEVER spawn a GEHI subprocess; "
+            "missing-chip picks fail as all_zooms_failed, anchors absent from the "
+            "offline catalog CSV record done_ambiguous_orchestrator_error"
+        )
+
+    tm_catalog_runner: Callable[..., object] | None = None
+    if args.tm_catalog_interval > 0:
+        from scripts.temporal.gehi_common import GehiRateLimiter, make_throttled_runner
+
+        # One process-wide limiter across every anchor worker: the TM 403 ban
+        # keys on the sustained per-address-family request rate, not per-thread.
+        tm_catalog_runner = make_throttled_runner(
+            limiter=GehiRateLimiter(min_interval_s=args.tm_catalog_interval)
+        )
+
     def handle(anchor: dict[str, str]) -> ScanState:
         anchor_id = anchor["anchor_id"]
+        offline_tm_dates: list[str] | None = None
+        if offline_tm_catalog is not None:
+            offline_tm_dates = offline_tm_catalog.get(anchor_id)
+            if offline_tm_dates is None:
+                with print_lock:
+                    print(
+                        f"{marker} {anchor_id}: not in offline TM catalog; "
+                        + (
+                            "no_live_gehi is set -- will raise and record "
+                            "done_ambiguous_orchestrator_error instead of a live fetch"
+                            if args.no_live_gehi
+                            else "falling back to live TM catalog fetch"
+                        )
+                    )
+        offline_wayback_entries: list[tuple[str, str]] | None = None
+        if offline_wayback_catalog is not None:
+            offline_wayback_entries = offline_wayback_catalog.get(anchor_id)
+            if offline_wayback_entries is None:
+                with print_lock:
+                    print(
+                        f"{marker} {anchor_id}: not in offline Wayback catalog; "
+                        + (
+                            "no_live_gehi is set -- will raise and record "
+                            "done_ambiguous_orchestrator_error instead of a live fetch"
+                            if args.no_live_gehi
+                            else "falling back to live Wayback catalog fetch"
+                        )
+                    )
         try:
             state = run_one_anchor(
                 anchor,
@@ -1582,6 +2266,10 @@ def main() -> None:
                 catalog_max_age_days=args.catalog_max_age_days,
                 review_renderer=review_renderer,
                 provider_chips_dirs=provider_chips_dirs,
+                tm_catalog_runner=tm_catalog_runner,
+                offline_tm_dates=offline_tm_dates,
+                offline_wayback_entries=offline_wayback_entries,
+                no_live_gehi=args.no_live_gehi,
             )
         except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
             state = _record_orchestrator_failure(anchor, args.scan_states_dir, exc)

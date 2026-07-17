@@ -2,17 +2,42 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import random
 import re
 import shlex
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Protocol, Sequence
 
 DEFAULT_GEHI_EXE = Path("/home/gao/zasolar_data/tools/GEHistoricalImagery/GEHistoricalImagery")
 DEFAULT_PROVIDER = "TM"
 DEFAULT_PROBE_ZOOM = 19
+
+# Shared GEHI tile cache. GEHI's wrapper script defaults the native
+# `GEHistoricalImagery_Cache` env var to a private `cache/` next to the
+# executable when unset, so every entrypoint that forgets to export it grows
+# its own cold cache. `run_gehi` pins the child env to one shared directory
+# so download/info/availability and ad-hoc scripts all hit the same tile store.
+TILE_CACHE_DIR_ENV = "SOLAR_GEHI_TILE_CACHE_DIR"
+GEHI_NATIVE_CACHE_ENV = "GEHistoricalImagery_Cache"
+DEFAULT_TILE_CACHE_DIR = Path.home() / "zasolar_data" / "geid_raw" / "gehi_tile_cache"
+
+# Anti-ban pacing/backoff defaults. The soft/hard backoff semantics replicate
+# the throttling empirically validated against TM 403 soft-bans during the
+# 2026-07-12 availability rebuild (retry_tm_403): ~1 req/s pacing, 60 s per
+# blocked response, 30 min once blocks persist.
+DEFAULT_REQUEST_INTERVAL_S = 1.0
+DEFAULT_BACKOFF_JITTER_FRAC = 0.25
+DEFAULT_BLOCK_SOFT_BACKOFF_S = 60.0
+DEFAULT_BLOCK_HARD_BACKOFF_S = 1800.0
+DEFAULT_BLOCK_HARD_AFTER = 5
+DEFAULT_MAX_ATTEMPTS = 3
+BLOCK_SIGNALS = ("403", "429")
 
 # TM info lines carry a quadtree Path; Wayback info prints a bare `Level = N`
 # header with no Path, so Path is optional.
@@ -84,8 +109,24 @@ def decode_gehi_output(raw: bytes) -> str:
     return text.replace("\x00", "")
 
 
+def default_tile_cache_dir() -> Path:
+    """Resolve the shared tile-cache dir: repo override, caller-exported native
+    GEHI env var, then the canonical shared default."""
+    for env in (TILE_CACHE_DIR_ENV, GEHI_NATIVE_CACHE_ENV):
+        override = os.environ.get(env)
+        if override:
+            return Path(override).expanduser()
+    return DEFAULT_TILE_CACHE_DIR
+
+
 def run_gehi(args: Sequence[object], *, executable: Path = DEFAULT_GEHI_EXE, timeout: float = 300.0) -> GehiRunResult:
     cmd = [str(executable), *[str(arg) for arg in args]]
+    tile_cache_dir = default_tile_cache_dir()
+    try:
+        tile_cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # GEHI creates/falls back on its own; never fail the run over this
+    env = {**os.environ, GEHI_NATIVE_CACHE_ENV: str(tile_cache_dir)}
     # stdin=DEVNULL is load-bearing: `availability` shows an interactive vintage
     # chooser that blocks on a tty read. Capturing stdout/stderr alone leaves stdin
     # INHERITED, so under a pty launcher (e.g. tmux) the chooser hangs until the
@@ -93,7 +134,7 @@ def run_gehi(args: Sequence[object], *, executable: Path = DEFAULT_GEHI_EXE, tim
     # regardless of how the orchestrator was launched.
     proc = subprocess.run(
         cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        timeout=timeout, check=False,
+        timeout=timeout, check=False, env=env,
     )
     return GehiRunResult(
         args=tuple(cmd),
@@ -101,6 +142,136 @@ def run_gehi(args: Sequence[object], *, executable: Path = DEFAULT_GEHI_EXE, tim
         stdout=decode_gehi_output(proc.stdout),
         stderr=decode_gehi_output(proc.stderr),
     )
+
+
+class _RandLike(Protocol):
+    def uniform(self, a: float, b: float) -> float: ...
+
+
+def is_blocked_result(result: GehiRunResult) -> bool:
+    """True when GEHI stderr carries an upstream soft-ban signal (HTTP 403/429)."""
+    stderr = result.stderr or ""
+    return any(signal in stderr for signal in BLOCK_SIGNALS)
+
+
+class GehiRateLimiter:
+    """Process-wide pacing + soft-ban backoff for GEHI subprocess calls.
+
+    `wait()` enforces a minimum interval (+ jitter in [0, jitter_frac]) between
+    requests. `record_block()` sleeps a soft backoff per blocked response and
+    escalates to a hard backoff once `hard_after` consecutive blocks accrue
+    (counter resets after the hard sleep and on `record_success()`).
+
+    Thread-safe; share one instance across workers so the consecutive-block
+    counter and the pacing horizon see the global request stream. `sleep_fn`,
+    `monotonic_fn`, and `rng` are injectable for tests.
+    """
+
+    def __init__(
+        self,
+        *,
+        min_interval_s: float = DEFAULT_REQUEST_INTERVAL_S,
+        jitter_frac: float = DEFAULT_BACKOFF_JITTER_FRAC,
+        soft_backoff_s: float = DEFAULT_BLOCK_SOFT_BACKOFF_S,
+        hard_backoff_s: float = DEFAULT_BLOCK_HARD_BACKOFF_S,
+        hard_after: int = DEFAULT_BLOCK_HARD_AFTER,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        monotonic_fn: Callable[[], float] = time.monotonic,
+        rng: _RandLike | None = None,
+    ) -> None:
+        self.min_interval_s = float(min_interval_s)
+        self.jitter_frac = float(jitter_frac)
+        self.soft_backoff_s = float(soft_backoff_s)
+        self.hard_backoff_s = float(hard_backoff_s)
+        self.hard_after = int(hard_after)
+        self._sleep_fn = sleep_fn
+        self._monotonic_fn = monotonic_fn
+        self._rng = rng or random
+        self._lock = threading.Lock()
+        self._next_at = 0.0
+        self._consecutive_blocks = 0
+
+    def _jittered(self, seconds: float) -> float:
+        return seconds * (1.0 + self._rng.uniform(0.0, self.jitter_frac))
+
+    def wait(self) -> float:
+        """Block until the pacing slot opens; returns the seconds slept."""
+        with self._lock:
+            now = self._monotonic_fn()
+            delay = max(0.0, self._next_at - now)
+            self._next_at = max(now, self._next_at) + self._jittered(self.min_interval_s)
+        if delay > 0.0:
+            self._sleep_fn(delay)
+        return delay
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._consecutive_blocks = 0
+
+    def record_block(self) -> float:
+        """Register a blocked response, sleep the backoff, return the seconds slept."""
+        with self._lock:
+            self._consecutive_blocks += 1
+            if self._consecutive_blocks >= self.hard_after:
+                delay = self._jittered(self.hard_backoff_s)
+                self._consecutive_blocks = 0
+            else:
+                delay = self._jittered(self.soft_backoff_s)
+            # Push the pacing horizon past the ban window so concurrent workers
+            # cannot slip requests in while this one is backing off.
+            self._next_at = max(self._next_at, self._monotonic_fn() + delay)
+        self._sleep_fn(delay)
+        return delay
+
+
+_shared_limiter: GehiRateLimiter | None = None
+_shared_limiter_lock = threading.Lock()
+
+
+def shared_rate_limiter() -> GehiRateLimiter:
+    """Lazily-built process-wide limiter shared by all default-throttled callers."""
+    global _shared_limiter
+    with _shared_limiter_lock:
+        if _shared_limiter is None:
+            _shared_limiter = GehiRateLimiter()
+        return _shared_limiter
+
+
+def make_throttled_runner(
+    *,
+    limiter: GehiRateLimiter | None = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    base_runner: Callable[..., GehiRunResult] | None = None,
+) -> Callable[..., GehiRunResult]:
+    """Wrap a run_gehi-compatible callable with pacing + blocked-response retry.
+
+    The returned callable has `run_gehi`'s signature, so it plugs into every
+    `runner=` seam (e.g. `download_chip_with_zoom_ladder`). Blocked responses
+    (see `is_blocked_result`) are retried up to `max_attempts` total attempts;
+    the backoff sleep also fires on the final blocked attempt so the *next*
+    request (another zoom rung / candidate) still respects the ban window. The
+    last blocked result is returned, not raised, preserving callers' existing
+    returncode/stderr handling. `base_runner=None` resolves the module-global
+    `run_gehi` at call time.
+    """
+    limiter = limiter or shared_rate_limiter()
+
+    def throttled(
+        args: Sequence[object], *, executable: Path = DEFAULT_GEHI_EXE, timeout: float = 300.0
+    ) -> GehiRunResult:
+        runner = base_runner if base_runner is not None else run_gehi
+        result: GehiRunResult | None = None
+        for _attempt in range(max(1, int(max_attempts))):
+            limiter.wait()
+            result = runner(args, executable=executable, timeout=timeout)
+            if not is_blocked_result(result):
+                limiter.record_success()
+                return result
+            limiter.record_block()
+        assert result is not None
+        return result
+
+    return throttled
 
 
 def parse_gehi_date(value: str) -> date:

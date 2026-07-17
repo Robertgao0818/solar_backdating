@@ -20,6 +20,17 @@ Two named versions ship (decision memo geometry table):
 - ``chip_geom_v2_tight12`` — the ISSUE-04 tight-crop arm (0.5 / 12.0 / 256,
   ~12 m context at 256 px). The Phase-3 re-render default consumed by the dinov3
   distillation-set build (``docs/dinov3_scorer/ISSUE-02-distillation-training-set.md``).
+- ``basemap96_z19_v1`` — Path C0 (ISSUE-09) basemap_rebuild_2026-07-13 stack
+  adapter geometry. The per-target ``chips/<target_id>/z<zoom>/`` tif IS the
+  scoring crop (no render-crop call at all -- the pilot's ``--stack-format
+  basemap96`` embed path transcodes tif->png unmodified); the three
+  ``ensure_single_target_review_png`` fields below are therefore
+  INFORMATIONAL ONLY for this version (nominal 96 m download extent, no
+  min-crop floor, no upscale) and are never read by that embed path. This is
+  a DISTINCT named version (not a silent tight12 reuse) so its config hash
+  keeps basemap96 artifacts from colliding with tight12 ones in provenance.
+  See ``docs/dinov3_scorer/DATA-c0-reverse-template-prereg-2026-07-12.md``
+  amendment 2026-07-13.
 
 Verdict-store migration rule (D18; ``verdict_store.py`` docstring). A geometry
 change re-renders different crop bytes -> a different chip content hash
@@ -83,6 +94,12 @@ _REGISTRY: dict[str, ChipGeometry] = {
         crop_context_multiplier=0.5,
         min_crop_size_m=12.0,
         min_output_px=256,
+    ),
+    "basemap96_z19_v1": ChipGeometry(
+        geometry_version="basemap96_z19_v1",
+        crop_context_multiplier=1.0,   # informational only -- see module docstring
+        min_crop_size_m=96.0,          # informational only -- nominal download extent
+        min_output_px=256,             # informational only -- unused (no render-crop call)
     ),
 }
 

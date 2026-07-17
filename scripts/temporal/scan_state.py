@@ -58,7 +58,9 @@ DECISION_SOURCES = {
 class Pick:
     chip_index: int
     capture_date: str
-    version: int
+    # int for live TM/Wayback catalogs; the literal "noversion" for offline-TM
+    # catalog picks so chip paths line up with the pre-downloaded basemap.
+    version: int | str
     requested_zoom: int
     provider: str = "TM"
 
@@ -67,7 +69,7 @@ class Pick:
 class RoundResult:
     chip_index: int
     capture_date: str
-    version: int
+    version: int | str
     pv_present: bool | None
     confidence: float | None
     quality_flag: str

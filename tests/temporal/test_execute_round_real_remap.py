@@ -271,6 +271,106 @@ def test_score_batch_picks_chunked_enforces_date_limit(tmp_path: Path, monkeypat
     assert {a["batch_chunk_index"] for a in audits} == {1, 2}
 
 
+class _FakeScorer:
+    """Minimal stand-in for a PresenceScorer, recording every `.batch()` call's
+    kwargs so tests can assert whether `limiter` was threaded through."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.batch_calls: list[dict[str, Any]] = []
+
+    def batch(self, picks, *, config, audit_writer, census_mid_date_iso, **kwargs):
+        self.batch_calls.append(kwargs)
+        return [
+            GeminiObservation(
+                chip_index=p.chip_index,
+                pv_present=True,
+                confidence=0.9,
+                quality_flag="usable",
+                evidence="ok",
+                notes="",
+                decision_source="gemini_batch",
+            )
+            for p in picks
+        ]
+
+
+class _SpyLimiter:
+    """Counts `.wait()` calls without any real pacing (test double for
+    gemini_solar_image_review.RateLimiter)."""
+
+    def __init__(self) -> None:
+        self.wait_calls = 0
+
+    def wait(self) -> None:
+        self.wait_calls += 1
+
+
+def _one_pick(tmp_path: Path, idx: int = 1) -> tuple[list[BatchPick], dict[int, int]]:
+    chip = tmp_path / f"chip_{idx}.png"
+    chip.write_bytes(b"PNG")
+    pick = BatchPick(chip_index=idx, chip_path=chip, capture_date="2020-01-01", version=idx, actual_zoom=20)
+    return [pick], {idx: idx + 100}
+
+
+def test_score_batch_picks_chunked_gemini_skips_outer_wait_but_threads_limiter(tmp_path: Path) -> None:
+    """2026-07-17 gemini-retry-patch addendum: score_batch_with_fallback now
+    re-acquires `limiter` before every transport attempt (incl. retries), so
+    the OLD coarse per-chunk `limiter.wait()` must be dropped for the Gemini
+    scorer specifically -- keeping both would pace every chunk's first
+    attempt twice, roughly halving effective qps."""
+    score_picks, batch_to_original = _one_pick(tmp_path)
+    scorer = _FakeScorer("gemini")
+    limiter = _SpyLimiter()
+
+    _score_batch_picks_chunked(
+        score_picks, batch_to_original,
+        config=AdaptiveScanConfig(gemini_max_dates_per_call=5),
+        gemini_config=object(), audit_writer=lambda payload: None,
+        census_mid_date_iso=None, scorer=scorer, limiter=limiter,
+    )
+
+    assert limiter.wait_calls == 0, "outer wait() must be skipped for the gemini scorer"
+    assert len(scorer.batch_calls) == 1
+    assert scorer.batch_calls[0]["limiter"] is limiter
+
+
+def test_score_batch_picks_chunked_non_gemini_scorer_keeps_outer_wait(tmp_path: Path) -> None:
+    """A non-gemini scorer (e.g. dinov3_frozen: local inference, no HTTP retry
+    ladder, never re-acquires `limiter` itself) must keep the original coarse
+    per-chunk wait() -- dropping it there would silently un-throttle it."""
+    score_picks, batch_to_original = _one_pick(tmp_path)
+    scorer = _FakeScorer("dinov3_frozen")
+    limiter = _SpyLimiter()
+
+    _score_batch_picks_chunked(
+        score_picks, batch_to_original,
+        config=AdaptiveScanConfig(gemini_max_dates_per_call=5),
+        gemini_config=object(), audit_writer=lambda payload: None,
+        census_mid_date_iso=None, scorer=scorer, limiter=limiter,
+    )
+
+    assert limiter.wait_calls == 1
+    assert scorer.batch_calls[0]["limiter"] is limiter
+
+
+def test_score_batch_picks_chunked_no_limiter_is_unaffected(tmp_path: Path) -> None:
+    """No limiter configured (e.g. --qps 0 / dry-run never reaches this path):
+    no wait() calls anywhere, and no `limiter` kwarg reaches `.batch()` at
+    all -- matches the pre-addendum call shape exactly."""
+    score_picks, batch_to_original = _one_pick(tmp_path)
+    scorer = _FakeScorer("gemini")
+
+    _score_batch_picks_chunked(
+        score_picks, batch_to_original,
+        config=AdaptiveScanConfig(gemini_max_dates_per_call=5),
+        gemini_config=object(), audit_writer=lambda payload: None,
+        census_mid_date_iso=None, scorer=scorer, limiter=None,
+    )
+
+    assert "limiter" not in scorer.batch_calls[0]
+
+
 # --------------------------------------------------------------------------
 # #1: execute_round_real real scan path no longer crashes (config remap)
 # --------------------------------------------------------------------------

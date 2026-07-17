@@ -6,6 +6,11 @@ output) so the orchestrator can prefer higher-GSD captures (z=20) and gracefully
 fall back to z=19 when only that level has the requested vintage. Idempotent:
 if a non-empty file already exists at any ladder zoom for the anchor/date/version,
 the download is skipped.
+
+GEHI calls are paced and 403/429-backed-off by default via the shared
+`GehiRateLimiter` (see gehi_common; tune with --request-interval /
+--max-attempts), and the tile cache is pinned to the shared directory so
+repeated/overlapping requests hit disk instead of the network.
 """
 
 from __future__ import annotations
@@ -31,11 +36,15 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.temporal.gehi_common import (
     DEFAULT_GEHI_EXE,
+    DEFAULT_MAX_ATTEMPTS,
     DEFAULT_PROBE_ZOOM,
     DEFAULT_PROVIDER,
+    DEFAULT_REQUEST_INTERVAL_S,
+    GehiRateLimiter,
     GehiRunResult,
     anchor_bbox_args,
     iso_to_gehi_date,
+    make_throttled_runner,
     run_gehi,
 )
 from scripts.temporal.geid_temporal_common import read_csv_rows, safe_task_token, write_csv_rows
@@ -156,11 +165,79 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--allow-nearest", action="store_true", help="Do not pass GEHI --exact-date.")
     parser.add_argument(
+        "--request-interval",
+        type=float,
+        default=DEFAULT_REQUEST_INTERVAL_S,
+        help="Anti-ban pacing: minimum seconds between GEHI invocations (+ jitter). 0 disables pacing "
+        "(403/429 backoff stays active).",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS,
+        help="Total attempts per zoom when GEHI stderr carries a 403/429 block signal; each block sleeps "
+        "the soft backoff (60s), escalating to a hard backoff (30min) after 5 consecutive blocks.",
+    )
+    parser.add_argument(
+        "--no-recompress",
+        action="store_true",
+        help="Keep GEHI's uncompressed GeoTIFF output as-is. Default: recompress each fresh "
+        "chip in place as tiled JPEG-in-GeoTIFF (quality 95, ~8-15x smaller, CRS/transform "
+        "preserved; failures keep the original and are recorded in the raw log).",
+    )
+    parser.add_argument(
         "--allow-failures",
         action="store_true",
         help="Exit 0 even if some candidates failed at every ladder zoom. Default: exit 1 on any all_zooms_failed.",
     )
     return parser.parse_args()
+
+
+# Local JPEG-in-GeoTIFF recompression (same precedent as
+# scripts/audit/coj_arcgis_fetch.py:_write_jpeg_compressed_geotiff): GEHI's
+# uncompressed GeoTIFF output is ~8-15x larger on disk than the same pixels
+# JPEG-compressed, and the source Google tiles are JPEG to begin with.
+JPEG_COMPRESSION_QUALITY = 95
+
+
+def _recompress_jpeg_in_geotiff(path: Path) -> str | None:
+    """Recompress a GeoTIFF in place as tiled JPEG-in-GeoTIFF (quality 95).
+
+    Preserves CRS/transform (rasterio round-trip). Writes to a sibling temp
+    file and `os.replace`s it so a crash mid-write never corrupts the chip.
+    Returns None on success, an error string on failure (caller keeps the
+    original file — recompression is a disk optimization, never a reason to
+    fail a download). Band counts other than 1/3 (JPEG can't encode them) are
+    skipped with a reason string.
+    """
+    import os
+
+    import rasterio
+
+    tmp_path = path.with_name(path.name + ".recompress.tmp")
+    try:
+        with rasterio.open(path) as src:
+            profile = src.profile.copy()
+            if profile.get("compress", "").upper() == "JPEG":
+                return None  # already recompressed (e.g. resumed run)
+            if profile.get("count", 1) not in (1, 3):
+                return f"unsupported band count {profile.get('count')} for JPEG"
+            if profile.get("dtype") != "uint8":
+                return f"unsupported dtype {profile.get('dtype')} for JPEG"
+            data = src.read()
+        profile.update(
+            driver="GTiff", compress="JPEG", jpeg_quality=JPEG_COMPRESSION_QUALITY,
+            tiled=True, blockxsize=512, blockysize=512,
+        )
+        if profile.get("count", 1) == 3:
+            profile["photometric"] = "YCBCR"
+        with rasterio.open(tmp_path, "w", **profile) as dst:
+            dst.write(data)
+        os.replace(tmp_path, path)
+        return None
+    except Exception as exc:  # noqa: BLE001 - never fail a download over recompression
+        tmp_path.unlink(missing_ok=True)
+        return f"{type(exc).__name__}: {exc}"
 
 
 def sha256_file(path: Path) -> str:
@@ -341,9 +418,13 @@ def download_chip_with_zoom_ladder(
     min_cache_zoom: int | None = None,
     target_sr: str = "",
     allow_nearest: bool = False,
-    runner: Callable[..., GehiRunResult] = run_gehi,
+    runner: Callable[..., GehiRunResult] | None = None,
+    limiter: GehiRateLimiter | None = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     raw_log_callback: Callable[[Mapping[str, object]], None] | None = None,
     vintage_check: Callable[[int, str], bool] | None = None,
+    recompress: bool = False,
+    no_live_gehi: bool = False,
 ) -> DownloadResult:
     """Download a chip at the first zoom in `zoom_ladder` that succeeds.
 
@@ -368,9 +449,42 @@ def download_chip_with_zoom_ladder(
     tighten live attempts — a fresh lower-zoom download is still legal when the
     higher rung has no vintage. `overwrite=True` bypasses the cache scan
     entirely and so ignores `min_cache_zoom`.
+
+    Anti-ban throttling: when `runner` is not supplied, GEHI calls go through
+    `make_throttled_runner` — paced by `limiter` (the process-wide shared
+    limiter when None) and retried up to `max_attempts` per zoom on 403/429
+    block signals with soft/hard backoff. An explicitly injected `runner` is
+    used as-is unless `limiter` is also passed, in which case it is wrapped in
+    the same throttle.
+
+    `recompress=True` rewrites each FRESH download in place as tiled
+    JPEG-in-GeoTIFF (quality 95) before hashing; cached (`skipped_existing`)
+    chips are never touched. Library default is False so existing callers
+    (e.g. run_adaptive_scan) keep byte-identical behavior; the CLI entrypoint
+    enables it unless --no-recompress is passed.
+
+    `no_live_gehi=True` (ISSUE zero-live-GEHI mode, added after the 2026-07-16
+    a24_v6 khmdb-ban stall) forbids this call from EVER spawning a GEHI
+    subprocess: once the idempotent cache scan above finds no usable existing
+    chip across the whole ladder, the live-download loop is skipped entirely
+    (``runner`` is never invoked) and the pick is recorded as
+    ``status="all_zooms_failed"`` with an ``error`` naming the block, exactly
+    the same failure shape a real all-zooms-blocked download would produce.
+    Callers (``execute_round_real``) fold this into the existing
+    ``download_failed: ...`` notes path unchanged -- no new state shape.
+    Library default is False so existing callers/tests are unaffected.
     """
     if not zoom_ladder:
         raise ValueError("zoom_ladder must be non-empty")
+    if runner is None:
+        # Late-bind the module-global run_gehi (tests stub it via
+        # monkeypatch.setattr) instead of freezing it as a def-time default.
+        def _base_runner(cmd_args, *, executable=DEFAULT_GEHI_EXE, timeout=300.0):
+            return run_gehi(cmd_args, executable=executable, timeout=timeout)
+
+        runner = make_throttled_runner(base_runner=_base_runner, limiter=limiter, max_attempts=max_attempts)
+    elif limiter is not None:
+        runner = make_throttled_runner(base_runner=runner, limiter=limiter, max_attempts=max_attempts)
     anchor_id = str(anchor["anchor_id"])
     version_str = str(version).strip()
     ladder = tuple(int(z) for z in zoom_ladder)
@@ -443,6 +557,43 @@ def download_chip_with_zoom_ladder(
                     gehi_command="",
                     download_stdout_sha256="",
                 )
+
+    if no_live_gehi:
+        # Zero-live-GEHI mode: the cache scan above found no usable chip at any
+        # ladder zoom, and the flag forbids the live-download loop below from
+        # ever running (that loop is the only thing in this function that
+        # calls `runner`, i.e. spawns a GEHI subprocess). Fail the pick the
+        # same way a real all-zooms-blocked download would, WITHOUT touching
+        # `runner` -- never a silent no-op, never a live call.
+        last_error = (
+            f"no_live_gehi: no cached chip on disk for any zoom in {ladder} "
+            f"(anchor={anchor_id}, capture_date={capture_date}, version={version_str}); "
+            "live GEHI download blocked by --no-live-gehi"
+        )
+        if raw_log_callback is not None:
+            raw_log_callback(
+                {
+                    "anchor_id": anchor_id,
+                    "capture_date": capture_date,
+                    "version": version_str,
+                    "skip_reason": "no_live_gehi_chip_missing",
+                    "requested_zoom_ladder": list(ladder),
+                    "error": last_error,
+                }
+            )
+        return DownloadResult(
+            anchor_id=anchor_id,
+            capture_date=capture_date,
+            version=version_str,
+            requested_zoom_ladder=ladder,
+            actual_zoom=None,
+            path=None,
+            sha256="",
+            status="all_zooms_failed",
+            error=last_error,
+            gehi_command="",
+            download_stdout_sha256="",
+        )
 
     lower_left, upper_right = anchor_bbox_args(anchor)
     for zoom in ladder:
@@ -540,6 +691,21 @@ def download_chip_with_zoom_ladder(
             last_error = f"GEHI succeeded but output file empty/missing at z={zoom}"
             _quarantine_partial(out_path)
             continue
+        if recompress:
+            recompress_error = _recompress_jpeg_in_geotiff(out_path)
+            if recompress_error is not None and raw_log_callback is not None:
+                # Chip is kept uncompressed -- a disk-size regression, not a
+                # download failure.
+                raw_log_callback(
+                    {
+                        "anchor_id": anchor_id,
+                        "capture_date": capture_date,
+                        "version": version_str,
+                        "zoom_attempt": zoom,
+                        "path": str(out_path),
+                        "recompress_error": recompress_error,
+                    }
+                )
         return DownloadResult(
             anchor_id=anchor_id,
             capture_date=capture_date,
@@ -585,6 +751,7 @@ def main() -> None:
         raise SystemExit("No candidate rows found.")
 
     args.raw_log.parent.mkdir(parents=True, exist_ok=True)
+    limiter = GehiRateLimiter(min_interval_s=args.request_interval)
     manifest_rows: list[dict[str, object]] = []
     with args.raw_log.open("w", encoding="utf-8") as log_fh:
         def _log(payload: Mapping[str, object]) -> None:
@@ -610,7 +777,10 @@ def main() -> None:
                 min_cache_zoom=args.min_cache_zoom,
                 target_sr=args.target_sr,
                 allow_nearest=args.allow_nearest,
+                limiter=limiter,
+                max_attempts=args.max_attempts,
                 raw_log_callback=_log,
+                recompress=not args.no_recompress,
             )
             provenance = build_chip_provenance(outcome, anchor, args.provider)
             artifact_id = hashlib.sha1(

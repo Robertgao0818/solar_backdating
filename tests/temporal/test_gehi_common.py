@@ -1,7 +1,15 @@
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from scripts.temporal.gehi_common import (
+    DEFAULT_TILE_CACHE_DIR,
+    GEHI_NATIVE_CACHE_ENV,
+    TILE_CACHE_DIR_ENV,
+    GehiRateLimiter,
     GehiRunResult,
     ReviewTargetMarker,
     anchor_bbox_args,
@@ -10,10 +18,14 @@ from scripts.temporal.gehi_common import (
     decode_gehi_output,
     dedupe_info_rows_by_date,
     dedupe_info_rows_by_version,  # backward-compat alias
+    default_tile_cache_dir,
     ensure_single_target_review_png,
     ensure_target_review_png,
+    is_blocked_result,
+    make_throttled_runner,
     parse_availability_output,
     parse_info_output,
+    run_gehi,
 )
 from scripts.temporal.gehi_download import expand_candidate_dates
 
@@ -236,6 +248,147 @@ class GehiCommonTests(unittest.TestCase):
                 self._run_result(returncode=1, stdout="Cannot read keys"),
                 allow_availability_chooser_exit=False,
             )
+
+
+class _ZeroRng:
+    def uniform(self, a: float, b: float) -> float:
+        return 0.0
+
+
+class TileCacheDirTests(unittest.TestCase):
+    def test_repo_env_override_wins(self):
+        with mock.patch.dict(
+            os.environ,
+            {TILE_CACHE_DIR_ENV: "/tmp/repo_cache", GEHI_NATIVE_CACHE_ENV: "/tmp/native_cache"},
+        ):
+            self.assertEqual(default_tile_cache_dir(), Path("/tmp/repo_cache"))
+
+    def test_native_env_respected_when_repo_env_unset(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop(TILE_CACHE_DIR_ENV, None)
+            os.environ[GEHI_NATIVE_CACHE_ENV] = "/tmp/native_cache"
+            self.assertEqual(default_tile_cache_dir(), Path("/tmp/native_cache"))
+
+    def test_default_when_no_env(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop(TILE_CACHE_DIR_ENV, None)
+            os.environ.pop(GEHI_NATIVE_CACHE_ENV, None)
+            self.assertEqual(default_tile_cache_dir(), DEFAULT_TILE_CACHE_DIR)
+
+    def test_run_gehi_pins_tile_cache_env_and_creates_dir(self):
+        """run_gehi must pass the resolved cache dir to the child env explicitly —
+        relying on the caller's shell having exported it is exactly the gap that
+        scattered tile caches across private directories."""
+        captured: dict[str, object] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td) / "tiles"
+            with mock.patch.dict(os.environ, {TILE_CACHE_DIR_ENV: str(cache_dir)}):
+                with mock.patch("scripts.temporal.gehi_common.subprocess.run", side_effect=fake_run):
+                    run_gehi(["info", "--location", "0,0"])
+            env = captured["env"]
+            self.assertIsNotNone(env)
+            self.assertEqual(env[GEHI_NATIVE_CACHE_ENV], str(cache_dir))
+            self.assertTrue(cache_dir.is_dir())
+
+
+class GehiRateLimiterTests(unittest.TestCase):
+    def _limiter(self, **kwargs) -> GehiRateLimiter:
+        self.sleeps: list[float] = []
+        clock = {"t": 0.0}
+
+        def sleep(seconds: float) -> None:
+            self.sleeps.append(seconds)
+            clock["t"] += seconds
+
+        return GehiRateLimiter(
+            sleep_fn=sleep, monotonic_fn=lambda: clock["t"], rng=_ZeroRng(), **kwargs
+        )
+
+    def test_first_call_free_then_paced(self):
+        limiter = self._limiter(min_interval_s=2.0)
+        self.assertEqual(limiter.wait(), 0.0)
+        self.assertEqual(limiter.wait(), 2.0)
+        self.assertEqual(self.sleeps, [2.0])
+
+    def test_block_escalates_to_hard_backoff_then_resets(self):
+        limiter = self._limiter(soft_backoff_s=60.0, hard_backoff_s=1800.0, hard_after=3)
+        self.assertEqual(limiter.record_block(), 60.0)
+        self.assertEqual(limiter.record_block(), 60.0)
+        self.assertEqual(limiter.record_block(), 1800.0)
+        # Counter reset after the hard backoff: next block is soft again.
+        self.assertEqual(limiter.record_block(), 60.0)
+
+    def test_success_resets_block_counter(self):
+        limiter = self._limiter(soft_backoff_s=60.0, hard_backoff_s=1800.0, hard_after=2)
+        limiter.record_block()
+        limiter.record_success()
+        # Without the reset this second block would already be the hard backoff.
+        self.assertEqual(limiter.record_block(), 60.0)
+
+
+class ThrottledRunnerTests(unittest.TestCase):
+    @staticmethod
+    def _blocked(stderr: str = "Response status code does not indicate success: 403 (Forbidden)") -> GehiRunResult:
+        return GehiRunResult(args=("download",), returncode=1, stdout="", stderr=stderr)
+
+    @staticmethod
+    def _ok() -> GehiRunResult:
+        return GehiRunResult(args=("download",), returncode=0, stdout="done", stderr="")
+
+    def _limiter(self) -> GehiRateLimiter:
+        self.sleeps: list[float] = []
+        clock = {"t": 0.0}
+
+        def sleep(seconds: float) -> None:
+            self.sleeps.append(seconds)
+            clock["t"] += seconds
+
+        return GehiRateLimiter(
+            min_interval_s=0.0,
+            soft_backoff_s=60.0,
+            hard_backoff_s=1800.0,
+            sleep_fn=sleep,
+            monotonic_fn=lambda: clock["t"],
+            rng=_ZeroRng(),
+        )
+
+    def test_is_blocked_result(self):
+        self.assertTrue(is_blocked_result(self._blocked()))
+        self.assertTrue(is_blocked_result(self._blocked("HTTP 429 Too Many Requests")))
+        self.assertFalse(is_blocked_result(self._ok()))
+        # Generic failures are NOT block signals — the ladder handles those.
+        self.assertFalse(is_blocked_result(GehiRunResult(args=("x",), returncode=2, stdout="", stderr="boom")))
+
+    def test_retries_blocked_then_returns_success(self):
+        outcomes = [self._blocked(), self._blocked(), self._ok()]
+        calls: list[object] = []
+
+        def base(args, *, executable, timeout):
+            calls.append(args)
+            return outcomes[len(calls) - 1]
+
+        runner = make_throttled_runner(limiter=self._limiter(), max_attempts=3, base_runner=base)
+        result = runner(["download"], executable=Path("gehi"), timeout=1.0)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([s for s in self.sleeps if s >= 60.0], [60.0, 60.0])
+
+    def test_exhaustion_returns_last_blocked_result(self):
+        calls: list[object] = []
+
+        def base(args, *, executable, timeout):
+            calls.append(args)
+            return self._blocked()
+
+        runner = make_throttled_runner(limiter=self._limiter(), max_attempts=2, base_runner=base)
+        result = runner(["download"], executable=Path("gehi"), timeout=1.0)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(is_blocked_result(result))
 
 
 if __name__ == "__main__":

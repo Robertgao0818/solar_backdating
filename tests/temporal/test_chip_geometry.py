@@ -53,9 +53,22 @@ def test_module_defaults_point_at_right_versions() -> None:
     assert LEGACY_GEOMETRY.geometry_version == LEGACY_GEOMETRY_VERSION
     assert RERENDER_GEOMETRY.geometry_version == RERENDER_GEOMETRY_VERSION
     assert available_geometry_versions() == (
+        "basemap96_z19_v1",
         "chip_geom_v1_banked96",
         "chip_geom_v2_tight12",
     )
+
+
+def test_basemap96_z19_v1_registered_and_distinct() -> None:
+    """ISSUE-09 (Path C0) basemap_rebuild_2026-07-13 stack adapter geometry --
+    a distinct named version, never a silent tight12 reuse (see module
+    docstring): its config hash must differ so basemap96 artifacts cannot
+    collide with tight12 ones in provenance."""
+    geom = resolve_chip_geometry("basemap96_z19_v1")
+    assert isinstance(geom, ChipGeometry)
+    assert geom.geometry_version == "basemap96_z19_v1"
+    tight12 = resolve_chip_geometry("chip_geom_v2_tight12")
+    assert dataclasses.astuple(geom) != dataclasses.astuple(tight12)
 
 
 def test_resolve_returns_the_registered_instance() -> None:
