@@ -18,6 +18,7 @@ path) to the adaptive-scan path:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -534,3 +535,135 @@ def test_dry_run_stub_reproduces_legacy_result_fields(tmp_path: Path) -> None:
         assert r.evidence == f"stub evidence for {profile.label}"
         assert r.notes == f"dry_run profile={profile.label}"
         assert r.chip_path == ""
+
+
+def _v2_render_anchor(**overrides: str) -> dict[str, str]:
+    anchor = {
+        "anchor_id": "A_v2",
+        "region_key": "johannesburg",
+        "grid_id": "JNB0001",
+        "geometry_version": "fullscan_target96_review24_v2",
+        "chip_size_m": "96",
+        "target_label": "T01",
+        "target_offset_x_m": "0",
+        "target_offset_y_m": "0",
+        "search_radius_m": "10",
+        "source_width_m": "12",
+        "source_height_m": "8",
+    }
+    anchor.update(overrides)
+    return anchor
+
+
+def test_fixed_extent_renderer_uses_registered_geometry(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_render(path, marker, **kwargs):
+        captured.update(kwargs)
+        captured["marker"] = marker
+        return tmp_path / "review.png"
+
+    monkeypatch.setattr(_gehi_common, "ensure_single_target_review_png", fake_render)
+    renderer = ras.make_fixed_extent_review_renderer(24.0)
+
+    out = renderer(tmp_path / "source.tif", _v2_render_anchor())
+
+    assert out == tmp_path / "review.png"
+    assert captured["crop_context_multiplier"] == 0.01
+    assert captured["min_crop_size_m"] == 24.0
+    assert captured["min_output_px"] == 256
+    assert captured["marker"].offset_x_m == 0.0
+    assert captured["marker"].offset_y_m == 0.0
+
+
+def test_fixed_extent_renderer_requires_offsets_and_geometry(tmp_path: Path) -> None:
+    renderer = ras.make_fixed_extent_review_renderer(24.0)
+    missing_offset = _v2_render_anchor()
+    missing_offset.pop("target_offset_x_m")
+    with pytest.raises(ValueError, match="target_offset_x_m"):
+        renderer(tmp_path / "source.tif", missing_offset)
+
+    missing_geometry = _v2_render_anchor()
+    missing_geometry.pop("geometry_version")
+    with pytest.raises(ValueError, match="geometry_version"):
+        renderer(tmp_path / "source.tif", missing_geometry)
+
+
+def test_fixed_extent_renderer_rejects_version_extent_mismatch(tmp_path: Path) -> None:
+    renderer = ras.make_fixed_extent_review_renderer(24.0)
+    with pytest.raises(ValueError, match="does not match geometry_version"):
+        renderer(
+            tmp_path / "source.tif",
+            _v2_render_anchor(
+                geometry_version="fullscan_target96_review48_v2"
+            ),
+        )
+
+
+def test_nonterminal_resume_rejects_geometry_version_mismatch(tmp_path: Path) -> None:
+    anchor = _v2_render_anchor()
+    state_dir = tmp_path / "scan_states"
+    old = scan_state_mod.create_scan_state(anchor)
+    old.geometry_version = "fullscan_target96_review48_v2"
+    scan_state_mod.save_scan_state(
+        old, scan_state_mod.state_path_for(anchor["anchor_id"], state_dir)
+    )
+
+    with pytest.raises(ras.GeometryVersionMismatchError, match="geometry_version mismatch"):
+        run_one_anchor(
+            anchor,
+            AdaptiveScanConfig(),
+            state_dir,
+            dry_run=True,
+            force_restart=False,
+        )
+
+
+def test_old_absent_geometry_state_is_legacy_v1_on_resume(tmp_path: Path) -> None:
+    anchor = {"anchor_id": "legacy", "region_key": "johannesburg", "grid_id": "G1"}
+    state_dir = tmp_path / "scan_states"
+    old = scan_state_mod.create_scan_state(anchor)
+    path = scan_state_mod.state_path_for(anchor["anchor_id"], state_dir)
+    scan_state_mod.save_scan_state(old, path)
+    raw = json.loads(path.read_text())
+    raw.pop("geometry_version")
+    path.write_text(json.dumps(raw))
+
+    state = run_one_anchor(
+        anchor,
+        AdaptiveScanConfig(),
+        state_dir,
+        dry_run=True,
+        force_restart=False,
+    )
+
+    assert state.geometry_version == scan_state_mod.LEGACY_V1_GEOMETRY_VERSION
+
+
+def test_scoring_provenance_context_includes_geometry_version(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from scripts.temporal import scoring_provenance
+
+    contexts: list[dict[str, str]] = []
+
+    def fake_wrap(scorer, writer, *, context):
+        contexts.append(dict(context))
+        return scorer
+
+    monkeypatch.setattr(scoring_provenance, "with_scoring_provenance", fake_wrap)
+    run_one_anchor(
+        _v2_render_anchor(),
+        AdaptiveScanConfig(),
+        tmp_path / "scan_states",
+        dry_run=True,
+        force_restart=True,
+        scoring_provenance_writer=lambda _row: None,
+    )
+
+    assert contexts == [
+        {
+            "anchor_id": "A_v2",
+            "geometry_version": "fullscan_target96_review24_v2",
+        }
+    ]

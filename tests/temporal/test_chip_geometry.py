@@ -56,6 +56,8 @@ def test_module_defaults_point_at_right_versions() -> None:
         "basemap96_z19_v1",
         "chip_geom_v1_banked96",
         "chip_geom_v2_tight12",
+        "fullscan_target96_review24_v2",
+        "fullscan_target96_review48_v2",
     )
 
 
@@ -69,6 +71,22 @@ def test_basemap96_z19_v1_registered_and_distinct() -> None:
     assert geom.geometry_version == "basemap96_z19_v1"
     tight12 = resolve_chip_geometry("chip_geom_v2_tight12")
     assert dataclasses.astuple(geom) != dataclasses.astuple(tight12)
+
+
+def test_fullscan_routed_geometries_pin_production_render_params() -> None:
+    a24 = resolve_chip_geometry("fullscan_target96_review24_v2")
+    a48 = resolve_chip_geometry("fullscan_target96_review48_v2")
+
+    assert (
+        a24.crop_context_multiplier,
+        a24.min_crop_size_m,
+        a24.min_output_px,
+    ) == (0.01, 24.0, 256)
+    assert (
+        a48.crop_context_multiplier,
+        a48.min_crop_size_m,
+        a48.min_output_px,
+    ) == (0.01, 48.0, 256)
 
 
 def test_resolve_returns_the_registered_instance() -> None:

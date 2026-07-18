@@ -57,9 +57,10 @@ chip_index order 1..N.
 
 ## 4. Prepared artifacts
 
-`scripts/temporal/build_fullscan_anchors.py` joins the three inputs, attaches
-`chip_arm`/`review_extent_m`/provenance columns (reusing
-`issue25_stage_c.route_chip_arm`), and writes under the run root:
+The historical builder (archived at commit `b76c1d3`; removed from the working
+tree by ISSUE-27) joined the three inputs, attached
+`chip_arm`/`review_extent_m`/provenance columns via
+`issue25_stage_c.route_chip_arm`, and wrote under the run root:
 
 - `anchors_all.csv` (41,393 rows, hard-validated: bijective join, area>0,
   width/height>0, per-target bbox)

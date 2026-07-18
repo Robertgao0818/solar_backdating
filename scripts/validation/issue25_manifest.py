@@ -10,7 +10,7 @@ import json
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from pyproj import Transformer
+from scripts.temporal.anchor_derivation import derive_per_target_anchor_rows
 
 AREA_BUCKETS = ("a_xs_lt15", "b_sm_15_40", "c_md_40_100", "d_lg_ge100")
 ZONES = ("cbd", "industrial", "residential")
@@ -356,49 +356,13 @@ def build_target_centered_anchors(
     metric_crs: str = "EPSG:32735",
     chip_size_m: float = 96.0,
 ) -> list[dict[str, object]]:
-    """Build scorer/download rows for one exact target-centred source raster."""
+    """Build scorer/download rows through the shared per-target derivation."""
 
-    if chip_size_m < 96.0:
-        raise ValueError("ISSUE-25 source rasters must be at least 96 m")
-    half_m = chip_size_m / 2.0
-    to_metric = Transformer.from_crs("EPSG:4326", metric_crs, always_xy=True)
-    to_wgs84 = Transformer.from_crs(metric_crs, "EPSG:4326", always_xy=True)
-    out: list[dict[str, object]] = []
-    for source_row in rows:
-        row = dict(source_row)
-        target_id = str(row.get("anchor_id") or row.get("target_anchor_id") or "")
-        if not target_id:
-            raise ValueError("target row missing anchor_id/target_anchor_id")
-        lon = float(row["centroid_lon"])
-        lat = float(row["centroid_lat"])
-        center_x, center_y = to_metric.transform(lon, lat)
-        lon_min, lat_min = to_wgs84.transform(center_x - half_m, center_y - half_m)
-        lon_max, lat_max = to_wgs84.transform(center_x + half_m, center_y + half_m)
-        legacy_chip_id = str(row.get("chip_id") or row.get("group_anchor_id") or "")
-        row.update(
-            {
-                "anchor_id": target_id,
-                "chip_id": target_id,
-                "legacy_group_anchor_id": legacy_chip_id,
-                "region_key": str(row.get("region_key") or "johannesburg"),
-                "source_grid": str(row.get("source_grid") or row.get("grid_id") or ""),
-                "target_index": 1,
-                "target_label": "T01",
-                "centroid_lon": lon,
-                "centroid_lat": lat,
-                "target_offset_x_m": 0.0,
-                "target_offset_y_m": 0.0,
-                "search_radius_m": float(row.get("search_radius_m") or 10.0),
-                "chip_half_m": half_m,
-                "chip_size_m": chip_size_m,
-                "chip_lon_min": lon_min,
-                "chip_lat_min": lat_min,
-                "chip_lon_max": lon_max,
-                "chip_lat_max": lat_max,
-            }
-        )
-        out.append(row)
-    return sorted(out, key=lambda row: str(row["anchor_id"]))
+    return derive_per_target_anchor_rows(
+        rows,
+        metric_crs=metric_crs,
+        chip_size_m=chip_size_m,
+    )
 
 
 def _read_csv_rows(path: Path) -> list[dict[str, str]]:

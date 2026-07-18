@@ -54,11 +54,12 @@ fi
 [[ -d "$CHIPS_DIR" ]] || { echo "ERROR: chips dir missing: $CHIPS_DIR" >&2; exit 3; }
 [[ -f "$OFFLINE_TM_CSV" ]] || { echo "ERROR: offline TM catalog CSV missing: $OFFLINE_TM_CSV" >&2; exit 3; }
 
-# --- gate 2: routed anchors -------------------------------------------------
+# --- gate 2: historical RUN-1 anchors are immutable/prebuilt ----------------
+# The legacy builder was archived at commit b76c1d3 by ISSUE-27. This runner is
+# a RUN-1 provenance script and must never rebuild or silently consume anchors-v2.
 if [[ ! -f "$RUN_ROOT/anchors_summary.json" ]]; then
-  python -u scripts/temporal/build_fullscan_anchors.py \
-    --output-dir "$RUN_ROOT" \
-    --expected-count "$EXPECTED_ANCHORS"
+  echo "ERROR: prebuilt RUN-1 anchors missing at $RUN_ROOT (legacy builder archived at b76c1d3)" >&2
+  exit 3
 fi
 echo "[FULLSCAN] anchors_summary=$(cat "$RUN_ROOT/anchors_summary.json" | python -c 'import json,sys; s=json.load(sys.stdin); print(s["n_anchors"], s["arm_counts"])')"
 

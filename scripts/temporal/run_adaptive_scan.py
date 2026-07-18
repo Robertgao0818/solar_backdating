@@ -43,6 +43,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.temporal.chip_geometry import resolve_chip_geometry
 from scripts.temporal.gehi_catalog_cache import (
     DB_FILENAME,
     CatalogCache,
@@ -65,6 +66,7 @@ from scripts.temporal.scan_decision import (
     decide_next_action,
 )
 from scripts.temporal.scan_state import (
+    LEGACY_V1_GEOMETRY_VERSION,
     Pick,
     Round,
     RoundResult,
@@ -457,10 +459,44 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class GeometryVersionMismatchError(ValueError):
+    """A non-terminal scan state would mix evidence from two geometries."""
+
+
+def _anchor_geometry_version(anchor: Mapping[str, str]) -> str:
+    return str(anchor.get("geometry_version") or LEGACY_V1_GEOMETRY_VERSION)
+
+
+def validate_fixed_extent_anchor_geometry(
+    anchor: Mapping[str, str], extent_m: float
+):
+    """Resolve and cross-check one v2 fixed-extent anchor geometry."""
+    try:
+        geometry_version = str(anchor["geometry_version"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            "fixed-extent rendering requires geometry_version for "
+            f"{anchor.get('anchor_id', '<unknown>')}"
+        ) from exc
+    if not geometry_version:
+        raise ValueError(
+            "fixed-extent rendering requires non-empty geometry_version for "
+            f"{anchor.get('anchor_id', '<unknown>')}"
+        )
+    geometry = resolve_chip_geometry(geometry_version)
+    if abs(float(extent_m) - geometry.min_crop_size_m) > 1e-9:
+        raise ValueError(
+            f"review extent {extent_m:g}m does not match geometry_version "
+            f"{geometry_version!r} ({geometry.min_crop_size_m:g}m) for "
+            f"{anchor.get('anchor_id', '<unknown>')}"
+        )
+    return geometry
+
+
 def make_fixed_extent_review_renderer(
     extent_m: float,
 ) -> Callable[[Path, Mapping[str, str]], Path]:
-    """Build the ISSUE-25 target-centred teacher renderer for one frozen arm."""
+    """Build the ISSUE-27 registry-backed renderer for one frozen routed arm."""
     if extent_m <= 0:
         raise ValueError("review extent must be positive")
 
@@ -470,27 +506,31 @@ def make_fixed_extent_review_renderer(
             ensure_single_target_review_png,
         )
 
-        source_extent_m = float(anchor.get("chip_size_m") or 96.0)
-        if extent_m > source_extent_m:
+        geometry = validate_fixed_extent_anchor_geometry(anchor, extent_m)
+        try:
+            source_extent_m = float(anchor["chip_size_m"])
+            offset_x_m = float(anchor["target_offset_x_m"])
+            offset_y_m = float(anchor["target_offset_y_m"])
+            bbox_width_m = float(anchor["source_width_m"])
+            bbox_height_m = float(anchor["source_height_m"])
+        except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(
-                f"review extent {extent_m:g}m exceeds source extent "
+                "fixed-extent rendering requires chip_size_m, "
+                "target_offset_x_m, target_offset_y_m, source_width_m, and "
+                f"source_height_m for {anchor.get('anchor_id', '<unknown>')}"
+            ) from exc
+        if geometry.min_crop_size_m > source_extent_m:
+            raise ValueError(
+                f"review extent {geometry.min_crop_size_m:g}m exceeds source extent "
                 f"{source_extent_m:g}m for {anchor.get('anchor_id', '<unknown>')}"
             )
         marker = ReviewTargetMarker(
             target_id=str(anchor.get("anchor_id", "target")),
             target_label=str(anchor.get("target_label") or "T01"),
-            offset_x_m=float(anchor.get("target_offset_x_m") or 0.0),
-            offset_y_m=float(anchor.get("target_offset_y_m") or 0.0),
+            offset_x_m=offset_x_m,
+            offset_y_m=offset_y_m,
             search_radius_m=float(anchor.get("search_radius_m") or 10.0),
         )
-        try:
-            bbox_width_m = float(anchor["source_width_m"])
-            bbox_height_m = float(anchor["source_height_m"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(
-                "fixed-extent teacher rendering requires source_width_m and "
-                f"source_height_m for {anchor.get('anchor_id', '<unknown>')}"
-            ) from exc
         if bbox_width_m <= 0 or bbox_height_m <= 0:
             raise ValueError(
                 f"invalid teacher bbox {bbox_width_m:g}x{bbox_height_m:g}m for "
@@ -500,9 +540,9 @@ def make_fixed_extent_review_renderer(
             image_path,
             marker,
             chip_size_m=source_extent_m,
-            crop_context_multiplier=0.01,
-            min_crop_size_m=float(extent_m),
-            min_output_px=256,
+            crop_context_multiplier=geometry.crop_context_multiplier,
+            min_crop_size_m=geometry.min_crop_size_m,
+            min_output_px=geometry.min_output_px,
             draw_marker=True,
             bbox_width_m=bbox_width_m,
             bbox_height_m=bbox_height_m,
@@ -1106,6 +1146,19 @@ def run_one_anchor(
     else:
         state = load_scan_state(state_path)
 
+    if state is not None and not state.is_terminal:
+        current_geometry = _anchor_geometry_version(anchor)
+        state_geometry = str(
+            state.geometry_version or LEGACY_V1_GEOMETRY_VERSION
+        )
+        if state_geometry != current_geometry:
+            raise GeometryVersionMismatchError(
+                f"geometry_version mismatch for {anchor_id}: "
+                f"state={state_geometry!r} anchors={current_geometry!r}"
+            )
+        if state.geometry_version is None:
+            state.geometry_version = state_geometry
+
     if state is None:
         state = create_scan_state(anchor)
         save_scan_state(state, state_path)
@@ -1142,8 +1195,11 @@ def run_one_anchor(
     if scoring_provenance_writer is not None:
         from scripts.temporal.scoring_provenance import with_scoring_provenance
 
+        scoring_context = {"anchor_id": anchor_id}
+        if anchor.get("geometry_version"):
+            scoring_context["geometry_version"] = str(anchor["geometry_version"])
         scorer = with_scoring_provenance(
-            scorer, scoring_provenance_writer, context={"anchor_id": anchor_id}
+            scorer, scoring_provenance_writer, context=scoring_context
         )
     # ISSUE-13 catalog-cache kwargs are only forwarded when a cache is actually
     # active, so a default (`catalog_cache=None`) call is byte-identical to the
@@ -2013,6 +2069,9 @@ def main() -> None:
     anchors = read_anchors(args.anchors_csv, limit=args.limit_anchors)
     if not anchors:
         raise SystemExit("Anchors CSV produced 0 rows.")
+    if args.review_extent_m is not None:
+        for anchor in anchors:
+            validate_fixed_extent_anchor_geometry(anchor, args.review_extent_m)
 
     gemini_config = None
     gemini_config_round1 = None
@@ -2271,6 +2330,10 @@ def main() -> None:
                 offline_wayback_entries=offline_wayback_entries,
                 no_live_gehi=args.no_live_gehi,
             )
+        except GeometryVersionMismatchError:
+            # Never convert a geometry-epoch mismatch into a terminal state: that
+            # would make the next resume silently skip mixed-geometry evidence.
+            raise
         except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
             state = _record_orchestrator_failure(anchor, args.scan_states_dir, exc)
             with print_lock:

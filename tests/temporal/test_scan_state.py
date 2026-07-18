@@ -16,6 +16,7 @@ from scripts.temporal.scan_decision import (
     select_evenly_spaced_picks,
 )
 from scripts.temporal.scan_state import (
+    LEGACY_V1_GEOMETRY_VERSION,
     Pick,
     Round,
     RoundResult,
@@ -52,6 +53,36 @@ def test_create_and_save_scan_state_round_trip(tmp_state_dir: Path, sample_ancho
     assert loaded.status == "scanning"
     assert loaded.rounds == []
     assert loaded.spec_version == state.spec_version
+    assert loaded.geometry_version == LEGACY_V1_GEOMETRY_VERSION
+
+
+def test_create_scan_state_stamps_explicit_geometry_version() -> None:
+    state = create_scan_state(
+        {
+            "anchor_id": "a",
+            "region_key": "johannesburg",
+            "grid_id": "JNB0001",
+            "geometry_version": "fullscan_target96_review24_v2",
+        }
+    )
+
+    assert state.geometry_version == "fullscan_target96_review24_v2"
+
+
+def test_old_state_without_geometry_version_loads_as_absent(
+    tmp_state_dir: Path, sample_anchor: dict[str, str]
+) -> None:
+    state = create_scan_state(sample_anchor)
+    path = state_path_for(state.anchor_id, tmp_state_dir)
+    save_scan_state(state, path)
+    raw = json.loads(path.read_text())
+    raw.pop("geometry_version")
+    path.write_text(json.dumps(raw))
+
+    loaded = load_scan_state(path)
+
+    assert loaded is not None
+    assert loaded.geometry_version is None
 
 
 def test_round_with_results_serializes(tmp_state_dir: Path, sample_anchor: dict[str, str]) -> None:

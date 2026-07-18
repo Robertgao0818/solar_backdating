@@ -53,6 +53,35 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 24 | [Learned feature matching (SuperPoint+LightGlue / LoFTR) for weak-lock registration](ISSUE-24-learned-feature-matching.md) | 3 | done — KILL overturned → GO; Step-6 probe executed (characterization, 91.3% validated) | — |
 | 25 | [Teacher chip-geometry & stability pilot (from-scratch 24/48/96, 5-rep, CoJ channel)](ISSUE-25-teacher-geometry-stability-pilot.md) | 2/4 | ready-for-agent | — |
 | 26 | [Census-date scan-window cutoff (download + decoder semantics)](ISSUE-26-census-cutoff-scan-window.md) | 4 | done | — |
+| 27 | [Anchors-table v2 clean rebuild (offset fix + source_grids recompute + legacy builder archived)](ISSUE-27-anchors-v2-clean-rebuild.md) | 4 | done 2026-07-18 — tests re-verified, owner approved pre-flight QA (`.approved` written) | — |
+
+Slice 27 note (2026-07-18): opened from the build-chain audit + stale-offset
+postmortem ([DATA-fullscan-run2-buildchain-audit-2026-07-18.md](DATA-fullscan-run2-buildchain-audit-2026-07-18.md)).
+Implemented 2026-07-18 as a clean rewrite (`build_fullscan_anchors_v2.py`),
+not a patch: the legacy builder was removed (history at `b76c1d3`), shared
+per-target derivation now serves both ISSUE-25 and production, offsets are
+recomputed/asserted, source grids are recomputed, and A24/A48 review geometries
+are named/stamped per D18. The provisional centroid-lattice build produced
+41,393 rows (36,322/5,071) and matched the stop gate exactly: 5,414 grid-set
+changes, 223 census-date changes, delta days {−58:1,+4:3,+58:146,+62:73}.
+Balanced 30-anchor Vexcel placement QA is at
+`anchors_v2/preflight_qa_30/index.html`; owner visual approval remains open.
+The offset-fix RESCAN launch (population (a), 15,882 anchors) stays a separate
+pending owner decision.
+
+External-review note (2026-07-18): two external deep-research proposals
+(ChatGPT + Claude web) were reviewed against post-RUN-2 repo evidence in
+[REVIEW-external-deepresearch-backdating-2026-07-18.md](REVIEW-external-deepresearch-backdating-2026-07-18.md).
+Both independently converge on "fixed-coordinate marker absence is a broken
+observation model" but rank stronger registration first — which the repo has
+already NO-GO'd as the primary fix (recenter pilot §13; true root cause =
+the repo's own stale `target_offset_x_m/y_m` bug, ~73% of b2, recenter §17).
+Registered as **input to two pending owner decisions**: (a) the offset-fix
+rescan (population (a), 15,882 anchors — both external reports indirectly
+support doing it first) and (b) the observation-schema three/four-state
+proposal (present/absent/uninformative(+corrupt), absent gated on
+building_found & target_localized — the external reports' main genuine
+increment, positioned as the defense layer after the A5 offset fix).
 
 Slice 26 note (2026-07-10): three-agent audit confirmed the scan's
 `catalog_max_date` is a global static (2025-12-31) never clipped by census

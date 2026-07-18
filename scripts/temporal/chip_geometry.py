@@ -31,6 +31,9 @@ Two named versions ship (decision memo geometry table):
   keeps basemap96 artifacts from colliding with tight12 ones in provenance.
   See ``docs/dinov3_scorer/DATA-c0-reverse-template-prereg-2026-07-12.md``
   amendment 2026-07-13.
+- ``fullscan_target96_review24_v2`` / ``fullscan_target96_review48_v2`` —
+  ISSUE-27's target-centred adaptive-review geometries. Both consume a 96 m
+  per-target source chip and differ only in the frozen routed review extent.
 
 Verdict-store migration rule (D18; ``verdict_store.py`` docstring). A geometry
 change re-renders different crop bytes -> a different chip content hash
@@ -101,6 +104,18 @@ _REGISTRY: dict[str, ChipGeometry] = {
         min_crop_size_m=96.0,          # informational only -- nominal download extent
         min_output_px=256,             # informational only -- unused (no render-crop call)
     ),
+    "fullscan_target96_review24_v2": ChipGeometry(
+        geometry_version="fullscan_target96_review24_v2",
+        crop_context_multiplier=0.01,
+        min_crop_size_m=24.0,
+        min_output_px=256,
+    ),
+    "fullscan_target96_review48_v2": ChipGeometry(
+        geometry_version="fullscan_target96_review48_v2",
+        crop_context_multiplier=0.01,
+        min_crop_size_m=48.0,
+        min_output_px=256,
+    ),
 }
 
 # Legacy/banked default (never re-run; rows stay authoritative).
@@ -110,6 +125,13 @@ RERENDER_GEOMETRY_VERSION = "chip_geom_v2_tight12"
 
 LEGACY_GEOMETRY = _REGISTRY[LEGACY_GEOMETRY_VERSION]
 RERENDER_GEOMETRY = _REGISTRY[RERENDER_GEOMETRY_VERSION]
+
+FULLSCAN_A24_GEOMETRY_VERSION = "fullscan_target96_review24_v2"
+FULLSCAN_A48_GEOMETRY_VERSION = "fullscan_target96_review48_v2"
+FULLSCAN_GEOMETRY_VERSION_BY_ARM = {
+    "A24": FULLSCAN_A24_GEOMETRY_VERSION,
+    "A48": FULLSCAN_A48_GEOMETRY_VERSION,
+}
 
 
 def resolve_chip_geometry(geometry_version: str) -> ChipGeometry:

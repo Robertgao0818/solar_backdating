@@ -24,6 +24,7 @@ from typing import Any
 from scripts.temporal import presence_scorer
 
 SPEC_VERSION = "phase0_v2"
+LEGACY_V1_GEOMETRY_VERSION = "legacy-v1"
 
 ROUND_TYPES = {"initial", "walk_back", "bisection", "tail", "anchor_recovery"}
 
@@ -113,6 +114,7 @@ class ScanState:
     census_date: str | None = None
     catalog_max_date: str | None = None
     post_census_reference_frames: int | None = None
+    geometry_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in ALL_STATUSES:
@@ -143,6 +145,9 @@ def create_scan_state(anchor: dict[str, Any]) -> ScanState:
         grid_id=str(anchor["grid_id"]),
         started_at=ts,
         updated_at=ts,
+        geometry_version=str(
+            anchor.get("geometry_version") or LEGACY_V1_GEOMETRY_VERSION
+        ),
     )
 
 
@@ -189,6 +194,11 @@ def load_scan_state(path: Path) -> ScanState | None:
         post_census_reference_frames=(
             int(raw["post_census_reference_frames"])
             if raw.get("post_census_reference_frames") is not None
+            else None
+        ),
+        geometry_version=(
+            str(raw["geometry_version"])
+            if raw.get("geometry_version") is not None
             else None
         ),
     )
