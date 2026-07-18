@@ -54,6 +54,7 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 25 | [Teacher chip-geometry & stability pilot (from-scratch 24/48/96, 5-rep, CoJ channel)](ISSUE-25-teacher-geometry-stability-pilot.md) | 2/4 | ready-for-agent | — |
 | 26 | [Census-date scan-window cutoff (download + decoder semantics)](ISSUE-26-census-cutoff-scan-window.md) | 4 | done | — |
 | 27 | [Anchors-table v2 clean rebuild (offset fix + source_grids recompute + legacy builder archived)](ISSUE-27-anchors-v2-clean-rebuild.md) | 4 | done 2026-07-18 — tests re-verified, owner approved pre-flight QA (`.approved` written) | — |
+| 28 | [Gemini per-model quota exhaustion — gemini-3-flash fallback evaluation](ISSUE-28-gemini-quota-fallback-eval.md) | 4 | open — owner evaluation pending | — |
 
 Slice 27 note (2026-07-18): opened from the build-chain audit + stale-offset
 postmortem ([DATA-fullscan-run2-buildchain-audit-2026-07-18.md](DATA-fullscan-run2-buildchain-audit-2026-07-18.md)).
@@ -82,6 +83,58 @@ support doing it first) and (b) the observation-schema three/four-state
 proposal (present/absent/uninformative(+corrupt), absent gated on
 building_found & target_localized — the external reports' main genuine
 increment, positioned as the defense layer after the A5 offset fix).
+
+**RUN 3 completion note (2026-07-18):** owner decided the full 41,393-anchor
+rescan (superseding the smaller population-(a) 15,882 option above) —
+[`RUN-fullscan-gemini-backdating-run3-2026-07-18.md`](RUN-fullscan-gemini-backdating-run3-2026-07-18.md).
+Completed 2026-07-18T11:35:31Z UTC, 41,393/41,393, zero permanent errors
+(absorbed one ISSUE-28 quota outage + the known TM-holdout/corrupt-chip
+fixes within run). Post-run pipeline (§7) executed same day:
+[`DATA-fullscan-run3-reconcile-vs-run2-2026-07-18.md`](DATA-fullscan-run3-reconcile-vs-run2-2026-07-18.md)
+(full-population reconciliation, `scripts/temporal/reconcile_run2_vs_run3.py`)
+— 49.3% status_changed, 82.0% of RUN2's `done_ambiguous_marker_missed_pv`
+census-GT-contradiction cohort (n=4,645) resolved to a real dated status,
+bounded coverage 78.4%→83.2%, net undated→dated recovery 81.1% vs
+dated→undated regression 6.7% — directionally confirms the offset fix, QA
+sampling still needed to confirm as an accuracy gain not just a different
+failure mode. New intervals at
+`run3_v2/intervals/install_intervals_all.csv` (41,393 rows,
+`infer_install_dates.py`, same mechanics as RUN2). New econ deliverable at
+`deliverable_run3_2026-07-18/` (`build_install_dated_deliverable.py`, all
+gates pass: row_count/sfid_bijective/interval_invariant/
+flight_date_ceiling/coverage_reconcile/csv_gpkg_centroid_agreement).
+Balanced 30-anchor Vexcel placement QA owner visual approval (mentioned
+above) still open — separate from this completion.
+
+**RUN 3 coverage-gain QA (2026-07-19) — the "accuracy gain vs failure-mode
+swap" caveat above is now CLOSED: verdict = predominantly a real,
+placement-driven improvement, not a swap.**
+[`DATA-fullscan-run3-qa-coverage-2026-07-19.md`](DATA-fullscan-run3-qa-coverage-2026-07-19.md)
+(codex-reviewer-verifiable). Two independent lines: (1) full-population offset
+dose-response — coverage-gaining strata (census_bound→dated etc.) sit at
+~18–20 m median RUN2 marker offset vs 4.2 m for the stable control, i.e. the
+gain is concentrated exactly where the ISSUE-27 stale-offset bug mis-placed the
+marker and RUN3 fixed it; (2) stratified visual grade (n=114 sampled / 54
+convenience-graded, directional only — not a corpus accuracy or regression-rate
+estimate) — 41/48 (85%) PV-enclosed in the original 48, 47/54 expanded (vs
+RUN2's ~45% off-target census bucket); all 14 graded S1/S2/S3 new-date cases
+defensible-or-plausible; regressions: 1 genuine loss observed in S4a
+(census-side polygon precision, out of scope) + 2 uncertain in S4b — the sample
+does NOT establish that only 1 of the 1,950 date losses is genuine. Scripts
+`qa_run3_coverage_sample.py` / `qa_run3_render_sheets.py` /
+`qa_run3_write_grades.py`; artifacts `run3_v2/coverage_qa_2026-07-19/`. Residual:
+dates are vintage-quantized (direction right, midpoint ±inter-vintage gap);
+census_bound (37.8%) ceiling now set by census-side segmentation, not the
+offset bug.
+
+Econ handover note (2026-07-19): `deliverable_run3_2026-07-18/` finalized for
+economics handover — README's QA-verdict paragraph updated to reflect the
+closed 2026-07-19 coverage-gain QA (bounded, not overclaimed), a new "Usage
+guidance for economic analysis" section added (interval-censored treatment,
+join key, coverage-class semantics), and a new self-contained
+`descriptive_stats_2026-07-18-run3.html` added to the deliverable (coverage/
+confidence, temporal, spatial, area distributions). csv/gpkg untouched
+(sha256 verified unchanged).
 
 Slice 26 note (2026-07-10): three-agent audit confirmed the scan's
 `catalog_max_date` is a global static (2025-12-31) never clipped by census
