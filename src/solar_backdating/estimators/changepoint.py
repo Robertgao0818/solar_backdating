@@ -82,7 +82,11 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from solar_backdating.estimators.emissions import SYMBOL_INDEX
+from solar_backdating.estimators.emissions import (
+    SYMBOL_INDEX,
+    frame_loglik,
+    pool_epoch_frame_emissions,
+)
 from solar_backdating.estimators.epochs import Epoch, collapse_epochs, epoch_symbol
 from solar_backdating.estimators.seam import (
     ClampContext,
@@ -95,6 +99,12 @@ from solar_backdating.estimators.seam import (
 
 _EPS_FLOOR = 1e-12
 _LOG_FLOOR = -700.0  # exp(-700) ~ 1e-304; safely above double underflow, effectively "excluded"
+# "Epoch is abstain" threshold for the continuous frame branch (design §4.1):
+# a PooledEpochEmission with q below this near-zero floor carries no usable
+# evidence and is dropped from the tau lattice, exactly mirroring the discrete
+# branch's ``epoch_symbol(e) != "abstain"`` filter. Same 1e-3 magnitude as
+# emissions.py's add-k smoothing constant, by design.
+_FRAME_ABSTAIN_EPS = 1e-3
 
 
 @dataclass(frozen=True)
@@ -235,12 +245,130 @@ def _undated_result(epochs_cells: tuple[EpochCell, ...], last_absent, notes: str
     )
 
 
+def _decode_frame_emissions(
+    clamp: ClampContext, config: EstimatorConfig
+) -> InstallDatePosterior:
+    """Continuous (student) frame branch — design §4.1. Structurally parallel to
+    the discrete decode below but scores ``frame_loglik`` over pooled frames
+    instead of ``_epoch_loglik`` over collapsed symbols. Scope is deliberately
+    minimal (the census synthetic-epoch injection and marker_missed_pv /
+    clamp_inverted report-layer reclassifications are NOT reproduced here — the
+    frame branch is training/calibration-facing and no gate exercises those on
+    it today); it applies only clamp #1 (phantom-future cap), like PAVA. The TLO
+    hard-gate is already baked into each frame's ``q`` upstream
+    (``gate_frame_emission``), so it is not re-applied here."""
+    pooled_all = pool_epoch_frame_emissions(
+        config.frame_emissions, config.decoder_epoch_gap_days
+    )
+    # Drop q<eps epochs (the continuous "epoch is abstain" filter, §4.1) — the
+    # frame analogue of the discrete branch's abstain-symbol drop.
+    epochs = [p for p in pooled_all if p.q >= _FRAME_ABSTAIN_EPS]
+    t = len(epochs)
+
+    if t == 0:
+        beyond = (EpochCell(index=0, start_date=None, end_date=None, is_beyond_window=True),)
+        reason = "no_observations" if not pooled_all else "no_scored_evidence"
+        return _undated_result(beyond, None, reason)
+
+    cells = _build_cells(epochs)  # duck-typed on .start_date/.end_date; PooledEpochEmission fits
+    last_absent = epochs[t - 1].end_date
+
+    scores: list[float] = []
+    for tau in range(t + 1):
+        s = 0.0
+        for i in range(t):
+            s += frame_loglik(epochs[i], i >= tau)
+        s += _cell_log_prior(cells[tau], config.cohort_prior)
+        scores.append(s)
+
+    m = max(scores)
+    weights = [math.exp(s - m) for s in scores]
+    total = sum(weights)
+    posterior = tuple(w / total for w in weights)
+
+    map_index = 0
+    best = posterior[0]
+    for i in range(1, t + 1):
+        if posterior[i] > best:
+            best = posterior[i]
+            map_index = i
+
+    p_undated = posterior[t]
+
+    notes: list[str] = []
+    if map_index == t:
+        map_interval_start = last_absent
+        map_interval_end = None
+        map_date = ""
+    else:
+        map_interval_start = cells[map_index].start_date  # None if tau*=0 (open-left)
+        map_interval_end = cells[map_index].end_date
+        map_date = map_interval_end.isoformat()
+        if clamp.ceiling_date is not None and map_interval_end > clamp.ceiling_date:
+            raw = map_interval_end.isoformat()
+            map_interval_end = clamp.ceiling_date
+            map_date = clamp.ceiling_date.isoformat()
+            notes.append(f"clamped_earliest_present {raw}->{clamp.ceiling_date.isoformat()}")
+
+    order = sorted(range(t + 1), key=lambda i: (-posterior[i], i))
+    included: list[int] = []
+    cum = 0.0
+    for i in order:
+        included.append(i)
+        cum += posterior[i]
+        if cum >= config.credible_mass:
+            break
+    credible_mass = cum
+
+    non_beyond = [i for i in included if not cells[i].is_beyond_window]
+    beyond_included = any(cells[i].is_beyond_window for i in included)
+    if not non_beyond or any(cells[i].start_date is None for i in non_beyond):
+        credible_low = None
+    else:
+        credible_low = min(cells[i].start_date for i in non_beyond)
+    if beyond_included or not non_beyond:
+        credible_high = None
+    else:
+        credible_high = max(cells[i].end_date for i in non_beyond)
+
+    return InstallDatePosterior(
+        estimator="changepoint",
+        epochs=cells,
+        posterior=posterior,
+        map_index=map_index,
+        map_interval_start=map_interval_start,
+        map_interval_end=map_interval_end,
+        p_undated=p_undated,
+        credible_low_date=credible_low,
+        credible_high_date=credible_high,
+        credible_mass=credible_mass,
+        map_date=map_date,
+        notes=" | ".join(notes),
+    )
+
+
 @register("changepoint")
 def estimate_changepoint(
     observations: Sequence[VintageObservation],
     clamp: ClampContext = ClampContext(),
     config: EstimatorConfig = EstimatorConfig(),
 ) -> InstallDatePosterior:
+    # Entry mutual-exclusion (design §6.2): the discrete EM/symbol emissions and
+    # the continuous frame emissions are two distinct decode contracts; carrying
+    # both is a caller bug, not a merge. Fail loudly (mirrors
+    # EmissionModel.__post_init__'s "explicit error over silent double-write").
+    if config.emissions is not None and config.frame_emissions is not None:
+        raise ValueError(
+            "EstimatorConfig carries both emissions and frame_emissions; the "
+            "discrete EM path and the continuous frame path are mutually "
+            "exclusive — set exactly one"
+        )
+    # Continuous frame branch (design §4.1). Inert unless frame_emissions is set,
+    # so the discrete decode below is byte-for-byte unchanged for every existing
+    # caller (none set frame_emissions).
+    if config.frame_emissions is not None:
+        return _decode_frame_emissions(clamp, config)
+
     evidence_cutoff = (
         clamp.ceiling_date
         if clamp.ceiling_date is not None

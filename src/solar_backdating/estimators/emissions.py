@@ -22,18 +22,35 @@ flat-prior default used everywhere else in this issue), never an install date.
 Fitting ``fit_emissions_em`` on the same panel the harness later evaluates
 against is therefore by design (PRD D2: "estimated cohort-wide by EM"), not
 label leakage — no ground-truth install date ever enters the E/M steps.
+
+Alias note (DESIGN-phase0-emission-extension, decision D-E1, 2026-07-19): the
+product-layer three-state label ``present``/``absent``/``uninformative``
+(``+corrupt``) is the SAME object as this module's code-layer symbol triple
+``present``/``absent``/``abstain``. ``"abstain"`` == "uninformative(+corrupt)";
+``SYMBOLS`` is deliberately NOT renamed (renaming would churn ``SYMBOL_INDEX``,
+``changepoint.py``, ``fit_emissions_em`` and break every DECISION-A artifact /
+test that already keys on ``"abstain"``). The frame-level student extension
+below (``FrameEmission`` / ``frame_loglik``) is the continuous generalization
+of the same uninformative-marginalization invariant ``_epoch_loglik`` already
+enforces on the discrete symbol: ``q -> {0, 1}`` reproduces the two existing
+branches exactly (constant-marginalized abstain at ``q=0``; hard scored-symbol
+decode at ``q=1``). ``SYMBOLS`` / ``EmissionModel`` / ``fit_emissions_em`` are
+untouched — the student path is a permanent fork (decision D-E2), not an EM
+successor.
 """
 from __future__ import annotations
 
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import TYPE_CHECKING
 
 from solar_backdating.estimators.epochs import collapse_epochs, epoch_symbol
 
 if TYPE_CHECKING:
     from solar_backdating.estimators.seam import VintageObservation
+    from solar_backdating.localization.observation import TargetLocalizationObservation
 
 SYMBOLS = ("absent", "present", "abstain")
 STATES = ("absent_state", "present_state")
@@ -238,3 +255,201 @@ def fit_emissions_em(
         matrices=tuple(matrices[s] for s in strata),
         counts=tuple(tuple(tuple(row) for row in counts[s]) for s in strata),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Frame-level (student) emission extension — DESIGN-phase0-emission-extension
+# (owner-signed 2026-07-19). The three symbols below are the CONTINUOUS
+# generalization of the discrete symbol/EM path above; everything from here
+# down is inert unless a caller sets ``EstimatorConfig.frame_emissions``. See
+# the module docstring's alias note for why ``SYMBOLS`` is not renamed.
+# --------------------------------------------------------------------------- #
+
+# Deep-defense filler for e0/e1 when the §3.2 TLO gate zeroes q (see
+# ``gate_frame_emission``): 0.5 is the no-information prior value, so even a
+# code path that forgets to check q before reading e0/e1 gets an uninformative
+# read, never a spurious present/absent lean.
+_GATED_EMISSION_FILLER = 0.5
+
+
+@dataclass(frozen=True)
+class FrameEmission:
+    """One student frame's decode-time consumption unit (design §1.2).
+
+    ``q`` : P(usable & localized | x_t) — ALREADY hard-ANDed with the
+        localization observation upstream (``gate_frame_emission`` below is the
+        §3.2 gate that produces a gated ``q``); this dataclass does NOT re-apply
+        that gate.
+    ``e0``: P(observe "absent"  | state=absent_state,  usable & localized).
+    ``e1``: P(observe "present" | state=present_state, usable & localized).
+        Only two numbers are needed (present/absent is binary within each
+        state; ``1-e0`` / ``1-e1`` are the other halves), mirroring the
+        discrete ``Matrix``'s two rows ``row_absent_state=(e0, 1-e0)`` /
+        ``row_present_state=(1-e1, e1)``.
+    ``stratum``: reserved key (A24/A48 × area band × era, design §4.3); today
+        every frame may carry ``"default"`` — not consumed by the minimal
+        decode.
+    """
+
+    capture_date: date
+    q: float
+    e0: float
+    e1: float
+    stratum: str = DEFAULT_STRATUM
+    source_row: int | None = None
+
+
+def frame_loglik(frame: FrameEmission, state_is_present: bool) -> float:
+    """``log( q * e(state) + (1 - q) )`` — design §1.2.
+
+    ``e(state)`` is ``e1`` when ``state_is_present`` else ``e0``. This is the
+    exact Bernoulli marginalization of a latent ``usable & localized`` indicator
+    ``u_t`` independent of PV state (design §3.1): ``u_t=1`` emits a usable
+    symbol with prob ``e(state)``; ``u_t=0`` emits nothing (contributes constant
+    ``1``). Limits:
+
+    - ``q = 0``  -> ``log(1) = 0.0`` exactly, for BOTH states (state-independent
+      constant that cancels in the softmax — strictly identical to the discrete
+      abstain-drop's zero contribution; design §2.4).
+    - ``q = 1``  -> ``log(e(state))`` (degenerates to hard scored-symbol decode).
+    - ``0<q<1``  -> log of the convex combination, monotone in ``q`` for fixed
+      ``e != 0.5``.
+
+    ``state_is_present`` only affects the ``e(state)`` term, so at ``q -> 0``
+    both state branches collapse to the same ``log(1) = 0`` constant — the
+    design §2.4 boundary-cell evidence-completeness invariant.
+    """
+    e = frame.e1 if state_is_present else frame.e0
+    value = frame.q * e + (1.0 - frame.q)
+    return math.log(max(value, _EPS_FLOOR))
+
+
+def gate_frame_emission(
+    capture_date: date,
+    q_model: float,
+    e0: float,
+    e1: float,
+    tlo: "TargetLocalizationObservation | None",
+    *,
+    stratum: str = DEFAULT_STRATUM,
+    source_row: int | None = None,
+) -> tuple[FrameEmission, bool]:
+    """Build a FrameEmission with the §3.2 TLO hard-gate applied to ``q``.
+
+    Returns ``(frame, localization_pending)``. This is the SINGLE canonical
+    normative three-branch gate of design §3.2 — deliberately NOT collapsed into
+    a single ``q if (tlo and tlo.target_localized) else 0.0`` expression, which
+    would fold the ``tlo is None`` bridge state into the zeroing branch (exactly
+    the seam the schema-author cross-check flagged). Both ``target_localized``
+    AND ``abstain`` are read: the schema permits the legal combination
+    ``target_localized=True ∧ abstain=True`` (e.g. ``low_confidence`` /
+    ``dark_zone``), which the label layer downgrades to uninformative, so the
+    likelihood layer must zero ``q`` there too.
+
+    - ``tlo is None`` (bridge state, the actual status of every 311k observation
+      today, pre-R2): NO-OP. ``q`` passes through unchanged and
+      ``localization_pending=True`` is returned as provenance — never an
+      implicit "not localized" zeroing.
+    - ``tlo.target_localized and not tlo.abstain``: full weight, ``q = q_model``.
+    - else: ``q = 0.0``, and ``e0 = e1 = 0.5`` (deep defense — q=0 already makes
+      them mathematically inert, the filler only stops a q-forgetting code path
+      from reading a leaning value; design §3.2).
+    """
+    if tlo is None:
+        # Bridge state: localization layer has not run this observation. Do NOT
+        # zero q — that would penalize every legacy observation with no
+        # evidence it failed localization (contra effective_label's own
+        # "preserve legacy, localization_pending=True" policy).
+        q_effective = q_model
+        localization_pending = True
+        e0_effective, e1_effective = e0, e1
+    elif tlo.target_localized and not tlo.abstain:
+        q_effective = q_model
+        localization_pending = False
+        e0_effective, e1_effective = e0, e1
+    else:
+        q_effective = 0.0
+        localization_pending = False
+        e0_effective = e1_effective = _GATED_EMISSION_FILLER
+    frame = FrameEmission(
+        capture_date=capture_date,
+        q=q_effective,
+        e0=e0_effective,
+        e1=e1_effective,
+        stratum=stratum,
+        source_row=source_row,
+    )
+    return frame, localization_pending
+
+
+@dataclass(frozen=True)
+class PooledEpochEmission:
+    """Continuous epoch aggregate — the frame-level analogue of a collapsed
+    ``Epoch`` (design §1.4). ``q`` / ``(e0, e1)`` follow the indicator-of-max-q
+    "representative frame" rule so injecting near-duplicate frames can only hold
+    ``q`` flat, never inflate it (preserves ``pava.py``'s "one epoch = one
+    evidence unit" invariant)."""
+
+    start_date: date
+    end_date: date
+    q: float  # = max(member.q)
+    e0: float  # taken from the argmax-q member ("representative frame")
+    e1: float
+    n_members: int
+
+
+def pool_epoch_frame_emissions(
+    frames: Sequence[FrameEmission], gap_days: int
+) -> list[PooledEpochEmission]:
+    """Gap-collapse frames into epochs, one ``PooledEpochEmission`` each.
+
+    Grouping is the same greedy gap walk as ``epochs.collapse_epochs`` (sort by
+    ``(capture_date, source_row or 0)``, split when the next frame is more than
+    ``gap_days`` after the running last date). Per epoch (design §1.4, the
+    recommended "representative frame" rule, NOT soft-OR / weighted average):
+
+    - ``q_epoch = max(member.q)`` — indicator-style, so an epoch's usability
+      confidence never rises just because more correlated near-duplicate frames
+      were injected into it.
+    - ``(e0, e1)_epoch`` are taken from the argmax-q member (ties broken by
+      ``(capture_date, source_row or 0)``, so the earliest member wins — an
+      injected later near-duplicate at the same q cannot displace it).
+
+    Does NOT drop low-q epochs: that ``q < eps`` "epoch is abstain" filter is
+    the decoder's job (``changepoint.py``'s frame branch), mirroring how
+    ``collapse_epochs`` keeps all epochs and ``estimate_changepoint`` filters on
+    ``epoch_symbol(e) != "abstain"``.
+    """
+    if not frames:
+        return []
+
+    ordered = sorted(frames, key=lambda f: (f.capture_date, f.source_row or 0))
+
+    groups: list[list[FrameEmission]] = []
+    current: list[FrameEmission] = [ordered[0]]
+    last_date = ordered[0].capture_date
+    for frame in ordered[1:]:
+        if (frame.capture_date - last_date).days <= gap_days:
+            current.append(frame)
+        else:
+            groups.append(current)
+            current = [frame]
+        last_date = frame.capture_date
+    groups.append(current)
+
+    pooled: list[PooledEpochEmission] = []
+    for group in groups:
+        representative = min(
+            group, key=lambda f: (-f.q, f.capture_date, f.source_row or 0)
+        )
+        pooled.append(
+            PooledEpochEmission(
+                start_date=group[0].capture_date,
+                end_date=group[-1].capture_date,
+                q=representative.q,
+                e0=representative.e0,
+                e1=representative.e1,
+                n_members=len(group),
+            )
+        )
+    return pooled

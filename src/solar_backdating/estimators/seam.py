@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     # makes every annotation in this module a lazy string, never evaluated
     # unless something calls ``typing.get_type_hints`` on it.
     from solar_backdating.estimators.changepoint import CohortPrior
-    from solar_backdating.estimators.emissions import EmissionModel
+    from solar_backdating.estimators.emissions import EmissionModel, FrameEmission
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,13 @@ class EstimatorConfig:
     decoder_epoch_gap_days: int = 30  # changepoint epoch-collapsing threshold (PAVA keeps 16)
     emissions: "EmissionModel | None" = None  # fitted 3-symbol confusion matrix; None = sym. noise
     cohort_prior: "CohortPrior | None" = None  # ISSUE-03 empirical-Bayes hook; None = flat prior
+
+    # --- Frame-level (student) emission extension additions (DESIGN-phase0-
+    # emission-extension, 2026-07-19); every other estimator ignores this ---
+    # None = the discrete/EM path above is untouched (byte-for-byte). When set,
+    # ``estimate_changepoint`` decodes the continuous frame branch instead and
+    # MUST NOT also carry ``emissions`` (mutually exclusive; raises ValueError).
+    frame_emissions: "Sequence[FrameEmission] | None" = None
 
 
 @dataclass(frozen=True)
@@ -125,3 +132,24 @@ def get_estimator(name: str) -> EstimatorFn:
 def available_estimators() -> list[str]:
     """Sorted registered names."""
     return sorted(_REGISTRY)
+
+
+# --------------------------------------------------------------------------- #
+# Explicit boundary-state accessors (DESIGN-phase0-emission-extension §2.2).
+# The two boundary semantics already live in the tau grid (tau=0 open-left cell,
+# beyond-window cell); these functions promote the previously-implicit read of
+# them (``map_interval_start is None`` / ``is_beyond_window`` reinvented inline
+# in changepoint.py, infer_install_dates.py, ext2015's ``classify_row``, etc.)
+# into one testable public contract. No dataclass fields change — the
+# InstallDatePosterior JSON round-trip / equality contract is untouched.
+# --------------------------------------------------------------------------- #
+def is_already_present(result: InstallDatePosterior) -> bool:
+    """True iff the MAP cell is the open-left (already-present / left-censored)
+    boundary: ``map_index == 0`` and ``epochs[0].start_date is None``."""
+    return result.map_index == 0 and result.epochs[0].start_date is None
+
+
+def is_beyond_window(result: InstallDatePosterior) -> bool:
+    """True iff the MAP cell is the beyond-window (right-censored / undated)
+    boundary — the MAP-hit version of ``p_undated``'s cell."""
+    return result.epochs[result.map_index].is_beyond_window
