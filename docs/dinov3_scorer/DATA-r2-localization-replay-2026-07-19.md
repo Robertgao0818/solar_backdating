@@ -502,6 +502,6 @@ corrupt/artifact**。
 
 → **待 owner 的正式裁决仍是一件**:PRD §5.1 预登记口径措辞由
 "清理配准可检出的 corrupt/artifact"改写为"清理配准可检出的
-大幅真实错位(≥界限)帧"是否照签(改写候选文本,PROPOSED,未生效)。
+大幅真实错位(≥界限)帧"是否照签(**RATIFIED — owner-approved 2026-07-19**,已写入 PRD §5.1 amendment)。
 G3 量化阈值建议(基于本 panel,供 prereg 起草):净化率 ≥2× 误杀率,
 且 conflict 门单独出数(其误杀集中度提示后续阈值可能需要分门定)。

@@ -1,7 +1,9 @@
 # DESIGN — Phase-0 emission 扩展接口设计稿（三态 emission + 边界状态 + 区间级损失）
 
-Status: **DRAFT — pending owner review**（2026-07-19）。只写接口/数学设计，不改
-`src/` 代码，不 git commit。
+Status: **APPROVED — owner-signed 2026-07-19**（原稿照签；§5.4 的 T0 配对消融
+早退检查点一并批准，自此成为 PRD §7.4 搁置流程的合法提前触发点）。
+§6 接口清单进入实现（wave 3）；T0 配对消融在 emission 扩展落地后执行，
+复用 banked 3 reps，零新增 quota。
 
 Parent PRD: [`PRD-run3-native-local-line-2026-07-19.md`](PRD-run3-native-local-line-2026-07-19.md)
 §4（数学核心）、§7（G2 门禁）、§9.3（本文档即该条任务）。

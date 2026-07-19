@@ -105,6 +105,10 @@ quality_flag、源 TIFF SHA、逐帧 TFW、`geometry_version`
 （`fullscan_target96_review{24,48}_v2`）、census_date、`source_area_m2`。
 train/calibration/test 按**空间 grid + legacy group** 双重隔离拆分
 （防同屋顶/相邻目标/重叠像素跨集泄漏），拆分文件与哈希一并冻结。
+**Amendment（owner-approved 2026-07-19）**：批准 R0.1 **footprint sidecar**
+——不动已冻结 manifest/splits，另立版本化附表（键=anchor_id，补
+source_width_m/height_m 等 footprint 几何，源=anchors_v2），供 R1 cropgeo_v2
+ROI 与 R2 PV mask 升级真实长宽比；附表自带 lock 与对账。
 
 ### 3.3 标签语义（采纳外部评审三态制）
 
@@ -175,6 +179,10 @@ co-headline（该层占 corpus 87.7%，teacher 自一致性仅 0.65–0.67）。
   **训练标签去污染 + uninformative 门控**（防止 placement 失败进入
   absent 训练信号），**不是** blind bucket 的救援手段——预期收益要按
   这个口径预登记，不许事后换口径。
+  **Amendment（owner-approved 2026-07-19）**：R2 回放 + 30 项盲评开盲
+  （DATA-r2 §10）后，净化对象措辞由"配准可检出的 corrupt/artifact"改写为
+  **"配准可检出的大幅真实错位（超出有界修正界限）帧"**——门控有效性已
+  实证（净化 8/16 vs 疑似误杀 3/16），G3 prereg 按新措辞起草。
 - ISSUE-24 learned matcher（SP+LightGlue）最终判定 **GO**（91.3%
   corroborated，8.7% dark zone）——可作为 weak-lock 级联件使用，但
   dark zone 决定了不得对每帧无条件强制 warp。
