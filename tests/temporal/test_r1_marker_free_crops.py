@@ -228,6 +228,378 @@ def test_manifest_sha_gate_rejects_wrong_data(tmp_path):
         R1.load_manifest(mpath, check_sha=True)
 
 
+def test_qa_only_never_touches_production_status(tmp_path):
+    """Regression lock for the --qa-only footgun: a qa-only run must NEVER
+    write/clobber the production status file (STATUS_FILENAME) -- it must land
+    in the separate QA_STATUS_FILENAME instead. Simulates the exact incident:
+    a pre-existing production status file (standing in for real render
+    provenance) must survive byte-for-byte across a --qa-only invocation."""
+    mpath, _ = _synthetic_manifest(tmp_path)
+    out = tmp_path / "r1_crops_v1"
+    out.mkdir(parents=True)
+
+    prod_status_path = out / R1.STATUS_FILENAME[R1.CROP_GEOMETRY_VERSION]
+    fake_prod_status = json.dumps({"rendered": 12345, "skipped": 6, "sentinel": "do-not-touch"})
+    prod_status_path.write_text(fake_prod_status)
+
+    qa_status_path = out / R1.QA_STATUS_FILENAME[R1.CROP_GEOMETRY_VERSION]
+    assert not qa_status_path.exists()
+
+    args = R1.parse_args(
+        ["--manifest", str(mpath), "--out-dir", str(out), "--no-sha-check", "--qa-only"]
+    )
+    assert R1.run(args) == 0
+
+    # production status is byte-identical to what it was before the qa-only run.
+    assert prod_status_path.read_text() == fake_prod_status
+    # the qa-only run's own status landed in the separate QA status file.
+    assert qa_status_path.exists()
+    qa_status = json.loads(qa_status_path.read_text())
+    assert qa_status["rendered"] == 0 and qa_status["skipped"] == 0
+
+
+def test_qa_only_v2_never_touches_production_status(tmp_path):
+    """Same lock, v2 path: crop_geometry_index_v2 has its own production/QA
+    status file pair, independent of v1's."""
+    mpath, spath, _ = _synthetic_manifest_and_sidecar(tmp_path)
+    out = tmp_path / "r1_crops_v1"
+    out.mkdir(parents=True)
+
+    prod_status_path = out / R1.STATUS_FILENAME[R1.CROP_GEOMETRY_VERSION_V2]
+    fake_prod_status = json.dumps({"rendered": 999, "sentinel": "do-not-touch-v2"})
+    prod_status_path.write_text(fake_prod_status)
+
+    args = R1.parse_args(
+        [
+            "--manifest", str(mpath), "--out-dir", str(out),
+            "--sidecar", str(spath), "--crop-geometry", "v2",
+            "--no-sha-check", "--qa-only",
+        ]
+    )
+    assert R1.run(args) == 0
+
+    assert prod_status_path.read_text() == fake_prod_status
+    qa_status_path = out / R1.QA_STATUS_FILENAME[R1.CROP_GEOMETRY_VERSION_V2]
+    assert qa_status_path.exists()
+
+
+# ======================================================================== #
+# r1_cropgeo_v2: area-preserving rectangle ROI (sidecar aspect ratio).
+# ======================================================================== #
+def _synthetic_sidecar_row(
+    *, width_m: float, height_m: float, area_m2: float
+) -> pd.Series:
+    """A sidecar-shaped row matching build_r0_footprint_sidecar.py's math
+    exactly (areamatched_long/short = sqrt(A*r)/sqrt(A/r), r = long/short)."""
+    long_m = max(width_m, height_m)
+    short_m = min(width_m, height_m)
+    r = long_m / short_m
+    return pd.Series(
+        {
+            "anchor_id": "synthetic_t01",
+            "chip_arm": "A24",
+            "source_area_m2": area_m2,
+            "source_width_m": width_m,
+            "source_height_m": height_m,
+            "aspect_ratio": r,
+            "areamatched_long_m": math.sqrt(area_m2 * r),
+            "areamatched_short_m": math.sqrt(area_m2 / r),
+        }
+    )
+
+
+class TestV1RegressionInvariants:
+    """Explicit lock-in: the default (v1) path of compute_geometry_record must
+    be untouched by the v2 addition -- same call signature default, same ROI
+    shape invariants as before the refactor."""
+
+    def test_default_crop_geometry_is_v1(self):
+        tfx = R1._Transformers()
+        rec = R1.compute_geometry_record(_synthetic_row("EPSG:4326", area_m2=16.0), tfx)
+        assert rec.crop_geometry == R1.CROP_GEOMETRY_VERSION
+        assert rec.roi_source == "square_v1"
+        assert rec.roi_long_axis == "square"
+        # square invariant: x edge == y edge == legacy roi_edge_m
+        assert rec.roi_edge_x_m == pytest.approx(rec.roi_edge_y_m)
+        assert rec.roi_edge_x_m == pytest.approx(rec.roi_edge_m)
+        assert rec.context_edge_x_m == pytest.approx(rec.context_edge_m)
+        assert rec.roi_clamp_loss_frac == pytest.approx(0.0, abs=1e-9)
+
+    def test_v1_explicit_crop_geometry_kwarg_matches_default(self):
+        tfx = R1._Transformers()
+        row = _synthetic_row("EPSG:3857", area_m2=42.0)
+        default_rec = R1.compute_geometry_record(row, tfx)
+        explicit_rec = R1.compute_geometry_record(
+            row, tfx, crop_geometry=R1.CROP_GEOMETRY_VERSION, sidecar_row=None
+        )
+        assert asdict_eq(default_rec, explicit_rec)
+
+
+def asdict_eq(a, b) -> bool:
+    from dataclasses import asdict as _asdict
+
+    return _asdict(a) == _asdict(b)
+
+
+def test_resolve_roi_spec_v1_square():
+    spec = R1.resolve_roi_spec(16.0, 24.0, crop_geometry=R1.CROP_GEOMETRY_VERSION)
+    assert spec["edge_x_pre"] == spec["edge_y_pre"] == pytest.approx(4.0)
+    assert spec["long_axis"] == "square"
+    assert spec["roi_source"] == "square_v1"
+
+
+def test_resolve_roi_spec_v2_areamatched_math():
+    # width >> height -> long axis assigned to x; area preserved pre-clamp.
+    sc = _synthetic_sidecar_row(width_m=10.0, height_m=2.5, area_m2=20.0)
+    spec = R1.resolve_roi_spec(
+        20.0, 48.0, crop_geometry=R1.CROP_GEOMETRY_VERSION_V2, sidecar_row=sc
+    )
+    assert spec["long_axis"] == "x"
+    assert spec["edge_x_pre"] == pytest.approx(sc["areamatched_long_m"])
+    assert spec["edge_y_pre"] == pytest.approx(sc["areamatched_short_m"])
+    # area-preserving invariant: long_pre * short_pre == source area, exactly.
+    assert spec["edge_x_pre"] * spec["edge_y_pre"] == pytest.approx(20.0, rel=1e-9)
+
+
+def test_resolve_roi_spec_v2_long_axis_on_y():
+    # height >> width -> long axis assigned to y.
+    sc = _synthetic_sidecar_row(width_m=2.5, height_m=10.0, area_m2=20.0)
+    spec = R1.resolve_roi_spec(
+        20.0, 48.0, crop_geometry=R1.CROP_GEOMETRY_VERSION_V2, sidecar_row=sc
+    )
+    assert spec["long_axis"] == "y"
+    assert spec["edge_y_pre"] > spec["edge_x_pre"]
+    assert spec["edge_x_pre"] * spec["edge_y_pre"] == pytest.approx(20.0, rel=1e-9)
+
+
+def test_resolve_roi_spec_v2_per_axis_clamp_and_loss():
+    # Long axis pre-clamp (huge) exceeds fov; short axis stays well inside it.
+    sc = _synthetic_sidecar_row(width_m=200.0, height_m=1.0, area_m2=200.0)
+    spec = R1.resolve_roi_spec(
+        200.0, 24.0, crop_geometry=R1.CROP_GEOMETRY_VERSION_V2, sidecar_row=sc
+    )
+    assert spec["edge_x_pre"] > 24.0  # would have clamped
+    assert spec["edge_x"] == pytest.approx(24.0)
+    assert spec["edge_y"] == pytest.approx(spec["edge_y_pre"])  # short axis untouched
+    # actual rendered ROI area is now less than the pre-clamp (== source) area.
+    rendered_area = spec["edge_x"] * spec["edge_y"]
+    assert rendered_area < spec["edge_x_pre"] * spec["edge_y_pre"]
+
+
+def test_resolve_roi_spec_v2_area_preserved_pre_clamp_various_aspects():
+    for w, h, a in [(8.0, 6.0, 30.0), (3.0, 3.0, 9.0), (50.0, 1.0, 12.0)]:
+        sc = _synthetic_sidecar_row(width_m=w, height_m=h, area_m2=a)
+        spec = R1.resolve_roi_spec(
+            a, 96.0, crop_geometry=R1.CROP_GEOMETRY_VERSION_V2, sidecar_row=sc
+        )
+        assert spec["edge_x_pre"] * spec["edge_y_pre"] == pytest.approx(a, rel=1e-9)
+
+
+def test_resolve_roi_spec_v2_missing_sidecar_falls_back_to_square():
+    spec = R1.resolve_roi_spec(
+        16.0, 24.0, crop_geometry=R1.CROP_GEOMETRY_VERSION_V2, sidecar_row=None
+    )
+    assert spec["roi_source"] == "fallback_square_v2"
+    assert spec["long_axis"] == "square"
+    assert spec["edge_x_pre"] == spec["edge_y_pre"] == pytest.approx(4.0)
+
+
+def test_resolve_roi_spec_v2_nan_areamatched_falls_back_to_square():
+    sc = _synthetic_sidecar_row(width_m=10.0, height_m=2.0, area_m2=16.0)
+    sc["areamatched_long_m"] = float("nan")
+    spec = R1.resolve_roi_spec(
+        16.0, 24.0, crop_geometry=R1.CROP_GEOMETRY_VERSION_V2, sidecar_row=sc
+    )
+    assert spec["roi_source"] == "fallback_square_v2"
+
+
+def test_resolve_roi_spec_unknown_version_raises():
+    with pytest.raises(ValueError):
+        R1.resolve_roi_spec(16.0, 24.0, crop_geometry="bogus_version")
+
+
+def test_compute_geometry_record_v2_end_to_end():
+    tfx = R1._Transformers()
+    row = _synthetic_row("EPSG:4326", area_m2=20.0)
+    sc = _synthetic_sidecar_row(width_m=10.0, height_m=2.5, area_m2=20.0)
+    rec = R1.compute_geometry_record(
+        row, tfx, crop_geometry=R1.CROP_GEOMETRY_VERSION_V2, sidecar_row=sc
+    )
+    assert rec.crop_geometry == R1.CROP_GEOMETRY_VERSION_V2
+    assert rec.roi_source == "sidecar_v2"
+    assert rec.roi_long_axis == "x"
+    assert rec.roi_edge_x_m > rec.roi_edge_y_m
+    assert rec.roi_in_bounds
+    roi = json.loads(rec.roi_px)
+    assert len(roi) == 4
+    # context ring generalizes edge*2.0 per axis, clamped to FoV.
+    assert rec.context_edge_x_m == pytest.approx(min(24.0, rec.roi_edge_x_m * 2.0), abs=1e-3)
+    assert rec.context_edge_y_m == pytest.approx(min(24.0, rec.roi_edge_y_m * 2.0), abs=1e-3)
+    # png_relpath is IDENTICAL in shape to v1's (same chip_sha, same tag) --
+    # the "v2 refs v1 pixels" contract lives in this shared filename scheme.
+    assert rec.png_relpath.endswith(f".{R1.CROP_GEOMETRY_TAG}.png")
+
+
+def test_concentric_rect_iou_identical_squares_is_one():
+    assert R1.concentric_rect_iou(10.0, 10.0, 10.0, 10.0) == pytest.approx(1.0)
+
+
+def test_concentric_rect_iou_known_value():
+    # square 4x4 vs rectangle 8x2: both area 16; overlap = min(4,8)*min(4,2) = 4*2=8
+    # union = 16+16-8=24; iou = 8/24 = 1/3.
+    assert R1.concentric_rect_iou(4.0, 4.0, 8.0, 2.0) == pytest.approx(1.0 / 3.0)
+
+
+def test_aspect_bin_label():
+    assert R1.aspect_bin_label(1.2) == "[1.0,1.5)"
+    assert R1.aspect_bin_label(1.8) == "[1.5,2.0)"
+    assert R1.aspect_bin_label(3.0) == "[2.0,4.0)"
+    assert R1.aspect_bin_label(5.0) == "[4.0,inf)"
+    assert R1.aspect_bin_label(float("nan")) == "unknown"
+    assert R1.aspect_bin_label(None) == "unknown"
+
+
+# ------------------------------------------------------------------------ #
+# End-to-end v2 pipeline run: version propagation, index dir, PNG reuse.
+# ------------------------------------------------------------------------ #
+def _synthetic_manifest_and_sidecar(tmp_path: Path) -> tuple[Path, Path, Path]:
+    mpath, tiff = _synthetic_manifest(tmp_path)
+    sc = _synthetic_sidecar_row(width_m=10.0, height_m=2.5, area_m2=20.0)
+    sc_df = pd.DataFrame([sc])
+    spath = tmp_path / "footprint_sidecar_v1.parquet"
+    sc_df.to_parquet(spath, index=False)
+    return mpath, spath, tiff
+
+
+def test_v2_index_dir_and_version_propagate(tmp_path):
+    mpath, spath, _ = _synthetic_manifest_and_sidecar(tmp_path)
+    out = tmp_path / "r1_crops_v1"
+    # v1 run first to render the shared PNG.
+    v1_args = R1.parse_args(
+        ["--manifest", str(mpath), "--out-dir", str(out), "--no-sha-check"]
+    )
+    assert R1.run(v1_args) == 0
+
+    v2_args = R1.parse_args(
+        [
+            "--manifest", str(mpath), "--out-dir", str(out),
+            "--sidecar", str(spath), "--crop-geometry", "v2", "--no-sha-check",
+        ]
+    )
+    assert R1.run(v2_args) == 0
+
+    idx_v2 = pd.concat(
+        pd.read_parquet(p) for p in (out / "crop_geometry_index_v2").glob("*.parquet")
+    )
+    assert (idx_v2["crop_geometry"] == R1.CROP_GEOMETRY_VERSION_V2).all()
+    assert idx_v2["roi_source"].iloc[0] == "sidecar_v2"
+    # png_relpath still carries the SAME (v1) tag -- v2 does not mint new pixels.
+    assert idx_v2["png_relpath"].str.contains(f".{R1.CROP_GEOMETRY_TAG}.png").all()
+    # v1's own index directory/status file are untouched by the v2 run.
+    idx_v1 = pd.concat(
+        pd.read_parquet(p) for p in (out / "crop_geometry_index").glob("*.parquet")
+    )
+    assert (idx_v1["crop_geometry"] == R1.CROP_GEOMETRY_VERSION).all()
+    assert (out / "_R1_CROPS_STATUS.json").exists()
+    assert (out / "_R1_CROPS_STATUS_v2.json").exists()
+
+
+def test_v2_does_not_rerender_reuses_v1_png(tmp_path):
+    mpath, spath, _ = _synthetic_manifest_and_sidecar(tmp_path)
+    out = tmp_path / "r1_crops_v1"
+    v1_args = R1.parse_args(
+        ["--manifest", str(mpath), "--out-dir", str(out), "--no-sha-check"]
+    )
+    assert R1.run(v1_args) == 0
+    pngs = list(out.rglob(f"*.{R1.CROP_GEOMETRY_TAG}.png"))
+    assert len(pngs) == 1
+    mtime_before = pngs[0].stat().st_mtime_ns
+    bytes_before = pngs[0].read_bytes()
+
+    v2_args = R1.parse_args(
+        [
+            "--manifest", str(mpath), "--out-dir", str(out),
+            "--sidecar", str(spath), "--crop-geometry", "v2", "--no-sha-check",
+        ]
+    )
+    status = json.loads(
+        (out / "_R1_CROPS_STATUS.json").read_text()
+    )  # v1 status, for baseline comparison only
+    assert R1.run(v2_args) == 0
+    status2 = json.loads((out / "_R1_CROPS_STATUS_v2.json").read_text())
+    assert status2["rendered"] == 0 and status2["skipped"] == 0  # v2 never renders
+    # exactly one PNG on disk still -- no second copy was written for v2.
+    pngs_after = list(out.rglob(f"*.{R1.CROP_GEOMETRY_TAG}.png"))
+    assert len(pngs_after) == 1
+    assert pngs_after[0].stat().st_mtime_ns == mtime_before
+    assert pngs_after[0].read_bytes() == bytes_before
+
+
+def test_v2_sidecar_sha_gate_rejects_wrong_data(tmp_path):
+    _, spath, _ = _synthetic_manifest_and_sidecar(tmp_path)
+    with pytest.raises(SystemExit):
+        R1.load_sidecar(spath, check_sha=True)
+
+
+def test_v2_missing_sidecar_anchor_falls_back_and_is_recorded(tmp_path):
+    mpath, tiff = _synthetic_manifest(tmp_path)
+    # sidecar with a DIFFERENT anchor_id -- the manifest's anchor won't match.
+    sc = _synthetic_sidecar_row(width_m=10.0, height_m=2.5, area_m2=20.0)
+    sc["anchor_id"] = "some_other_anchor"
+    spath = tmp_path / "footprint_sidecar_v1.parquet"
+    pd.DataFrame([sc]).to_parquet(spath, index=False)
+
+    out = tmp_path / "r1_crops_v1"
+    v2_args = R1.parse_args(
+        [
+            "--manifest", str(mpath), "--out-dir", str(out),
+            "--sidecar", str(spath), "--crop-geometry", "v2", "--no-sha-check",
+        ]
+    )
+    assert R1.run(v2_args) == 0
+    status = json.loads((out / "_R1_CROPS_STATUS_v2.json").read_text())
+    assert status["sidecar_missing_rows"] == 1
+    assert status["roi_source_counts"] == {"fallback_square_v2": 1}
+
+
+def test_qa_mode_aspect_arm_requires_v2(tmp_path):
+    mpath, _ = _synthetic_manifest(tmp_path)
+    out = tmp_path / "r1_crops_v1"
+    args = R1.parse_args(
+        [
+            "--manifest", str(mpath), "--out-dir", str(out),
+            "--qa-mode", "aspect_arm", "--no-sha-check",
+        ]
+    )
+    with pytest.raises(SystemExit):
+        R1.run(args)
+
+
+@requires_data
+def test_real_frame_v2_areas_match_source_pre_clamp():
+    """Real-corpus spot check: v2's rectangle is area-preserving pre-clamp for
+    genuine sidecar rows (not just synthetic ones)."""
+    sidecar_path = (
+        Path.home()
+        / "zasolar_data/geid_temporal/run3_native_line_2026-07"
+        / "r0_manifest_v1/footprint_sidecar_v1.parquet"
+    )
+    if not sidecar_path.exists():
+        pytest.skip("footprint sidecar not present")
+    df = pd.read_parquet(MANIFEST)
+    sidecar = pd.read_parquet(sidecar_path)
+    merged = df.merge(sidecar, on="anchor_id", how="inner", suffixes=("", "_sc")).head(25)
+    tfx = R1._Transformers()
+    for _, row in merged.iterrows():
+        spec = R1.resolve_roi_spec(
+            float(row["source_area_m2"]), 24.0,
+            crop_geometry=R1.CROP_GEOMETRY_VERSION_V2, sidecar_row=row,
+        )
+        assert spec["edge_x_pre"] * spec["edge_y_pre"] == pytest.approx(
+            float(row["source_area_m2"]), rel=1e-6
+        )
+
+
 # ======================================================================== #
 # Real-frame integration (skipped without the drive).
 # ======================================================================== #
