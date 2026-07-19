@@ -546,15 +546,157 @@ STAGE_FUNCS: dict[str, StageFn] = {
 }
 
 
+#: Leverage 1 (team-lead follow-up, 2026-07-19, DATA-r2 §11): periodicity-
+#: aware dual-side escalation to weak_lock. Justification -- NOT a naive
+#: reuse of ``DEFAULT_MIN_PSR=8.0`` (that was the first candidate and it
+#: FAILS the check below): cross-referenced against the 30-item blind-review
+#: panel's owner/Codex-adjudicated ground truth (DATA-r2 §10):
+#:
+#: * the 3 CONFIRMED pseudo-peak items (blind_id 11/16/21) measure
+#:   ``periodicity_alias_psr`` = 7.03 / 5.63 / 7.75 -- at threshold=8.0
+#:   **none** of them would have been flagged;
+#: * the 1 CONFIRMED false-accept item (item_07 -- a confident lock Codex
+#:   judged degraded, the exact "pass-side" gap this lever targets) measures
+#:   5.57 -- also missed at threshold=8.0.
+#:
+#: 5.5 is the highest round number that catches all 4 known positives (min
+#: positive score 5.57). At that cut, 4/13 benign blind-review controls also
+#: get flagged -- a re-check (see ``run_full_cascade``'s docstring on why
+#: that's low-cost), not an automatic downgrade. This is a conservative,
+#: high-recall choice deliberately biased toward re-checking rather than
+#: missing a real pseudo-peak/false-accept, calibrated on an explicitly tiny
+#: (n=4 positive) labeled sample -- NOT a statistically robust ROC pick.
+#: Flagged for recalibration once this round's routing produces more labeled
+#: outcomes.
+PERIODICITY_ESCALATION_ALIAS_PSR = 5.5
+
+
+def _periodicity_escalation_reason(
+    tlo: TargetLocalizationObservation, ctx: RegistrationContext | None
+) -> str | None:
+    """``None`` if no periodicity-triggered escalation applies to ``tlo``;
+    else ``"periodicity_pass_side"`` (``tlo`` was a confident lock -- the
+    item_07 lesson) or ``"periodicity_abstain_side"`` (``tlo`` was a forced
+    ``transform_out_of_bounds`` abstain) -- team-lead's two named leverage-1
+    routing targets. Only applies to phase_correlation-stage *final-looking*
+    outcomes (confident lock or out-of-bounds abstain); the existing
+    ``low_confidence`` escalation and the low-texture/no-reference paths are
+    untouched by this check."""
+    if ctx is None or tlo.cascade_stage != "phase_correlation":
+        return None
+    if not (tlo.target_localized or tlo.failure_reason == "transform_out_of_bounds"):
+        return None
+    pr = periodicity_score(ctx.mov_gray, ctx.mask)
+    if pr.alias_psr < PERIODICITY_ESCALATION_ALIAS_PSR:
+        return None
+    return "periodicity_pass_side" if tlo.target_localized else "periodicity_abstain_side"
+
+
+@dataclass(frozen=True)
+class WeakLockReviewRecord:
+    """Record-only provenance for a weak_lock review triggered by
+    ``run_full_cascade_traced`` (team-lead ruling, 2026-07-19, DATA-r2 §11
+    ->§13): NOT part of the frozen TLO schema (``observation.py`` untouched)
+    -- a companion record, keyed by ``(anchor_id, capture_date)`` at the
+    write site, for the conflict-gate redesign this data is meant to feed.
+    Written for every weak_lock escalation (all three trigger reasons), not
+    only the abstain-side ``rescue_blocked`` case, so the same file also
+    documents the (working-as-intended) pass-side and low_confidence
+    reviews.
+    """
+
+    escalation_reason: str
+    rescue_blocked: bool
+    phase_correlation_target_localized: bool
+    phase_correlation_failure_reason: str
+    phase_correlation_transform_params: dict
+    weak_lock_target_localized: bool
+    weak_lock_failure_reason: str
+    weak_lock_transform_params: dict
+    disagreement_m: float | None
+
+
+def _build_review_record(
+    pc_tlo: TargetLocalizationObservation,
+    wl_tlo: TargetLocalizationObservation,
+    reason: str,
+    *,
+    rescue_blocked: bool,
+) -> WeakLockReviewRecord:
+    disagreement_m = None
+    if pc_tlo.transform_params and wl_tlo.transform_params:
+        ddx = float(wl_tlo.transform_params.get("dx_m", 0.0)) - float(pc_tlo.transform_params.get("dx_m", 0.0))
+        ddy = float(wl_tlo.transform_params.get("dy_m", 0.0)) - float(pc_tlo.transform_params.get("dy_m", 0.0))
+        disagreement_m = float(np.hypot(ddx, ddy))
+    return WeakLockReviewRecord(
+        escalation_reason=reason,
+        rescue_blocked=rescue_blocked,
+        phase_correlation_target_localized=pc_tlo.target_localized,
+        phase_correlation_failure_reason=pc_tlo.failure_reason,
+        phase_correlation_transform_params=dict(pc_tlo.transform_params),
+        weak_lock_target_localized=wl_tlo.target_localized,
+        weak_lock_failure_reason=wl_tlo.failure_reason,
+        weak_lock_transform_params=dict(wl_tlo.transform_params),
+        disagreement_m=disagreement_m,
+    )
+
+
 def run_full_cascade(inp: StageInput, *, device: str | None = None) -> TargetLocalizationObservation:
-    """The real priority-ordered cascade (§5.2): phase-correlation first;
-    escalate to weak-lock only on its ``low_confidence`` (ambiguous, nothing
-    committed) marker. A confident phase-correlation lock, a forced abstain,
-    or an identity fallback are all final -- weak-lock never re-litigates
-    them (ISSUE-24's dark-zone cost makes it the expensive tier-2 fallback,
-    not a second opinion on every row)."""
+    tlo, _escalation_reason, _review = run_full_cascade_traced(inp, device=device)
+    return tlo
+
+
+def run_full_cascade_traced(
+    inp: StageInput, *, device: str | None = None
+) -> tuple[TargetLocalizationObservation, str | None, WeakLockReviewRecord | None]:
+    """The real priority-ordered cascade (§5.2), returning ``(final_tlo,
+    escalation_reason, review_record)`` -- the latter two are diagnostic-only
+    bookkeeping (DATA-r2 §11/§13), not part of the TLO schema. Escalates to
+    weak_lock on any of three triggers:
+
+    1. ``low_confidence`` (unchanged from the original cascade): phase
+       correlation's own ambiguous/no-peak marker, nothing committed.
+    2. ``periodicity_abstain_side``: a confident-but-out-of-bounds phase
+       correlation lock on high-periodicity content -- the lock might be a
+       repeating-structure alias (§5.4), so it is re-checked by an
+       independent (keypoint-based, period-insensitive) method. **Record-only
+       as of the 2026-07-19 team-lead ruling (DATA-r2 §13)**: the review
+       result and its disagreement with phase_correlation are always
+       recorded (``WeakLockReviewRecord``), but the review is NEVER allowed
+       to flip the final verdict to ``target_localized=True`` -- abstain
+       stays abstain, falling back to phase_correlation's own
+       ``transform_out_of_bounds`` verdict when weak_lock would otherwise
+       have rescued it. Rationale (risk asymmetry): a wrong rescue puts
+       contaminated ``absent`` evidence back into the training signal --
+       exactly the red line this layer exists to prevent -- while a wrong
+       *abstained* rescue only costs coverage. Empirical basis: all 13
+       oob->confident_lock rescues in the first (unrestricted) routing pass
+       compressed a 5-11m phase_correlation offset down to a <2m weak_lock
+       offset with zero counterexamples in the other direction, and 3/13
+       were independently confirmed WRONG rescues via the owner/Codex blind
+       panel (DATA-r2 §11.2.3) -- a same-domain row-house failure signature
+       ("neighbor's near-identical house, small-offset lock"), distinct from
+       ISSUE-24's cross-domain weak-lock GO verdict (91.3% corroborated) --
+       this is a new, separately-registered failure mode, not a reason to
+       revisit that verdict.
+    3. ``periodicity_pass_side``: a confident, in-bounds phase correlation
+       lock on high-periodicity content (the item_07 lesson, §10.1) --
+       **unchanged, still fully live**: weak_lock's review result IS the
+       final verdict here (confirm-with-correction, downgrade to
+       out-of-bounds, or abstain via dark_zone/conflict), since the
+       directional risk is reversed (a wrong pass-side downgrade only costs
+       coverage, matching the abstain-side asymmetry argument in reverse).
+
+    A confident low-periodicity lock, a low-periodicity forced abstain, or
+    an identity fallback are all still final without ever invoking
+    weak_lock. weak_lock's own dark-zone/conflict/out-of-bounds semantics
+    (``_weak_lock_core``) are UNCHANGED by this routing change or by the
+    rescue-block -- escalating more often, or discarding a rescued verdict,
+    does not alter what counts as a confident weak-lock outcome.
+    """
     dev = resolve_device(device)
     tlo, raw, ctx = _phase_correlation_core(inp)
+
     if (
         tlo.cascade_stage == "phase_correlation"
         and tlo.failure_reason == "low_confidence"
@@ -562,8 +704,22 @@ def run_full_cascade(inp: StageInput, *, device: str | None = None) -> TargetLoc
         and not tlo.target_localized
     ):
         wl_tlo, _match = _weak_lock_core(inp, ctx, raw, dev)
-        return wl_tlo
-    return tlo
+        record = _build_review_record(tlo, wl_tlo, "low_confidence", rescue_blocked=False)
+        return wl_tlo, "low_confidence", record
+
+    periodicity_reason = _periodicity_escalation_reason(tlo, ctx)
+    if periodicity_reason is not None:
+        wl_tlo, _match = _weak_lock_core(inp, ctx, raw, dev)
+        if periodicity_reason == "periodicity_abstain_side" and wl_tlo.target_localized:
+            # Red line (team-lead ruling 2026-07-19): never let this review
+            # flip an abstain into confident_lock. Record what weak_lock
+            # found, but keep phase_correlation's own out-of-bounds verdict.
+            record = _build_review_record(tlo, wl_tlo, periodicity_reason, rescue_blocked=True)
+            return tlo, periodicity_reason, record
+        record = _build_review_record(tlo, wl_tlo, periodicity_reason, rescue_blocked=False)
+        return wl_tlo, periodicity_reason, record
+
+    return tlo, None, None
 
 
 # --------------------------------------------------------------------------- #
@@ -1030,12 +1186,36 @@ def main(argv: list[str] | None = None) -> int:
 
     device = resolve_device(args.device)
     stage_fn: StageFn
+    review_records: list[dict] = []
     if args.stage == "cascade":
         if args.legacy_join:
             print("--stage cascade requires manifest mode (needs source_area_m2/reference pools); "
                   "got --legacy-join", file=sys.stderr)
             return 1
-        stage_fn = lambda inp: run_full_cascade(inp, device=device)  # noqa: E731
+
+        def stage_fn(inp: StageInput) -> TargetLocalizationObservation:
+            tlo, reason, record = run_full_cascade_traced(inp, device=device)
+            if record is not None:
+                review_records.append(
+                    {
+                        "anchor_id": inp.anchor_id,
+                        "capture_date": inp.capture_date.isoformat(),
+                        "escalation_reason": reason,
+                        "rescue_blocked": record.rescue_blocked,
+                        "phase_correlation_target_localized": record.phase_correlation_target_localized,
+                        "phase_correlation_failure_reason": record.phase_correlation_failure_reason,
+                        "phase_correlation_transform_params": record.phase_correlation_transform_params,
+                        "weak_lock_target_localized": record.weak_lock_target_localized,
+                        "weak_lock_failure_reason": record.weak_lock_failure_reason,
+                        "weak_lock_transform_params": record.weak_lock_transform_params,
+                        "disagreement_m": record.disagreement_m,
+                        "final_target_localized": tlo.target_localized,
+                        "final_failure_reason": tlo.failure_reason,
+                        "final_cascade_stage": tlo.cascade_stage,
+                    }
+                )
+            return tlo
+
     else:
         if args.stage != "identity" and args.legacy_join:
             print(f"--stage {args.stage} requires manifest mode; got --legacy-join", file=sys.stderr)
@@ -1082,6 +1262,12 @@ def main(argv: list[str] | None = None) -> int:
         **{k: v for k, v in sorted(stats.items())},
     }
     (args.out_dir / "observations.summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+    if review_records:
+        with (args.out_dir / "weak_lock_review.jsonl").open("w") as f:
+            for r in review_records:
+                f.write(json.dumps(r) + "\n")
+        print(f"wrote {len(review_records)} weak_lock review records -> {args.out_dir / 'weak_lock_review.jsonl'}")
 
     if row_records:
         purification = compute_purification_table(row_records)

@@ -1,9 +1,13 @@
 # DATA — R2 定位层最小实现:级联回放 + 净化率/误杀率实证(2026-07-19)
 
 Status: **DELIVERED**（R2 定位层 phase_correlation/weak_lock 两级由 stub
-变真,~2k 分层回放完成,产出 TLO JSONL + 净化率/误杀率表 + 盲评底稿;
-**G3 阈值建议见 §6,但不建议直接采信为正式 prereg 阈值** —— 见 §5 的关键
-警示发现)
+变真,~2k 分层回放完成;§10 开盲终裁已推翻 §5 的自动净化率表,§9 修复
+polygon 底座缝隙,§11 交付杠杆 1(周期性双侧路由)+ 杠杆 2(画布消融),
+§11.2.3 发现的 oob→confident_lock 救回系统性问题已由 §13 的 team-lead
+裁决处理(弃权侧降级 record-only,重跑对账与预测数字精确匹配:
+target_localized=1780/abstain=220);画布消融 CLOSED,维持整幅画布。
+**当前生效行为以 §13 为准**,§10.2 的 8/16 净化率与 3/16 误杀率仍是唯一
+正式引用数字）
 
 Parent: [`PRD-run3-native-local-line-2026-07-19.md`](PRD-run3-native-local-line-2026-07-19.md)
 §5/§6/§9 item 2、§7 G3。前置产物:R0 manifest
@@ -26,7 +30,10 @@ phase_correlation/weak_lock 原为 stub)。
   manifest 驱动的分层抽样 + lock 文件、净化率/误杀率表计算、CLI 改为默认
   `--stage cascade` 全级联回放(单级 debug 模式保留);2026-07-19 补强:
   新增 `run_periodicity_diagnostic`/`summarize_periodicity_diagnostic` +
-  `--periodicity-diag` CLI 模式(§5.4)。
+  `--periodicity-diag` CLI 模式(§5.4);同日再补强(杠杆 1,§11.1):
+  `run_full_cascade` 改为 `run_full_cascade_traced` 的薄包装,新增
+  `_periodicity_escalation_reason` + `PERIODICITY_ESCALATION_ALIAS_PSR`
+  周期性双侧路由。
 - `/home/gao/projects/solar_backdating/src/solar_backdating/localization/pv_mask.py`
   (新) —— PV polygon + buffer 像素掩膜(基于 `source_area_m2` 的居中方框
   代理,见 §7 开放问题 1)。
@@ -505,3 +512,348 @@ corrupt/artifact**。
 大幅真实错位(≥界限)帧"是否照签(**RATIFIED — owner-approved 2026-07-19**,已写入 PRD §5.1 amendment)。
 G3 量化阈值建议(基于本 panel,供 prereg 起草):净化率 ≥2× 误杀率,
 且 conflict 门单独出数(其误杀集中度提示后续阈值可能需要分门定)。
+
+## 11. 杠杆 1+2:周期性双侧路由 + 画布消融(2026-07-19)
+
+**⚠️ 本节记录的是 §11.2.3 警示发现之前的"无限制路由"版本,已被
+team-lead 2026-07-19 的裁决部分推翻——弃权侧的"救回"行为已降级为
+record-only(§13)。本节保留作为发现过程的完整记录(尤其 §11.2.3 的
+证据链),但如果只关心当前生效的行为/数字,直接看 §13。§11.3 画布消融
+的结论(不切换默认画布)不受此裁决影响,继续有效并已 CLOSED。**
+
+**先看 §11.2.3 的红色警示——这是本节最重要的发现,不是杠杆 1 的成功
+案例。**
+
+### 11.1 杠杆 1 实现:周期性感知双侧路由
+
+`scripts/temporal/replay_localization_cascade.py` 新增
+`run_full_cascade_traced`(`run_full_cascade` 现为其薄包装,只丢弃
+diagnostic 用的 `escalation_reason`)。级联在原有 `low_confidence` 触发外,
+新增两条周期性触发的强制升级路径(`_periodicity_escalation_reason`):
+
+- **弃权侧**(`periodicity_abstain_side`):phase_correlation 给出置信但
+  超界(`transform_out_of_bounds`)的锁定,且 `periodicity_alias_psr` ≥
+  阈值 → 不直接采信,升级 weak_lock 复核。
+- **放行侧**(`periodicity_pass_side`,item_07 教训):phase_correlation
+  给出置信且界内的锁定,且 `periodicity_alias_psr` ≥ 阈值 → 同样升级
+  weak_lock 复核,不因"看起来置信"就跳过。
+- 复核后的**冲突语义完全复用现有 `_weak_lock_core` 的 conflict 检查**,
+  未新增特判——升级只改变"是否送审",不改变 weak_lock 自身的
+  dark_zone/conflict/confident 判定逻辑(红线:dark_zone 语义不变,不
+  无条件 warp)。
+
+**阈值 `PERIODICITY_ESCALATION_ALIAS_PSR = 5.5`,依据写在代码 docstring,
+关键发现记录如下(否决了"直接复用 DEFAULT_MIN_PSR=8.0"这个第一直觉)**:
+
+把候选阈值 8.0(与相位相关自身的置信门同值,团队初始建议)对照 30 项
+盲评 panel 的开盲真值(§10)交叉核对:
+
+| 已知阳性样本(伪峰/假放行) | alias_psr | 阈值=8.0 能否命中 |
+|---|---|---|
+| item_11(伪峰) | 7.03 | ✗ |
+| item_16(伪峰) | 5.63 | ✗ |
+| item_21(伪峰) | 7.75 | ✗ |
+| item_07(假放行) | 5.57 | ✗ |
+
+**阈值=8.0 对全部 4 个已知阳性样本 0 命中**——直接借用相位相关自身的置信
+门在这个用途上是错的。5.5 是能同时命中全部 4 个已知阳性(最小阳性值
+5.57)的最高整数一位小数值。副作用(同一份数据核对):13 个良性对照组
+项目里有 4 个(item_10/19/24/25,alias_psr 5.43–8.41)也会被此阈值误触发
+复核——但复核只是多一次 weak_lock 确认,不直接翻转判定(见下),代价
+远低于漏检真阳性。**明确声明**:这是在 n=4 阳性标注上校准的保守/高召回
+选择,不是稳健的 ROC 结果,标注为待后续更大标注集复核。
+
+新增测试(`tests/temporal/test_localization_cascade.py`,7 项):触发条件
+(弃权侧/放行侧各一)、低周期性不触发、放行侧复核后维持置信(item_07 式
+确认路径)、弃权侧复核冲突走既有 conflict 语义、`low_confidence` 路径不
+受周期性检查影响(`periodicity_score` 完全不被调用)、dark_zone 语义不受
+路由方式影响。全量联跑 `test_localization_cascade.py` +
+`test_target_localization_observation.py`:**90 passed**(§9 交付时
+84 passed + 本次 6 净增,含 1 项因边界数学不可行而改写的测试)。
+
+### 11.2 2,000 obs 重跑 + 路由对照
+
+同 seed(20260719)重跑。修复前版本备份于
+`r2_replay_v1/routing_v2/_pre_routing_backup/`。
+
+#### 11.2.1 汇总对照
+
+| 指标 | 路由前(§9 状态) | 路由后 | Δ |
+|---|---|---|---|
+| target_localized(confident_lock) | 1,854 | 1,793 | −61 |
+| abstain 合计 | 146 | 207 | +61 |
+| ├ transform_out_of_bounds | 111 | 105 | −6 |
+| ├ transform_conflict | 17 | 23 | +6 |
+| ├ dark_zone | 18 | 79 | +61 |
+| cascade_stage=weak_lock(升级数) | 102 | 561 | +459 |
+| 全量耗时 | ~3m13s | ~4m12s | — |
+
+逐观测字段级对账:2,000 行 anchor_id+capture_date 完全对齐,`target_localized`
+Δ=−61 与迁移矩阵(下)精确吻合,无对账不符。
+
+#### 11.2.2 迁移矩阵(桶 = confident_lock / transform_out_of_bounds /
+transform_conflict / dark_zone;行=路由前,列=路由后)
+
+| 路由前 \ 路由后 | confident_lock | transform_out_of_bounds | transform_conflict | dark_zone |
+|---|---|---|---|---|
+| confident_lock | 1,780 | 21 | 0 | 53 |
+| transform_out_of_bounds | 13 | 84 | 6 | 8 |
+| transform_conflict | 0 | 0 | 17 | 0 |
+| dark_zone | 0 | 0 | 0 | 18 |
+
+未迁移 1,899/2,000(95.0%);迁移 101(5.0%)。confident_lock 从未直接
+迁移到 transform_conflict(结构性不可能——两个独立"界内"信号的最大分歧
+恰好等于 `CONFLICT_DISAGREEMENT_M`=10m 而非严格大于,见测试
+`test_periodicity_pass_side_review_conflict_uses_existing_conflict_semantics`
+的 docstring)。
+
+数据:`routing_v2/migration_matrix.json`、`routing_v2/migrations.jsonl`
+(101 行迁移明细)。
+
+#### 11.2.3 ⚠️ 已知标注样本核对 + 一个需要 team-lead/owner 优先审视的规律性问题
+
+对照 §10 开盲的 12 个已裁定项(8 正当拦截 + 3 疑似误杀 + item_07):
+
+| blind_id | 终裁标签 | 路由前桶 | 路由后桶 | 说明 |
+|---|---|---|---|---|
+| item_01/02/06 | 正当拦截(真错位) | oob | oob | 未变 |
+| **item_04/18/27** | **正当拦截(真错位,已用独特地标确证)** | **oob** | **confident_lock** | **⚠️ 被路由"救回"** |
+| item_08/15 | 正当拦截(dark_zone) | dark_zone | dark_zone | 未变 |
+| item_03/05/13 | 疑似误杀(conflict) | conflict | conflict | 未变(本轮杠杆未处理 conflict 门本身) |
+| item_07 | 假放行候选 | confident(dx=−4.14/dy=1.20,\|off\|=4.31m) | confident(dx=−0.83/dy=−0.70,\|off\|=1.09m) | 桶未变,但数值被 weak_lock 复核显著修正 |
+
+**item_07(放行侧目标案例)**:升级确实触发(`cascade_stage` 从
+`phase_correlation` 变为 `weak_lock`),weak_lock 独立估出 1.09m(远小于
+phase_correlation 原判的 4.31m),两者分歧 3.82m < `CONFLICT_DISAGREEMENT_M`
+=10m 未冲突,weak_lock 的更小数值直接采信。若 Codex 判"degraded"是针对
+4.31m 这个原始修正,新的 1.09m 修正**大概率是更合理的答案**——这是本轮
+唯一一个有直接证据支持"杠杆 1 改进了结果"的已标注案例,但它没有反映
+在迁移矩阵里(因为桶级别的 confident_lock→confident_lock 掩盖了数值级
+别的修正)。
+
+**item_04/18/27(⚠️ 核心警示)**:这 3 项被 owner/Codex **独立用不同地标
+确证为真实的 5–16m 错位**(§10.1,"正当拦截"最强的一类证据),但本轮
+路由**把它们从 out_of_bounds 救回成 confident_lock**。检查这 13 个
+`oob→confident_lock` 迁移的**全部**偏移量(不只是这 3 个已标注的):
+
+```
+路由前(phase_correlation)偏移量,米: 5.07 5.11 5.16 5.40 5.77 5.92 6.15 6.18 6.30 6.57 7.72 8.52 10.89
+路由后(weak_lock)偏移量,米:         0.18 0.19 0.24 0.31 0.31 0.34 0.57 0.73 1.04 1.46 1.85 2.12 4.44
+```
+
+**13 个案例全部呈现同一模式:phase_correlation 判定的 5–11m 大幅偏移,
+被 weak_lock 复核成一个小得多(多数 <2m)的"界内确认"**,且没有一个
+反向案例(小偏移被复核成大偏移属于"救回"分类)。已知的 3/13 有独立
+地标证据证明 phase_correlation 的大偏移判断是**对的**,weak_lock 的小
+偏移判断是**错的**。这个系统性模式(全部同向,量级一致)不像随机噪声,
+更像 **weak_lock(SP+LightGlue+1-point RANSAC)在这批"真实大幅错位"内容
+上倾向于锁定到某个小而不真实的局部匹配**(而不是锁定真实的大幅错位),
+而现有 conflict 检查(纯距离阈值,不做置信度加权)把"一个已被独立验证
+为正确的信号"和"一个新的、未验证的信号"同等对待,只要分歧 <10m 就直接
+采信后者——这是本轮暴露的一个可能更根本的设计问题(conflict 检查的
+"信任对称性"),不是杠杆 1 本身的周期性判据错了(这 13 个案例被路由
+选中,是因为它们的 `periodicity_alias_psr` 本来就 ≥5.5,即门槛本身工作
+正常;问题出在触发后weak_lock 复核给出了错误答案,而现有仲裁规则接受
+了它)。
+
+**建议(不是裁决,留给 team-lead/owner)**:
+1. **本轮"13 个救回"和相应的 target_localized −61 净变化,不应被当作
+   已验证的改进**——至少 3/13(23%)已知为错误救回,且全部 13 例呈现
+   同一可疑模式。
+2. 需要对这 13 例(或至少新抽一个类似盲评 panel)做人工/Codex 复核,
+   确认 weak_lock 复核结果的可信度,再决定是否保留"弃权侧"这条路由。
+3. 若确认 weak_lock 在这类大幅错位场景上系统性不可靠,candidate 修复
+   方向(仅供参考,未实现,需要 team-lead/owner 授权范围):conflict
+   判定改为置信度加权(不是纯距离阈值)、或弃权侧复核只允许"确认更大
+   或相近的偏移",不允许"新证据把已确认的大偏移直接压成小偏移"。
+4. **放行侧(item_07 式)看起来工作正常**——升级 + 复核 + 数值修正,
+   没有发现类似的系统性反例(53 个 confident→dark_zone 迁移的原始偏移量
+   普遍很小,p50=0.09m,更像是保守的安全网触发,不是明显错误)。
+
+### 11.3 杠杆 2:画布消融(对照分析,未改默认画布)
+
+对 111 个 out_of_bounds(路由前基线)+ 分层抽样(seed=20260720)的 200 个
+confident_lock,用 `dataclasses.replace(inp, anchor_bbox_lonlat=...)` 换成
+以质心为中心、边长=`fov_m`(24/48m)的画布,复用**完全相同**的
+`_phase_correlation_core`/`periodicity_score`(零改动配准代码),与整幅
+96m chip 画布结果对照。数据:`canvas_ablation/canvas_ablation.jsonl`
+(311 行)。
+
+| 指标 | out_of_bounds 群体(n=111) | confident_lock 群体(n=200) |
+|---|---|---|
+| 整幅画布 oob 率 | 92.8% | 0.0% |
+| FoV 画布 oob 率 | **12.6%** | 3.0% |
+| 整幅画布伪峰候选率(alias_psr≥5.5) | 43.2% | 22.5% |
+| FoV 画布伪峰候选率(alias_psr≥5.5) | **95.5%** | **98.0%** |
+| 两画布桶判定一致率 | **17.1%** | 71.0% |
+| \|偏移量差异\|(两画布都出结果时) p50/p90/max | 6.13m / 13.62m / 39.83m | 0.51m / 2.89m / 11.94m |
+| FoV 画布网格过小(<24px) | 0/111 | 0/200 |
+
+out_of_bounds 群体的画布切换转移分布:`transform_out_of_bounds→
+low_confidence` 48、`→confident_lock` 38、`→transform_out_of_bounds`
+(维持)14、`→roof_plane_not_matched` 3、其余 low_confidence 内部转移。
+
+**结论(供裁决,非默认切换建议)**:**不建议切换默认画布为 FoV**。三条
+独立证据都指向同一方向:(a) 两画布在 oob 群体上的判定一致率只有
+17.1%,偏移量差异中位数 6.13m——不是"同一测量的精化",是两种**不
+兼容**的测量;(b) FoV 画布把伪峰候选率推到 95–98%(几乎所有观测都被
+标记),说明小画布下 PV 掩膜占比更高、可用于配准的结构信息大幅减少,
+自相关的"伪周期性"人为膨胀,现有 alias_psr=5.5 阈值在 FoV 画布下完全
+失去判别力,需要从头重新校准;(c) §10 的开盲结果已经验证整幅画布的
+oob 判定质量很高(10 例抽样里 6 正当/0 确认误杀),而 FoV 画布对同一批
+oob 观测的判定与整幅画布**大幅背离**(仅 17.1% 一致),没有独立证据
+支持 FoV 画布的判定更可信——贸然切换默认画布的风险明显大于潜在收益。
+
+### 11.4 净化/误杀数字按新口径重述(owner 已批准措辞)
+
+PRD §5.1 amendment(owner-approved 2026-07-19,见 §10.3)已把预登记口径
+从"清理配准可检出的 corrupt/artifact"改写为**"清理配准可检出的大幅
+真实错位(超出有界修正界限)帧"**。按新口径重述(§10.2 的 panel 读数,
+**杠杆 1 路由前**的原始门控结果,因为盲评本身是对路由前的 30 项做的):
+
+- **净化率(正当拦截率)= 8/16 = 50%**(下界;"未定"5 项若含真错位则
+  更高)——门控清理的是"配准可检出的大幅真实错位帧",不是 corrupt/
+  artifact(原 §5 措辞已被推翻,§10.3)。
+- **误杀率(疑似)= 3/16 ≈ 19%**,**全部集中在 conflict 门**(oob 门
+  0/10 确认误杀)。
+- 净化 > 误杀(≥2× 的量级),方向满足 G3 定性形态,但 owner 建议的
+  "conflict 门单独出数"在 §11.2.3 的发现下更加必要——如果 conflict
+  仲裁本身有系统性偏向弱证据的问题,conflict 门自己的误杀率还可能被
+  低估。
+- **杠杆 1 路由后**的数字**不纳入这次重述**:§11.2.3 已说明 13 个
+  oob→confident_lock 救回里至少 3 个是已知错误救回,在这批数据被
+  人工/Codex 复核之前,路由后的净化率/误杀率不是可信数字,不应该
+  替换 §10.2 的原始 panel 读数。
+
+## 12. 待办 / 移交清单(2026-07-19,更新于 §13 裁决后)
+
+1. ~~对 13 个 `oob→confident_lock` 救回案例做人工/Codex 复核~~ ——
+   **裁决已处理紧迫性**(弃权侧降级 record-only,救回不再发生);
+   `routing_v2/rescue_review_sheet.html`(13 项三联图)仍留给 Codex/owner
+   做深入复核,定位"同域联排屋小偏移锁"失败签名的根因,但不再是阻塞
+   本层交付的紧急项。
+2. **conflict 门本身(§10.2 已指出误杀集中于此)仍未在任何一轮改动**,
+   仍是误杀风险最集中的环节——本轮弃权侧降级绕开了 conflict 门的问题
+   (不再依赖它做仲裁),但没有修复它;它仍然是导致 item_03/05/13(疑似
+   误杀)的直接机制,后续如果要动,是一个独立任务(conflict 仲裁重设计,
+   见 §13.1 末尾的置信度加权建议方向,未实现)。
+3. ~~画布消融待裁决~~ —— **CLOSED(team-lead 裁决,§13.3):维持整幅
+   画布**。
+
+## 13. Team-lead 裁决执行:弃权侧降级 record-only(2026-07-19)
+
+Team-lead 亲验了 §11.2.3 的证据(迁移矩阵、item_04/18/27 的 CHANGED 状态、
+90 项测试)后裁决:弃权侧路由保留升级动作,但复核结果永远不得把 abstain
+翻转为 confident_lock;放行侧不变;画布消融 CLOSED。以下是执行记录。
+
+### 13.1 实现
+
+`run_full_cascade_traced` 的弃权侧分支新增一道红线检查:如果
+`periodicity_reason == "periodicity_abstain_side"` 且 weak_lock 的复核
+结果 `target_localized=True`,**丢弃该结果,返回 phase_correlation 原始
+的 `transform_out_of_bounds` 判定作为最终值**——cascade_stage 也随之保留
+`"phase_correlation"`(不是 `"weak_lock"`),因为最终采信的判定本来就来自
+phase_correlation。放行侧完全不变(weak_lock 的复核结果——包括确认/
+下调为 conflict/dark_zone/oob——继续直接采信,理由:方向反过来的风险
+不对称——放行侧误判只损失覆盖,不会把污染 absent 放回训练信号)。
+
+新增 `WeakLockReviewRecord`(frozen dataclass,`replay_localization_cascade.py`,
+**不是** TLO schema 字段,`observation.py` 未改一行)—— record-only 语义
+的落地方式:每次触发 weak_lock 复核(不论三种触发原因中的哪一种)都产出
+一条记录(`escalation_reason`、`rescue_blocked`、phase_correlation 与
+weak_lock 双方各自的 `target_localized`/`failure_reason`/`transform_params`、
+两者偏移量的欧氏距离 `disagreement_m`),CLI(`--stage cascade`)统一写入
+`observations.jsonl` 同级目录下的 `weak_lock_review.jsonl`,以
+`(anchor_id, capture_date)` 与 TLO 关联,供后续 conflict 门重设计使用。
+
+**新签名登记**("同域联排屋小偏移锁"失败签名,写入 `run_full_cascade_traced`
+docstring):13/13 个原始救回案例(不只是已知的 3 个)呈现同一模式——
+phase_correlation 的 5–11m 判定被 weak_lock 压缩成 <2m 的"界内确认",
+零反例。这与 ISSUE-24 对 weak_lock(SP+LightGlue)的跨域 GO 判定
+(91.3% corroborated)是**不同的失效场景**——ISSUE-24 评的是跨域
+GEHI↔Vexcel 弱锁定,这里是同域 GEHI↔GEHI、且发生在高周期性重复结构
+(联排屋/规则阵列)场景下的一种新失败模式,单独登记,**不构成对
+ISSUE-24 判定的重新开局**。
+
+### 13.2 测试
+
+新增 5 项(`tests/temporal/test_localization_cascade.py`):
+`test_periodicity_abstain_side_rescue_is_blocked_keeps_original_out_of_bounds_verdict`
+(阻断后维持原判 + `WeakLockReviewRecord` 字段核对)、以及**红线级不变式**
+`test_periodicity_abstain_side_never_produces_target_localized_true`
+(参数化 4 种不同的"本应置信"的 weak_lock 输出——同向/反向/贴界/另一
+轴——全部验证最终 `target_localized` 恒为 `False`)。全量联跑
+`test_localization_cascade.py` + `test_target_localization_observation.py`:
+**95 passed**(§11 交付时 90 passed + 本次净增 5)。
+
+### 13.3 重跑 2,000 obs 对账(与 team-lead 预测数字精确匹配)
+
+同 seed(20260719)重跑,`observations.summary.json` 生成
+`weak_lock_review.jsonl`(561 行 = 548 个"复核后仍在 weak_lock 定桶" +
+13 个"复核被阻断、回退 phase_correlation"——**561−548=13,与阻断计数
+精确自洽**)。回滚版本(无限制路由)备份于
+`routing_v2/_pre_rescue_block_backup/`。
+
+| 指标 | team-lead 预测 | 实测 | 匹配 |
+|---|---|---|---|
+| target_localized(confident_lock) | 1,780 | **1,780** | ✓ |
+| abstain 合计 | 220 | **220** | ✓ |
+| ├ transform_out_of_bounds | (未预测子项) | 118 | — |
+| ├ transform_conflict | (未预测子项) | 23 | — |
+| ├ dark_zone | (未预测子项) | 79 | — |
+
+**逐观测字段级对账**:2,000 行完全对齐,数字与预测精确相符,未触发
+"不符即停"。
+
+**迁移矩阵(相对最初的路由前基线,行=最初基线,列=本轮 rescue-block 后)**:
+
+| 最初基线 \ 本轮 | confident_lock | transform_out_of_bounds | transform_conflict | dark_zone |
+|---|---|---|---|---|
+| confident_lock | 1,780 | 21 | 0 | 53 |
+| transform_out_of_bounds | **0** | 97 | 6 | 8 |
+| transform_conflict | 0 | 0 | 17 | 0 |
+| dark_zone | 0 | 0 | 0 | 18 |
+
+对比 §11.2.2 的无限制路由矩阵:`transform_out_of_bounds→confident_lock`
+从 **13 降为 0**,`transform_out_of_bounds→transform_out_of_bounds`
+从 84 升为 97(13 个被阻断的救回全部回落到这一格)——其余格子(oob→
+conflict=6、oob→dark_zone=8、confident 行的 21/53)与 §11.2.2 完全一致,
+证实**放行侧、low_confidence 路径未受任何影响**,改动精确限定在弃权侧
+的"确认会被救回"这一个分支。
+
+**标注样本复核**(item_04/18/27,即 §11.2.3 警示的 3 个已知错误救回):
+
+| blind_id | 本轮桶 | cascade_stage | transform_params |
+|---|---|---|---|
+| item_04 | transform_out_of_bounds | phase_correlation | dx=−6.57, dy=−0.03(与最初基线逐位一致) |
+| item_18 | transform_out_of_bounds | phase_correlation | dx=−8.52, dy=0.09(与最初基线逐位一致) |
+| item_27 | transform_out_of_bounds | phase_correlation | dx=3.3, dy=3.9(与最初基线逐位一致) |
+| item_07(放行侧,不受本次裁决影响) | confident_lock | weak_lock | dx=−0.83, dy=−0.70(维持杠杆 1 的修正值) |
+
+3 个已知错误救回**全部正确回退**,数值与最初(路由前)基线逐位相同。
+
+数据:`routing_v2/migration_matrix_rescue_off.json`、
+`weak_lock_review.jsonl`(2,000-obs 目录顶层)、
+`routing_v2/the_13_rescues.json`(13 个原始救回身份,供 §13.4 关联)。
+
+### 13.4 13 例三联图审阅底稿(点 6,非阻塞交付)
+
+`routing_v2/rescue_review_sheet.html`(**非盲**,标注 anchor_id/日期/两侧
+偏移量/分歧量,不是 §5.3 盲评协议的重跑)——每项 3 面板:未校正、
+phase_correlation 校正(本轮最终判定所用)、weak_lock 校正(已阻断、
+未采信)。用于后续 Codex/owner 深入定位"同域联排屋小偏移锁"失败签名的
+根因,供未来 conflict 门重设计参考,不阻塞本次交付。目视抽查 1 例(大型
+商业建筑+屋顶光伏阵列+条纹状停车场——高度周期性场景):unshifted 与
+weak_lock 校正后几乎看不出差异(wl_offset 仅 0.57m),phase_correlation
+校正(5.92m)后也仍有明显重影——这一具体例子里两侧修正看起来都不够
+"干净",不像是能简单判定"phase_correlation 对/weak_lock 错"的清晰案例,
+印证了这批案例需要人工/Codex 逐项复核而非程序化判定。
+
+### 13.5 净化/误杀正式数字(不变,record-only 语义声明)
+
+**正式引用数字维持 §10.2 的 8/16=50%(净化率)与 3/16≈19%(误杀率,
+全部来自 conflict 门)**,按新批准措辞("大幅真实错位")——这是盲评
+真值,不随任何一轮路由改动而变。**杠杆 1 路由后(含本次 rescue-block)
+产出的净化率/误杀率数字全部是 record-only 性质**:它们反映"门控引擎
+在本轮实现下的行为统计",不是"经人工/Codex 核实的真实净化/误杀率"——
+后者仍然只有 §10.2 那一份,除非新一轮盲评专门针对路由后的数据重做。

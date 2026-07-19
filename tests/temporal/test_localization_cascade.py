@@ -23,20 +23,24 @@ import pytest
 
 from scripts.temporal.replay_localization_cascade import (
     CONFLICT_DISAGREEMENT_M,
+    PERIODICITY_ESCALATION_ALIAS_PSR,
     RegistrationContext,
     StageInput,
     _corrupt_signal,
     _identity_fallback,
+    _periodicity_escalation_reason,
     _phase_correlation_core,
     _weak_lock_core,
     identity_stage,
     phase_correlation_stage,
     run_full_cascade,
+    run_full_cascade_traced,
     weak_lock_stage,
 )
 from solar_backdating.localization.observation import DEFAULT_MAX_TRANSLATION_M
 from solar_backdating.localization.phase_corr import (
     DEFAULT_MIN_PSR,
+    PeriodicityResult,
     RawShift,
     estimate_shift_masked,
     periodicity_score,
@@ -386,6 +390,248 @@ def test_cascade_identity_fallback_skips_weak_lock() -> None:
     assert tlo.cascade_stage == "phase_correlation"
     assert tlo.target_localized
     assert tlo.transform_type == "identity"
+
+
+# --------------------------------------------------------------------------- #
+# Leverage 1 (team-lead follow-up, 2026-07-19): periodicity-aware dual-side  #
+# routing to weak_lock -- abstain side (a confident-but-out-of-bounds lock   #
+# on high-periodicity content) and pass side (the item_07 lesson: a         #
+# confident IN-bounds lock on high-periodicity content is also re-checked). #
+# --------------------------------------------------------------------------- #
+
+_HIGH_PERIODICITY = PeriodicityResult(
+    score=0.9, alias_psr=PERIODICITY_ESCALATION_ALIAS_PSR + 1.0, lag_dy_px=0.0, lag_dx_px=20.0
+)
+_LOW_PERIODICITY = PeriodicityResult(
+    score=0.1, alias_psr=PERIODICITY_ESCALATION_ALIAS_PSR - 1.0, lag_dy_px=3.0, lag_dx_px=-2.0
+)
+
+
+def _confident_in_bounds_raw() -> RawShift:
+    small_px = 1.0 / GSD_M
+    return RawShift(
+        dy_px=small_px, dx_px=0.0, offset_px=small_px, psr=20.0,
+        texture_std_ref=0.1, texture_std_mov=0.1, ok=True, reason="",
+    )
+
+
+def _confident_out_of_bounds_raw() -> RawShift:
+    big_px = (DEFAULT_MAX_TRANSLATION_M + 3.0) / GSD_M
+    return RawShift(
+        dy_px=big_px, dx_px=0.0, offset_px=big_px, psr=20.0,
+        texture_std_ref=0.1, texture_std_mov=0.1, ok=True, reason="",
+    )
+
+
+def test_periodicity_escalation_reason_none_for_low_periodicity_confident_lock() -> None:
+    ctx = _make_ctx(np.zeros((64, 64)), np.zeros((64, 64)), np.zeros((64, 64), dtype=bool))
+    with patch(
+        "scripts.temporal.replay_localization_cascade._prepare_registration_context", return_value=ctx
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.estimate_shift_masked",
+        return_value=_confident_in_bounds_raw(),
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.periodicity_score", return_value=_LOW_PERIODICITY
+    ):
+        tlo, _raw, ctx_out = _phase_correlation_core(_make_input())
+    assert _periodicity_escalation_reason(tlo, ctx_out) is None
+
+
+def test_periodicity_pass_side_escalates_confident_lock_to_weak_lock() -> None:
+    """The item_07 lesson: a confident, in-bounds phase-correlation lock on
+    high-periodicity content must NOT bypass weak_lock re-verification."""
+    ctx = _make_ctx(np.zeros((64, 64)), np.zeros((64, 64)), np.zeros((64, 64), dtype=bool))
+    match = RawMatch(dx_px=1.0 / GSD_M, dy_px=0.0, n_matches=100, n_inliers=40, inlier_ratio=0.4, residual_std_px=0.5)
+    with patch(
+        "scripts.temporal.replay_localization_cascade._prepare_registration_context", return_value=ctx
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.estimate_shift_masked",
+        return_value=_confident_in_bounds_raw(),
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.periodicity_score", return_value=_HIGH_PERIODICITY
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.match_translation_masked", return_value=match
+    ) as mock_weak_lock:
+        tlo, reason, _record = run_full_cascade_traced(_make_input(), device="cpu")
+    mock_weak_lock.assert_called_once()
+    assert reason == "periodicity_pass_side"
+    assert tlo.cascade_stage == "weak_lock"
+    # weak_lock's own estimate (1.4m from phase_correlation's) confirms, no conflict.
+    assert tlo.target_localized and not tlo.abstain
+
+
+def test_periodicity_abstain_side_escalates_out_of_bounds_to_weak_lock() -> None:
+    """A confident-but-out-of-bounds phase-correlation lock on high-
+    periodicity content is re-checked rather than accepted as final."""
+    ctx = _make_ctx(np.zeros((64, 64)), np.zeros((64, 64)), np.zeros((64, 64), dtype=bool))
+    match = RawMatch(dx_px=0.0, dy_px=0.0, n_matches=0, n_inliers=0, inlier_ratio=0.0, residual_std_px=None)
+    with patch(
+        "scripts.temporal.replay_localization_cascade._prepare_registration_context", return_value=ctx
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.estimate_shift_masked",
+        return_value=_confident_out_of_bounds_raw(),
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.periodicity_score", return_value=_HIGH_PERIODICITY
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.match_translation_masked", return_value=match
+    ) as mock_weak_lock:
+        tlo, reason, _record = run_full_cascade_traced(_make_input(), device="cpu")
+    mock_weak_lock.assert_called_once()
+    assert reason == "periodicity_abstain_side"
+    assert tlo.cascade_stage == "weak_lock"
+    assert tlo.abstain and tlo.failure_reason == "dark_zone"
+
+
+def test_periodicity_abstain_side_rescue_is_blocked_keeps_original_out_of_bounds_verdict() -> None:
+    """Team-lead ruling (2026-07-19, DATA-r2 §13): a weak_lock review that
+    WOULD rescue an out-of-bounds abstain into a confident lock must be
+    discarded -- the final verdict falls back to phase_correlation's own
+    original transform_out_of_bounds abstain, not weak_lock's confident
+    finding. The review is still recorded (rescue_blocked=True)."""
+    ctx = _make_ctx(np.zeros((64, 64)), np.zeros((64, 64)), np.zeros((64, 64), dtype=bool))
+    pc_raw = _confident_out_of_bounds_raw()
+    # weak_lock confidently finds a small, in-bounds, NON-conflicting offset
+    # -- exactly the "would-be rescue" scenario the ruling forbids.
+    match = RawMatch(dx_px=1.0 / GSD_M, dy_px=0.0, n_matches=100, n_inliers=40, inlier_ratio=0.4, residual_std_px=0.5)
+    with patch(
+        "scripts.temporal.replay_localization_cascade._prepare_registration_context", return_value=ctx
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.estimate_shift_masked", return_value=pc_raw
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.periodicity_score", return_value=_HIGH_PERIODICITY
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.match_translation_masked", return_value=match
+    ) as mock_weak_lock:
+        tlo, reason, record = run_full_cascade_traced(_make_input(), device="cpu")
+    mock_weak_lock.assert_called_once()
+    assert reason == "periodicity_abstain_side"
+    # Final verdict is phase_correlation's ORIGINAL out-of-bounds abstain,
+    # not weak_lock's would-be confident rescue.
+    assert tlo.cascade_stage == "phase_correlation"
+    assert not tlo.target_localized
+    assert tlo.abstain and tlo.failure_reason == "transform_out_of_bounds"
+    # The blocked review is still recorded, with weak_lock's actual (would-
+    # be-rescuing) finding preserved for the conflict-gate redesign data.
+    assert record is not None
+    assert record.rescue_blocked is True
+    assert record.escalation_reason == "periodicity_abstain_side"
+    assert record.weak_lock_target_localized is True
+    assert record.phase_correlation_target_localized is False
+
+
+@pytest.mark.parametrize(
+    "n_matches,n_inliers,inlier_ratio,dx_px,dy_px",
+    [
+        (100, 40, 0.4, 1.0 / GSD_M, 0.0),  # would-be confident, agrees with phase_correlation
+        (100, 40, 0.4, -1.0 / GSD_M, 0.0),  # would-be confident, small disagreement (no conflict)
+        (200, 80, 0.4, 4.9 / GSD_M, 0.0),  # would-be confident, near the legal bound
+        (50, 20, 0.4, 0.0, 4.9 / GSD_M),  # would-be confident, other axis
+    ],
+)
+def test_periodicity_abstain_side_never_produces_target_localized_true(
+    n_matches: int, n_inliers: int, inlier_ratio: float, dx_px: float, dy_px: float
+) -> None:
+    """Red-line-level invariant (team-lead ruling, DATA-r2 §13): across a
+    spread of weak_lock outcomes that would otherwise confidently localize,
+    a periodicity_abstain_side escalation must NEVER produce
+    target_localized=True in the final result."""
+    ctx = _make_ctx(np.zeros((64, 64)), np.zeros((64, 64)), np.zeros((64, 64), dtype=bool))
+    match = RawMatch(
+        dx_px=dx_px, dy_px=dy_px, n_matches=n_matches, n_inliers=n_inliers, inlier_ratio=inlier_ratio,
+        residual_std_px=0.5,
+    )
+    with patch(
+        "scripts.temporal.replay_localization_cascade._prepare_registration_context", return_value=ctx
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.estimate_shift_masked",
+        return_value=_confident_out_of_bounds_raw(),
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.periodicity_score", return_value=_HIGH_PERIODICITY
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.match_translation_masked", return_value=match
+    ):
+        tlo, reason, _record = run_full_cascade_traced(_make_input(), device="cpu")
+    assert reason == "periodicity_abstain_side"
+    assert tlo.target_localized is False
+
+
+def test_periodicity_abstain_side_review_conflict_uses_existing_conflict_semantics() -> None:
+    """When the periodicity-triggered weak_lock re-check disagrees sharply
+    with phase-correlation's own (out-of-bounds, periodicity-flagged)
+    committed offset, the outcome is transform_conflict via the SAME
+    conflict logic used elsewhere -- no special-cased "trust the re-check"
+    override. (Note: this can only be demonstrated from the abstain side --
+    two independently in-bounds offsets are each capped at
+    DEFAULT_MAX_TRANSLATION_M=5m, so their disagreement can never exceed
+    CONFLICT_DISAGREEMENT_M=10m; the pass-side escalation path structurally
+    cannot reach transform_conflict for that reason, confirmed by
+    ``test_periodicity_pass_side_escalates_confident_lock_to_weak_lock``
+    landing on a confident re-confirmed lock instead.)"""
+    ctx = _make_ctx(np.zeros((64, 64)), np.zeros((64, 64)), np.zeros((64, 64), dtype=bool))
+    # weak_lock confidently finds an in-bounds (|offset|=5m, the legal max)
+    # offset on the opposite side from phase_correlation's own out-of-bounds
+    # committed offset (dy_m=8.0) -- disagreement 13m, clears
+    # CONFLICT_DISAGREEMENT_M=10m while weak_lock's own offset stays legal.
+    match = RawMatch(dx_px=0.0, dy_px=-5.0 / GSD_M, n_matches=100, n_inliers=40, inlier_ratio=0.4, residual_std_px=0.5)
+    with patch(
+        "scripts.temporal.replay_localization_cascade._prepare_registration_context", return_value=ctx
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.estimate_shift_masked",
+        return_value=_confident_out_of_bounds_raw(),
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.periodicity_score", return_value=_HIGH_PERIODICITY
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.match_translation_masked", return_value=match
+    ) as mock_weak_lock:
+        tlo, reason, _record = run_full_cascade_traced(_make_input(), device="cpu")
+    mock_weak_lock.assert_called_once()
+    assert reason == "periodicity_abstain_side"
+    assert tlo.abstain and not tlo.target_localized
+    assert tlo.failure_reason == "transform_conflict"
+
+
+def test_periodicity_routing_does_not_apply_to_low_confidence_marker() -> None:
+    """The pre-existing low_confidence escalation path is untouched -- it
+    fires via its own condition, independent of periodicity_score (which is
+    never even called for that branch)."""
+    ctx = _make_ctx(np.zeros((64, 64)), np.zeros((64, 64)), np.zeros((64, 64), dtype=bool))
+    raw = RawShift(dy_px=1.0, dx_px=1.0, offset_px=1.4, psr=2.0, texture_std_ref=0.1, texture_std_mov=0.1, ok=False, reason="low-psr")
+    match = RawMatch(dx_px=2.0 / GSD_M, dy_px=0.0, n_matches=100, n_inliers=40, inlier_ratio=0.4, residual_std_px=0.5)
+    with patch(
+        "scripts.temporal.replay_localization_cascade._prepare_registration_context", return_value=ctx
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.estimate_shift_masked", return_value=raw
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.periodicity_score"
+    ) as mock_periodicity, patch(
+        "scripts.temporal.replay_localization_cascade.match_translation_masked", return_value=match
+    ) as mock_weak_lock:
+        tlo, reason, _record = run_full_cascade_traced(_make_input(), device="cpu")
+    mock_weak_lock.assert_called_once()
+    mock_periodicity.assert_not_called()
+    assert reason == "low_confidence"
+
+
+def test_periodicity_dark_zone_semantics_unchanged_by_routing() -> None:
+    """Red line: weak_lock's dark-zone gate (inlier-count/ratio floors) is
+    identical regardless of WHY the escalation happened -- periodicity
+    routing does not loosen it into an unconditional warp."""
+    ctx = _make_ctx(np.zeros((64, 64)), np.zeros((64, 64)), np.zeros((64, 64), dtype=bool))
+    weak_match = RawMatch(dx_px=5.0, dy_px=5.0, n_matches=50, n_inliers=3, inlier_ratio=0.06, residual_std_px=1.0)
+    with patch(
+        "scripts.temporal.replay_localization_cascade._prepare_registration_context", return_value=ctx
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.estimate_shift_masked",
+        return_value=_confident_in_bounds_raw(),
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.periodicity_score", return_value=_HIGH_PERIODICITY
+    ), patch(
+        "scripts.temporal.replay_localization_cascade.match_translation_masked", return_value=weak_match
+    ):
+        tlo, reason, _record = run_full_cascade_traced(_make_input(), device="cpu")
+    assert reason == "periodicity_pass_side"
+    assert tlo.abstain and not tlo.target_localized
+    assert tlo.failure_reason == "dark_zone"
 
 
 # --------------------------------------------------------------------------- #
