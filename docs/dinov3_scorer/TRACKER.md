@@ -31,6 +31,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | 7 | Feature-flag rollout + ops profile | ⛔ | 6 (gate-2 FAIL — no production swap) | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
 | 8 | Bonus: deterministic run-to-run experiment (not gated) | ⬜ | 4 | [ISSUE-08](ISSUE-08-determinism-experiment.md) |
 | 9 | Path C0: training-free census-anchored reverse template matching (latent match + amended census-conditioned one-sided decode; new-prereg lane per revival memo) | ⛔ | 2026-07-15 mathematical amendment implementation + calibration lock + mandatory tests | [ISSUE-09](ISSUE-09-c0-reverse-template-matching.md) |
+| 10 | Run3-native local line (research-only revival: 311,195-obs manifest, 3-state quality-marginalized emissions on the Phase-0 decoder, interval-level loss, marker-free ROI, localization gating layer; shelve-to-CapeTown rule) — licensed as a NEW prereg under the revival memo's "teacher geometry + re-distill" reopening condition; **owner-approved 2026-07-19** (gates + shelve rule + repeat-ceiling quota; LoRA/backbone veto maintained) | ⬜ | — | [PRD-run3-native-local-line-2026-07-19](PRD-run3-native-local-line-2026-07-19.md) |
 
 ## Dependency graph
 
