@@ -31,7 +31,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | 7 | Feature-flag rollout + ops profile | ⛔ | 6 (gate-2 FAIL — no production swap) | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
 | 8 | Bonus: deterministic run-to-run experiment (not gated) | ⬜ | 4 | [ISSUE-08](ISSUE-08-determinism-experiment.md) |
 | 9 | Path C0: training-free census-anchored reverse template matching (latent match + amended census-conditioned one-sided decode; new-prereg lane per revival memo) | ⛔ | 2026-07-15 mathematical amendment implementation + calibration lock + mandatory tests | [ISSUE-09](ISSUE-09-c0-reverse-template-matching.md) |
-| 10 | Run3-native local line (research-only revival: 311,195-obs manifest, 3-state quality-marginalized emissions on the Phase-0 decoder, interval-level loss, marker-free ROI, localization gating layer; shelve-to-CapeTown rule) — licensed as a NEW prereg under the revival memo's "teacher geometry + re-distill" reopening condition; **owner-approved 2026-07-19** (gates + shelve rule + repeat-ceiling quota; LoRA/backbone veto maintained). **§9 foundations DELIVERED + R0 FROZEN & OWNER-CONFIRMED 2026-07-19** (311,195-obs manifest reconciled exact, `leakage_component_stratum_greedy` split, chip-overlap leakage graph deviation ratified with R0 sign-off; lock at `~/zasolar_data/geid_temporal/run3_native_line_2026-07/r0_manifest_v1/MANIFEST_LOCK.json`; TLO schema + cascade skeleton landed in `src/solar_backdating/localization/`). Still pending owner: emission design doc sign-off ([DESIGN-phase0-emission-extension-2026-07-19](DESIGN-phase0-emission-extension-2026-07-19.md), DRAFT) incl. its proposed T0 paired-ablation early-exit checkpoint. **Wave 2 (R1/R2/repeat-ceiling) DELIVERED 2026-07-19**: R1 marker-free crops `r1_cropgeo_v1` (teacher byte-identical, [DATA-r1-crops](DATA-r1-crops-2026-07-19.md)); R2 cascade real (phase_corr+weak_lock, 2k replay; purification table NOT trusted pending owner 30-item blind review — periodicity false-peak is a proven but bounded contributor, [DATA-r2](DATA-r2-localization-replay-2026-07-19.md) §5.4/§9); **new teacher ceiling 0.7708 ± 0.0166 (replaces 0.7724), <40 m² 0.7529 ± 0.0192** on frozen 576-anchor test panel, same instrument as RUN 3, old 0.65–0.67 provenance traced ([DATA-ceiling](DATA-run3native-repeat-ceiling-2026-07-19.md) §5.5). Owner queue: blind review sheet, §5.1 purification-wording call, R0 footprint sidecar decision | 🔄 | — | [PRD-run3-native-local-line-2026-07-19](PRD-run3-native-local-line-2026-07-19.md) |
+| 10 | Run3-native local line (research-only revival: 311,195-obs manifest, 3-state quality-marginalized emissions on the Phase-0 decoder, interval-level loss, marker-free ROI, localization gating layer; shelve-to-CapeTown rule) — licensed as a NEW prereg under the revival memo's "teacher geometry + re-distill" reopening condition; **owner-approved 2026-07-19** (gates + shelve rule + repeat-ceiling quota; LoRA/backbone veto maintained). **§9 foundations DELIVERED + R0 FROZEN & OWNER-CONFIRMED 2026-07-19** (311,195-obs manifest reconciled exact, `leakage_component_stratum_greedy` split, chip-overlap leakage graph deviation ratified with R0 sign-off; lock at `~/zasolar_data/geid_temporal/run3_native_line_2026-07/r0_manifest_v1/MANIFEST_LOCK.json`; TLO schema + cascade skeleton landed in `src/solar_backdating/localization/`). Phase-0 emission design is **APPROVED and implemented** ([DESIGN-phase0-emission-extension-2026-07-19](DESIGN-phase0-emission-extension-2026-07-19.md)); T0 is complete and leaves per-anchor fidelity open. **Wave 2 (R1/R2/repeat-ceiling) DELIVERED 2026-07-19**: R1 marker-free crops `r1_cropgeo_v1` (teacher byte-identical, [DATA-r1-crops](DATA-r1-crops-2026-07-19.md)); R2 cascade real (phase_corr+weak_lock, 2k replay; conflict handling remains off pending its separate shadow/blind protocol, [DATA-r2](DATA-r2-localization-replay-2026-07-19.md)); **new teacher ceiling 0.7708 ± 0.0166 (replaces 0.7724), <40 m² 0.7529 ± 0.0192** on frozen 576-anchor test panel, same instrument as RUN 3, old 0.65–0.67 provenance traced ([DATA-ceiling](DATA-run3native-repeat-ceiling-2026-07-19.md) §5.5). R4 prereg frozen 2026-07-20; training not started | 🔄 | — | [PRD-run3-native-local-line-2026-07-19](PRD-run3-native-local-line-2026-07-19.md) |
 
 **Slice 10 Wave 3 update (2026-07-20):** crop geometry v2 is delivered as a
 sidecar-driven, area-preserving rectangular ROI index with byte-identical v1
@@ -42,8 +42,13 @@ features / 311,195 manifest rows, including real GPU kill→restart validation
 conflict-gate redesign is FINAL as Design A′, with telemetry → shadow replay →
 blind panel → kill evaluation still mandatory before any guard flip
 ([DESIGN-conflict-gate](DESIGN-conflict-gate-confidence-weighted-2026-07-19.md)).
-Slice 10 remains 🔄: next mainline step is R4 training + stratified calibration;
-R5 remains gated on R4.
+The binding R4 training/calibration contract is now **FROZEN, NOT STARTED**
+([RUN-r4 prereg](RUN-r4-training-calibration-prereg-2026-07-20.md)): v1 consumes
+only the `r1_cropgeo_v1` cache; DINOv2-S stays frozen; three fixed seeds,
+test-blind checkpoint/calibration/threshold rules, artifact schemas, and the
+owner's bounded baseline + one-correction-per-failed-gate stop discipline are
+locked. Slice 10 remains 🔄: next mainline step is the R4 implementation slice;
+full training and R5 remain not started.
 
 ## Dependency graph
 
@@ -129,6 +134,19 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
   field — on disk the field is `confidence`.
 
 ## Progress log
+
+- 2026-07-20 — **Run3-native R4 prereg frozen; training not started.** Owner
+  approved proceeding despite T0's aggregate-TVD premise failure because
+  per-anchor fidelity remains untested, with one bounded v1 baseline and at
+  most one hypothesis-led correction per failed G1/G2 gate. The binding RUN
+  freezes the R0 manifest/splits and SHA checks, `d4104b9`'s
+  `r1_cropgeo_v1` DINOv2-S cache, anchor-level train/calibration/test isolation,
+  a 298,243-parameter two-head light model, approved three-state soft Phase-0
+  decode, three seeds, test-blind calibration/threshold selection, R4 health
+  verdicts, cropgeo-v2 isolation, and complete off-git artifact contracts:
+  [RUN-r4-training-calibration-prereg-2026-07-20](RUN-r4-training-calibration-prereg-2026-07-20.md).
+  No full training, feature generation, conflict-guard implementation, or
+  production change was performed.
 
 - 2026-07-16 — **ISSUE-09 (Path C0) consolidated final review + P0 amendment
   landed.** Cross-compared the archived external review against the 2026-07-15
