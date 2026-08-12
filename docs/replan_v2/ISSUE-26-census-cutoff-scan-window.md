@@ -132,8 +132,9 @@ completeness loss from recurring.
   point-dated; the remaining 25 have zero usable pre-census evidence and remain
   undated. The earlier “371” is the polygon denominator; the interval inputs
   contain 341 unique nonmonotonic scan-state anchors.
-- AC4 ✅ — the Cape Town path resolves `2025-06-30` from `regions.yaml` in a
-  config-only unit test.
+- AC4 ✅ — the Cape Town path resolves its cutoff from `regions.yaml` in a
+  config-only unit test. The original `2025-06-30` fallback was superseded by
+  the owner-confirmed `2025-01-31` January-mosaic ceiling on 2026-07-24.
 - AC5 ✅ — the report-layer clamp code is unchanged. A replay of all 15,859
   main scan states produced zero `clamped_earliest_present` and zero
   `clamp_inverted` decoder notes.
