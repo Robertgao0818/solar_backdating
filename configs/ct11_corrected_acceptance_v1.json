@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "scope": "cape_town_top52_corrected_native_ct11",
+  "package": {
+    "assignment_sha256": "1c84ab3a65eb1a161dfa90338d3e02421e35ce8dbef678b84347d12c35ce8d5f",
+    "pass1_package_sha256": "bb662d65571518891d41a389545003d79ed6a52f7670a40d5607b5dcac628627",
+    "repeat_package_sha256": "28b1eeffe3af30fa3923dea324cc07ba5d0ee53e3376bb14a9bfa0ef9832d6d5"
+  },
+  "thresholds": {
+    "exact_bracket_wilson_95_lower_min": 0.7,
+    "inventory_weighted_exact_bracket_min": 0.75,
+    "undatable_rate_max": 0.25,
+    "repeat_state_agreement_min": 0.8,
+    "repeat_state_wilson_95_lower_min": 0.7,
+    "exact_boundary_failures_max": 0,
+    "post_cutoff_frames_max": 0
+  },
+  "owner_confirmation": {
+    "confirmed": true,
+    "confirmed_at_utc": "2026-08-02T21:01:04Z",
+    "confirmation_evidence": "User message: 确认门槛"
+  },
+  "policy": {
+    "thresholds_may_not_be_weakened_after_corrected_verdicts_are_viewed": true,
+    "failed_remediation_requires_new_holdout": true
+  }
+}
