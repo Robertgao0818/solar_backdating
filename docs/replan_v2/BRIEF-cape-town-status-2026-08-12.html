@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>开普敦装机日期回溯 — 阶段简报 2026-08-12</title>
+<style>
+:root{
+  --paper:#F3F4F1; --surface:#FCFCFB; --sunk:#EAECE8;
+  --ink:#17242A; --ink2:#33454C; --muted:#5C6E74; --faint:#86979C;
+  --rule:#D9DED8; --rule2:#C3CBC3;
+  --accent:#0A5E6B; --accent-soft:#00879B;
+  --pass:#2C6B3E; --fail:#A03222; --hold:#8A6410;
+  --cat1:#00879B; --cat2:#B0741B; --cat3:#6551A8; --cat0:#8C8279;
+  --serif:Georgia,"Songti SC","Noto Serif CJK SC","Source Han Serif SC","SimSun",serif;
+  --sans:system-ui,-apple-system,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0E1417; --surface:#151D21; --sunk:#1B252A;
+    --ink:#E4EAE9; --ink2:#C2CFCF; --muted:#93A6AB; --faint:#6F8288;
+    --rule:#243138; --rule2:#33444C;
+    --accent:#4FC4D2; --accent-soft:#0E9AA8;
+    --pass:#6FBF85; --fail:#E58366; --hold:#D3A64A;
+    --cat1:#0E9AA8; --cat2:#C08428; --cat3:#8A72D8; --cat0:#8F877D;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0E1417; --surface:#151D21; --sunk:#1B252A;
+  --ink:#E4EAE9; --ink2:#C2CFCF; --muted:#93A6AB; --faint:#6F8288;
+  --rule:#243138; --rule2:#33444C;
+  --accent:#4FC4D2; --accent-soft:#0E9AA8;
+  --pass:#6FBF85; --fail:#E58366; --hold:#D3A64A;
+  --cat1:#0E9AA8; --cat2:#C08428; --cat3:#8A72D8; --cat0:#8F877D;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font:400 16px/1.75 var(--sans);
+  -webkit-font-smoothing:antialiased;
+  padding:clamp(1.5rem,4vw,3.5rem) clamp(1rem,5vw,2rem) 5rem;
+}
+.wrap{max-width:1060px; margin:0 auto; display:flex; flex-direction:column; gap:3rem}
+p{margin:0}
+.prose{max-width:74ch; display:flex; flex-direction:column; gap:1rem}
+
+/* ---- masthead ---- */
+.mast{display:flex; flex-direction:column; gap:.9rem; padding-bottom:1.6rem; border-bottom:2px solid var(--ink)}
+.kicker{font:600 .72rem/1 var(--mono); letter-spacing:.18em; text-transform:uppercase; color:var(--accent)}
+h1{font:400 clamp(1.85rem,4.2vw,2.7rem)/1.22 var(--serif); margin:0; text-wrap:balance; letter-spacing:-.005em}
+.standfirst{font:400 clamp(1rem,1.6vw,1.12rem)/1.65 var(--serif); color:var(--ink2); max-width:60ch; text-wrap:balance}
+.byline{display:flex; flex-wrap:wrap; gap:.4rem 1.4rem; font:400 .78rem/1.5 var(--mono); color:var(--muted)}
+
+/* ---- verdict panel ---- */
+.verdict{background:var(--surface); border:1px solid var(--rule); border-left:3px solid var(--accent);
+  padding:clamp(1.2rem,3vw,1.9rem); display:flex; flex-direction:column; gap:1.05rem}
+.verdict h2{font:600 .72rem/1 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--muted); margin:0}
+.verdict .lede{font:400 1.06rem/1.7 var(--serif); color:var(--ink); max-width:68ch}
+.vgrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:1.1rem 1.8rem; margin-top:.2rem}
+.vitem{display:flex; flex-direction:column; gap:.3rem}
+.vitem b{font:600 .74rem/1.4 var(--sans); letter-spacing:.04em; color:var(--accent)}
+.vitem span{font-size:.93rem; line-height:1.65; color:var(--ink2)}
+
+/* ---- sections ---- */
+section{display:flex; flex-direction:column; gap:1.4rem}
+.shead{display:flex; align-items:baseline; gap:1rem; border-bottom:1px solid var(--rule2); padding-bottom:.6rem}
+.snum{font:600 .82rem/1 var(--mono); color:var(--accent); letter-spacing:.06em; flex:none; padding-top:.15rem}
+.shead h2{font:400 clamp(1.25rem,2.4vw,1.5rem)/1.3 var(--serif); margin:0; text-wrap:balance}
+h3{font:600 .95rem/1.5 var(--sans); margin:0; color:var(--ink); letter-spacing:.01em}
+
+/* ---- key figures ---- */
+.figs{display:grid; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr)); gap:1px; background:var(--rule); border:1px solid var(--rule)}
+.fig{background:var(--surface); padding:1rem 1.1rem; display:flex; flex-direction:column; gap:.25rem}
+.fig .n{font:500 1.62rem/1.1 var(--mono); font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+.fig .l{font-size:.78rem; line-height:1.45; color:var(--muted)}
+.fig .n.good{color:var(--pass)} .fig .n.bad{color:var(--fail)} .fig .n.hold{color:var(--hold)}
+
+/* ---- figure blocks ---- */
+figure{margin:0; background:var(--surface); border:1px solid var(--rule); padding:clamp(1rem,2.5vw,1.5rem);
+  display:flex; flex-direction:column; gap:1rem}
+figcaption{font-size:.82rem; line-height:1.6; color:var(--muted); max-width:78ch}
+figcaption b{color:var(--ink2); font-weight:600}
+.ftitle{font:600 .74rem/1.3 var(--mono); letter-spacing:.13em; text-transform:uppercase; color:var(--muted)}
+
+/* stacked bar */
+.stack{display:flex; gap:2px; height:2.6rem}
+.stack>div{border-radius:2px; transition:opacity .15s ease; cursor:default}
+.stack>div:first-child{border-radius:4px 2px 2px 4px}
+.stack>div:last-child{border-radius:2px 4px 4px 2px}
+.stack:hover>div{opacity:.42}
+.stack>div:hover{opacity:1}
+.skey{display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:.7rem 1.4rem}
+.krow{display:grid; grid-template-columns:auto 1fr auto; align-items:baseline; gap:.55rem}
+.dot{width:.62rem; height:.62rem; border-radius:2px; flex:none; transform:translateY(1px)}
+.krow .kl{font-size:.85rem; color:var(--ink2); line-height:1.45}
+.krow .kv{font:500 .85rem/1.45 var(--mono); font-variant-numeric:tabular-nums; color:var(--ink); white-space:nowrap}
+.krow .kl small{display:block; font-size:.74rem; color:var(--faint); line-height:1.4}
+
+/* bullet chart */
+.bullets{display:flex; flex-direction:column; gap:1.9rem}
+.blt{display:grid; grid-template-columns:minmax(9rem,15rem) 1fr; gap:.35rem 1.1rem; align-items:center}
+.blt .bl{font-size:.86rem; line-height:1.45; color:var(--ink2)}
+.btrack{position:relative; height:1.35rem; background:var(--sunk); border-radius:3px}
+.bfill{position:absolute; inset:0 auto 0 0; background:var(--fail); border-radius:3px 4px 4px 3px; opacity:.85}
+.bmark{position:absolute; top:-5px; bottom:-5px; width:2px; background:var(--ink)}
+.bmark::after{content:attr(data-l); position:absolute; right:0; top:-1.15rem; font:500 .7rem/1 var(--mono);
+  color:var(--ink); white-space:nowrap}
+.bval{position:absolute; top:50%; transform:translateY(-50%); font:500 .76rem/1 var(--mono);
+  font-variant-numeric:tabular-nums; color:var(--surface)}
+
+/* ---- tables ---- */
+.tw{overflow-x:auto; border:1px solid var(--rule); background:var(--surface)}
+table{border-collapse:collapse; width:100%; min-width:34rem; font-size:.88rem}
+caption{text-align:left; padding:.9rem 1rem .2rem; font:600 .74rem/1.3 var(--mono);
+  letter-spacing:.13em; text-transform:uppercase; color:var(--muted)}
+th,td{text-align:left; padding:.62rem 1rem; border-bottom:1px solid var(--rule); vertical-align:top; line-height:1.55}
+thead th{font:600 .74rem/1.4 var(--sans); letter-spacing:.05em; color:var(--muted);
+  border-bottom:1px solid var(--rule2); white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+tbody tr:hover{background:var(--sunk)}
+.tag{display:inline-block; padding:.08rem .5rem; border-radius:2px; font:600 .7rem/1.6 var(--mono);
+  letter-spacing:.05em; border:1px solid currentColor}
+.t-pass{color:var(--pass)} .t-fail{color:var(--fail)} .t-hold{color:var(--hold)} .t-mute{color:var(--faint)}
+
+/* ---- callout ---- */
+.note{background:var(--surface); border:1px solid var(--rule); border-left:3px solid var(--hold);
+  padding:1.1rem 1.3rem; display:flex; flex-direction:column; gap:.6rem}
+.note.act{border-left-color:var(--accent)}
+.note .nt{font:600 .74rem/1.3 var(--mono); letter-spacing:.13em; text-transform:uppercase; color:var(--hold)}
+.note.act .nt{color:var(--accent)}
+.note p{font-size:.92rem; line-height:1.7; color:var(--ink2); max-width:76ch}
+
+/* ---- action list ---- */
+ol.acts{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1px; background:var(--rule);
+  border:1px solid var(--rule)}
+ol.acts li{background:var(--surface); padding:1rem 1.2rem; display:grid;
+  grid-template-columns:2.1rem 1fr; gap:.2rem 1rem; align-items:baseline}
+ol.acts .an{font:500 .95rem/1.5 var(--mono); color:var(--accent)}
+ol.acts .at{font:600 .95rem/1.55 var(--sans)}
+ol.acts .ad{grid-column:2; font-size:.88rem; line-height:1.7; color:var(--muted)}
+ol.acts .aw{grid-column:2; margin-top:.35rem; font:500 .74rem/1.5 var(--mono); color:var(--faint)}
+
+code{font:500 .88em/1.5 var(--mono); background:var(--sunk); padding:.08em .35em; border-radius:2px; color:var(--ink2)}
+footer{border-top:1px solid var(--rule2); padding-top:1.2rem; font-size:.8rem; line-height:1.7; color:var(--faint); max-width:78ch}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+@media (max-width:640px){
+  .blt{grid-template-columns:1fr}
+  ol.acts li{grid-template-columns:1.8rem 1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="mast">
+  <div class="kicker">solar_backdating · 阶段简报</div>
+  <h1>开普敦装机日期回溯：Top-52 已产出，但外部校验未通过</h1>
+  <p class="standfirst">生产管线干净地跑完了 21,453 个目标；卡住的是「我们怎么知道这些日期是对的」这一环。全城推广的前置条件目前尚未满足。</p>
+  <div class="byline">
+    <span>简报日期 2026-08-12</span>
+    <span>证据截至 2026-08-04</span>
+    <span>队列 ct_top52_tie_band_v1_20260724</span>
+    <span>普查截止 2025-01-31</span>
+  </div>
+</header>
+
+<div class="verdict">
+  <h2>核心判定</h2>
+  <p class="lede">Top-52 的<strong>生产</strong>环节已完成且无运维缺陷，但<strong>验证</strong>环节失败：外部盲审与生产结果的精确区间一致率只有 20.8%，预注册门槛是 75%。更麻烦的是，这个「外部标尺」自己重复测两次也只有 68% 一致——所以目前我们无法判断到底是生产错了，还是尺子坏了。</p>
+  <div class="vgrid">
+    <div class="vitem"><b>它说明什么</b><span>数据产品本身结构完整、可复现、精度不差（区间中位数 37 天）。缺的不是覆盖率或工程质量，而是一个可辩护的准确性上界。</span></div>
+    <div class="vitem"><b>为什么重要</b><span>没有可信的参照物，就写不出误差界；写不出误差界，任何基于这批装机日期的经济学识别（事件研究、政策断点）都无法回应审稿人「你的测量误差有多大」这一问。</span></div>
+    <div class="vitem"><b>忽略的后果</b><span>直接发布或直接推全城，等于把一个未知大小的测量误差按 5.2 倍规模复制到 111,801 个目标上，同时花掉不可回收的 API 配额、约 110 GB 磁盘和数日机时。</span></div>
+  </div>
+</div>
+
+<!-- ============ 1 ============ -->
+<section>
+  <div class="shead"><span class="snum">01</span><h2>已完成：Top-52 生产线全线贯通</h2></div>
+
+  <div class="prose">
+    <p>CT-00 到 CT-10 十一个阶段全部关闭，六个生产波次跑完，交付物已构建完毕（<code>deliverable_20260803_lite_top52/</code>）。这一段的质量没有争议：全部 21,453 个目标都拿到了终态，没有一个操作失败被静默吞掉，也没有一帧越过普查截止日期被用于推断。</p>
+  </div>
+
+  <div class="figs">
+    <div class="fig"><span class="n">21,453</span><span class="l">锚点目标（52 个网格，占开普敦全量清单 111,801 的 19.19%）</span></div>
+    <div class="fig"><span class="n good">7/7</span><span class="l">结构闸门通过：行数、ID 唯一、CRS、普查上限、区间不倒置</span></div>
+    <div class="fig"><span class="n good">0</span><span class="l">未解决的运维失败、参照泄漏、越界帧</span></div>
+    <div class="fig"><span class="n">37 天</span><span class="l">已定日目标的区间宽度中位数（p75 = 91 天）</span></div>
+    <div class="fig"><span class="n">84.0%</span><span class="l">已定日目标的区间 ≤ 180 天</span></div>
+  </div>
+
+  <figure>
+    <span class="ftitle">图 1 · 21,453 个目标的结果构成</span>
+    <div class="stack" role="img" aria-label="覆盖构成：已定区间 64.8%、普查期内 24.0%、左删失 10.4%、未定日 0.7%">
+      <div style="width:64.83%;background:var(--cat1)" title="已定区间 13,908（64.83%）"></div>
+      <div style="width:24.04%;background:var(--cat2)" title="普查期内安装 5,157（24.04%）"></div>
+      <div style="width:10.43%;background:var(--cat3)" title="左删失 2,238（10.43%）"></div>
+      <div style="width:0.70%;background:var(--cat0)" title="未定日 150（0.70%）"></div>
+    </div>
+    <div class="skey">
+      <div class="krow"><span class="dot" style="background:var(--cat1)"></span><span class="kl">已定区间 <small>影像上看到从「无」到「有」的跃变</small></span><span class="kv">13,908 · 64.8%</span></div>
+      <div class="krow"><span class="dot" style="background:var(--cat2)"></span><span class="kl">普查期内安装 <small>跃变落在普查截止之后，只能给下界</small></span><span class="kv">5,157 · 24.0%</span></div>
+      <div class="krow"><span class="dot" style="background:var(--cat3)"></span><span class="kl">左删失 <small>影像史开始时板子已在，装机早于可观测范围</small></span><span class="kv">2,238 · 10.4%</span></div>
+      <div class="krow"><span class="dot" style="background:var(--cat0)"></span><span class="kl">未定日 <small>序列非单调或缺近期锚点，显式标注而非当作「无」</small></span><span class="kv">150 · 0.7%</span></div>
+    </div>
+    <figcaption><b>读法：</b>只有 64.8% 的目标能给出真正的双边区间；另外 34.5% 只能给单边界（普查期内 = 下界，左删失 = 上界）。<b>含义：</b>做生存分析或事件研究时，这三分之一必须按区间删失（interval-censored，即只知道事件落在某段时间内、不知道确切时点）处理，不能当作缺失丢掉，否则会系统性低估早期装机。</figcaption>
+  </figure>
+
+  <div class="tw">
+    <table>
+      <caption>已定区间目标的中点年份分布（n = 13,908）</caption>
+      <thead><tr><th>年份</th><th class="num">2019</th><th class="num">2020</th><th class="num">2021</th><th class="num">2022</th><th class="num">2023</th><th class="num">2024</th></tr></thead>
+      <tbody><tr><td>目标数</td><td class="num">47</td><td class="num">112</td><td class="num">484</td><td class="num">3,507</td><td class="num">2,869</td><td class="num">6,889</td></tr>
+      <tr><td>占比</td><td class="num">0.3%</td><td class="num">0.8%</td><td class="num">3.5%</td><td class="num">25.2%</td><td class="num">20.6%</td><td class="num">49.5%</td></tr></tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>分布高度集中在 2022 与 2024 两个峰上。这个形状本身是有经济学意味的（2022 年对应南非限电加剧的一轮抢装），<strong>但在 §2 的校验问题解决前，不要把它当作可发表的时间序列证据</strong>——外部盲审恰恰在「跃变发生在哪一年」上与生产结果大面积不一致。</p>
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section>
+  <div class="shead"><span class="snum">02</span><h2>卡住的一关：CT-11 外部盲审四项闸门未通过</h2></div>
+
+  <div class="prose">
+    <p>CT-11 的做法是：把生产给出的日期区间藏起来，用原生分辨率的影像条交给一个独立评审（Codex）盲判，看它给出的区间是否与生产一致。门槛在看到任何结果之前就被 owner 签字锁定（预注册，pre-registration，即先定标准再看数据，防止事后挪门槛）。结果是四项硬闸门未通过。</p>
+  </div>
+
+  <figure>
+    <span class="ftitle">图 2 · 四项未通过闸门：实测值 vs 预注册门槛</span>
+    <div class="bullets">
+      <div class="blt"><span class="bl">精确区间一致率<br><small style="color:var(--faint)">Wilson 95% 下界</small></span>
+        <div class="btrack"><div class="bfill" style="width:17.27%"><span class="bval" style="left:calc(100% + .5rem);color:var(--ink)">17.27%</span></div><div class="bmark" style="left:70%" data-l="门槛 70%"></div></div></div>
+      <div class="blt"><span class="bl">存量加权精确一致率<br><small style="color:var(--faint)">按全队列构成标准化</small></span>
+        <div class="btrack"><div class="bfill" style="width:20.83%"><span class="bval" style="left:calc(100% + .5rem);color:var(--ink)">20.83%</span></div><div class="bmark" style="left:75%" data-l="门槛 75%"></div></div></div>
+      <div class="blt"><span class="bl">复评状态一致率<br><small style="color:var(--faint)">同一评审重跑 100 个目标</small></span>
+        <div class="btrack"><div class="bfill" style="width:68%"><span class="bval" style="right:.5rem">68.00%</span></div><div class="bmark" style="left:80%" data-l="门槛 80%"></div></div></div>
+      <div class="blt"><span class="bl">复评一致率<br><small style="color:var(--faint)">Wilson 95% 下界</small></span>
+        <div class="btrack"><div class="bfill" style="width:58.34%"><span class="bval" style="right:.5rem">58.34%</span></div><div class="bmark" style="left:70%" data-l="门槛 70%"></div></div></div>
+    </div>
+    <figcaption><b>读法：</b>横条是实测值，竖线是预注册门槛。前两项衡量「评审与生产是否一致」，后两项衡量「评审自己是否稳定」。<b>关键：</b>后两项才是真正的坏消息——一把自己重复测两次只有 68% 一致的尺子，无法用来判定被测对象的对错。</figcaption>
+  </figure>
+
+  <div class="tw">
+    <table>
+      <caption>CT-11 修正后留出集完整闸门表（500 盲审 + 100 复评，2026-08-03 锁定）</caption>
+      <thead><tr><th>闸门</th><th class="num">实测</th><th class="num">要求</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>精确区间一致率 Wilson 95% 下界</td><td class="num">17.270%</td><td class="num">≥ 70%</td><td><span class="tag t-fail">FAIL</span></td></tr>
+        <tr><td>存量加权精确区间一致率</td><td class="num">20.827%</td><td class="num">≥ 75%</td><td><span class="tag t-fail">FAIL</span></td></tr>
+        <tr><td>复评状态一致率</td><td class="num">68.000%</td><td class="num">≥ 80%</td><td><span class="tag t-fail">FAIL</span></td></tr>
+        <tr><td>复评状态 Wilson 95% 下界</td><td class="num">58.337%</td><td class="num">≥ 70%</td><td><span class="tag t-fail">FAIL</span></td></tr>
+        <tr><td>评审判定「无法定日」占比</td><td class="num">9.400%</td><td class="num">≤ 25%</td><td><span class="tag t-pass">PASS</span></td></tr>
+        <tr><td>声称边界帧缺失数</td><td class="num">0</td><td class="num">0</td><td><span class="tag t-pass">PASS</span></td></tr>
+        <tr><td>越过普查截止的帧数</td><td class="num">0</td><td class="num">0</td><td><span class="tag t-pass">PASS</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>分歧长什么样：不是差几个月，而是根本不同意「有没有发生过跃变」</h3>
+  <div class="prose">
+    <p>我把已冻结的对照表拆开看了一下分歧的结构——这是诊断，不是重新解释结果，失败的留出集仍然是失败的。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>生产判定 × 评审判定交叉表（n = 500，行内百分比）</caption>
+      <thead><tr><th>生产判定</th><th class="num">n</th><th class="num">评审：已存在</th><th class="num">评审：始终不存在</th><th class="num">评审：跃变</th><th class="num">评审：无法定日</th></tr></thead>
+      <tbody>
+        <tr><td>已定区间 <code>done_appears</code></td><td class="num">325</td><td class="num">160 · 49.2%</td><td class="num">108 · 33.2%</td><td class="num">40 · 12.3%</td><td class="num">17 · 5.2%</td></tr>
+        <tr><td>普查期内安装</td><td class="num">121</td><td class="num">29 · 24.0%</td><td class="num">44 · 36.4%</td><td class="num">20 · 16.5%</td><td class="num">28 · 23.1%</td></tr>
+        <tr><td>左删失（史前已在）</td><td class="num">51</td><td class="num">32 · 62.7%</td><td class="num">17 · 33.3%</td><td class="num">0 · 0.0%</td><td class="num">2 · 3.9%</td></tr>
+        <tr><td>非单调歧义</td><td class="num">3</td><td class="num">1</td><td class="num">2</td><td class="num">0</td><td class="num">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="prose">
+    <p><strong>它说明什么。</strong>在生产明确认为「看到了跃变」的 325 个目标上，评审只有 12.3% 同意存在跃变，其余几乎对半分给了两个<em>相反</em>的绝对判断：49.2% 说「板子一直都在」，33.2% 说「板子从头到尾都没有」。更极端的是最后一行——在生产最有把握的「史前已在」那 51 个目标上，评审有三分之一说「根本没有板子」。</p>
+    <p><strong>为什么重要。</strong>一个真正在测量的仪器，误差应该表现为在正确答案附近的抖动，而不是在两个相反极端之间对半开。这个模式与已记录的 68% 复评不稳定性是一致的：它更像评审在证据不足时被影像条的第一帧牵着走，而不是生产管线系统性地错了。<strong>所以现在的证据既不能宣告生产合格，也不能宣告生产不合格。</strong></p>
+    <p><strong>补充的坏消息。</strong>我另外算了一下：在生产与评审<em>双方都给出了区间</em>的 212 个目标里，区间中点的绝对差中位数是 187 天，只有 52.4% 落在同一年、31.1% 落在同一季度。也就是说，即使把精度要求放宽到「年度」这种经济学分析常用的粒度，分歧依然接近抛硬币。<strong>「门槛定得太严、其实产品够用」这条退路不成立</strong>——我本来以为它成立，数据不支持。</p>
+  </div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section>
+  <div class="shead"><span class="snum">03</span><h2>为什么修不动：四条低成本补救路线全部被否</h2></div>
+
+  <div class="prose">
+    <p>按纪律，所有补救方案只能在<em>已经失败的那 500 个</em>上做开发和筛选，不许碰新封存的确认集（否则新集就被污染，失去一次性裁决能力）。08-03 到 08-04 试了四条，全部远低于 75% 门槛。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>补救候选方案的开发期表现（旧失败集，n = 40 或 500）</caption>
+      <thead><tr><th>候选方案</th><th>思路</th><th class="num">与评审一致率</th><th>结论</th></tr></thead>
+      <tbody>
+        <tr><td>恢复档序列打分</td><td>换 <code>gemini-3-flash</code>，整段序列一次性判读</td><td class="num">37.5%</td><td><span class="tag t-fail">KILL</span></td></tr>
+        <tr><td>参照锚定 Lite</td><td>给模型一张确认有板的参照图再判读</td><td class="num">30.0%</td><td><span class="tag t-fail">KILL</span></td></tr>
+        <tr><td>生产溯源规则</td><td>用状态/置信度/轮次等元数据训练逻辑回归与树模型，五折外样本</td><td class="num">52.1%</td><td><span class="tag t-fail">KILL</span></td></tr>
+        <tr><td>冻结 DINOv3-L-SAT 视觉头</td><td>卫星预训练骨干出嵌入 + 平衡线性头 + 单调变点重建</td><td class="num">56.3%</td><td><span class="tag t-fail">KILL</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="nt">这四条否决的真实含义</span>
+    <p>它们不只是「方案不够好」。第三条（溯源规则只能到 52.1%）说明<strong>现有生产元数据里根本没有足够信息去预测评审的判断</strong>——所以「调阈值」「改状态机」这类便宜修法不是可行方向。第四条（冻结视觉骨干只到 56.3%）说明<strong>换更强的视觉模型也未必能跨过门槛</strong>。但这两条都有一个共同的替代解释：如果标签本身有 32% 的噪声（68% 复评一致率），那么任何模型的上限本来就在 70% 附近，四条全挂恰恰是「标签不可信」的旁证，而不是「任务不可能」的证据。这正是为什么下一步必须先修尺子，而不是继续换模型。</p>
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section>
+  <div class="shead"><span class="snum">04</span><h2>当前关键路径：人工校准包已冻结 8 天，无人评审</h2></div>
+
+  <div class="prose">
+    <p>08-04 冻结了一个 100 个目标的人工校准包（<code>ct11_human_calibration_v1_20260804/</code>）：从失败的 500 里选，包含全部 32 个复评冲突样本，一目标一张原生细节图，盲发——不含目标 ID、生产结果、区间或旧标签。合约要求<strong>两位人类独立评审</strong>各自冻结一份 100 行结果，然后只对分歧行做仲裁，产出参照标签。</p>
+    <p><strong>它说明什么。</strong>这是整条链上唯一还没被否掉的路径：先用人类标签判定到底是生产错还是评审错，再据此选补救方向。<strong>为什么重要。</strong>它现在是唯一的关键路径——CT-12 发布、封存确认集开封、全城推广三件事全部挂在它后面。<strong>忽略的后果。</strong>08-04 至今（8 天）没有新证据落盘，这 8 天是纯粹的日历损失；同时下游的全城下载正在消耗配额和磁盘，等待时间越长，「已投入但可能白投」的沉没成本越大。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>被这一步阻塞的下游</caption>
+      <thead><tr><th>下游事项</th><th>状态</th><th>解锁条件</th></tr></thead>
+      <tbody>
+        <tr><td>CT-12 Top-52 发布</td><td><span class="tag t-hold">HOLD</span></td><td>补救方法锁定 + 新留出集通过 + owner 放行</td></tr>
+        <tr><td>封存确认集（500 + 100，<code>ct11_disjoint_holdout_v1_20260804</code>）</td><td><span class="tag t-hold">SEALED</span></td><td>补救方法先在旧集上锁定；此集只能开封一次</td></tr>
+        <tr><td>全城推广（111,801 目标）</td><td><span class="tag t-hold">HOLD</span></td><td>同上；下载环节见 §5</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section>
+  <div class="shead"><span class="snum">05</span><h2>下一步：全城推广的量级与前置条件</h2></div>
+
+  <div class="note act">
+    <span class="nt">进行中 · 由另一 agent 执行</span>
+    <p><strong>开普敦全城影像下载目前已在进行。</strong>这件事在排程上是合理的：下载与人工校准可以并行，能把等待窗口利用起来。但它与当前文档合约存在一处不一致需要处理——<code>RUN-cape-town-ct11-corrected-qa-2026-08-03.md</code> 与执行 tracker 里都明文写着「下游全开普敦 GEHI 取数/下载不得启动」。建议在 tracker 的执行日志里补一行 owner 决议，把它明确定性为<strong>「HOLD 期间授权的预取（prefetch）」</strong>，并写明预取<strong>不构成对 CT-11 的通过认定</strong>。这是文档诚信问题，不是技术问题：将来做审计或写方法附录时，会发现文档说不许下载而事实上下载了，那时无法自证是有意授权还是失控。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>全城外推的量级（按 Top-52 实测线性外推，倍数 5.21×）</caption>
+      <thead><tr><th>资源</th><th class="num">Top-52 实测</th><th class="num">全城外推</th><th>备注</th></tr></thead>
+      <tbody>
+        <tr><td>目标数</td><td class="num">21,453</td><td class="num">111,801</td><td>全量去重清单，覆盖 1,301 个源网格</td></tr>
+        <tr><td>下载候选切片</td><td class="num">1,178,227</td><td class="num">≈ 6,140,000</td><td>每目标 54.9 片（2019+ 窗口，普查后最多 3 期）</td></tr>
+        <tr><td>Gemini 打分调用</td><td class="num">≈ 55,000</td><td class="num">≈ 287,000</td><td>实测 A24 = 2.557、A48 = 2.694 次/目标</td></tr>
+        <tr><td>瓦片缓存磁盘</td><td class="num">21 GB</td><td class="num">≈ 110 GB</td><td>21 GB 含 JHB 线，需用 CT-only 实测重算</td></tr>
+        <tr><td>可用磁盘余量</td><td class="num" colspan="2">97 GB</td><td><span class="tag t-fail">不足</span> <code>/home</code> 已用 150/250 GB</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="prose">
+    <p><strong>它说明什么。</strong>全城不是「多跑一会儿」，是 5.21 倍规模：六百万片影像、近三十万次 API 调用。<strong>为什么重要。</strong>磁盘那一行是硬约束——线性外推的 ≈110 GB 已经超过 97 GB 余量，而 Top-52 在配额窗口上就已经触发过两次 429 暂停。<strong>忽略的后果。</strong>下载跑到 80% 时磁盘写满，会以最难诊断的方式失败（部分写入的瓦片、半截的清单），并且届时已经花掉的配额无法退回。</p>
+    <p>需要在正式启动全城打分前补做三件事：<strong>（一）</strong>用 CT-only 的实际占用重算存储预算，而不是用混了 JHB 的 21 GB；<strong>（二）</strong>确认磁盘扩容或分层归档方案（Top-52 的瓦片是否可在打分完成后压缩/下线）；<strong>（三）</strong>按实测 2.57 次/目标和配额窗口重排波次计划——Top-52 六个波次用了约三天，全城线性外推是两周量级的机时。</p>
+  </div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section>
+  <div class="shead"><span class="snum">06</span><h2>建议的行动顺序</h2></div>
+
+  <ol class="acts">
+    <li><span class="an">1</span><span class="at">立刻派发两份人工评审</span>
+      <span class="ad">这是唯一的关键路径，已空转 8 天。如果找不到第二位人类评审，也要现在就决定降级方案（例如一人评审 + 一个与生产完全独立的模型作第二读者），并把降级理由写进合约——降级是可以的，静默停摆不行。</span>
+      <span class="aw">阻塞：CT-12 · 封存集开封 · 全城打分</span></li>
+    <li><span class="an">2</span><span class="at">提交这 22 天的工作到 git</span>
+      <span class="ad">最后一次提交是 07-21，此后开普敦全部生产代码与文档（90 个未跟踪文件 + 29 个已修改文件，含全部 <code>build_ct_*.py</code> 与 RUN 文档）都只存在于工作区。这与项目「改变状态就要同步更新 tracker」的完成定义相冲突，且是纯粹的单点风险。成本几分钟，风险削减很大。</span>
+      <span class="aw">成本 低 · 风险削减 高</span></li>
+    <li><span class="an">3</span><span class="at">给正在进行的全城下载补一条 owner 决议</span>
+      <span class="ad">在执行 tracker 的证据日志里加一行，把它记为「HOLD 期间授权预取」，并显式声明与 CT-11 判定脱钩。同时按 §5 重算磁盘预算——这一条要在下载跑满 97 GB 之前做完。</span>
+      <span class="aw">与人工评审并行，不互相阻塞</span></li>
+    <li><span class="an">4</span><span class="at">人工标签到手后，先判定「谁错了」再选补救</span>
+      <span class="ad">两种结局的处理完全不同：若人工站在生产一侧，说明是评审工具不合格，需要重新设计参照物并重新预注册门槛（旧门槛作废但必须留档）；若人工站在评审一侧，说明生产管线确有系统性偏差，才需要真正的模型改造。现在做任何模型工作都是在赌一个还没揭晓的答案。</span>
+      <span class="aw">分叉点 · 决定后续数周的工作方向</span></li>
+    <li><span class="an">5</span><span class="at">补救方法锁定后，一次性开封确认集</span>
+      <span class="ad">封存的 500 + 100 与失败集零重叠、52/52 网格覆盖、已哈希锁定。它只能用一次——在方法锁定前开封会毁掉这批数据的裁决能力，届时再想要一个干净的确认集就得重新抽样重新渲染。</span>
+      <span class="aw">一次性资源 · 不可再生</span></li>
+    <li><span class="an">6</span><span class="at">顺手回填 tracker 的验收勾选</span>
+      <span class="ad">CT-05、CT-07、CT-08、CT-09、CT-10 已标记 done 且证据齐全，但清单勾选框仍是空的。不影响结论，但会让后续审计误判为「未验收」。</span>
+      <span class="aw">文档卫生 · 低优先级</span></li>
+  </ol>
+
+  <div class="note">
+    <span class="nt">另需留档的两个小口子</span>
+    <p><strong>其一，</strong>30 条历史账本行的审计缺口：早期写模式的续跑覆盖了这些成功调用的审计行，已用 <code>legacy_ledger_audit_gap_sidecar_20260803.json</code> 显式记录、未伪造补齐——处理方式是对的，但发布 README 里要提一句。<strong>其二，</strong>本简报 §2 末尾那组按天计的分歧统计（中位 187 天、52.4% 同年）是我在已冻结对照表上做的<em>诊断性</em>计算，不改变任何闸门判定，失败集仍然是失败集；如果要正式引用，应当写进一份 DATA 文档并注明是事后诊断而非预注册指标。</p>
+  </div>
+</section>
+
+<footer>
+  证据来源：<code>docs/replan_v2/RUN-cape-town-backdating-tracker-2026-07-24.md</code>（执行 tracker，最后更新 2026-08-04）、<code>RUN-cape-town-ct11-corrected-qa-2026-08-03.md</code>（闸门结果）、<code>RUN-cape-town-ct11-instrument-diagnosis-2026-08-03.md</code>（仪器缺陷诊断）、<code>RUN-cape-town-ct11-human-calibration-2026-08-04.md</code>（人工校准合约）、交付物 <code>deliverable_20260803_lite_top52/{gates,release_manifest}.json</code>，以及对 <code>ct11_corrected_joined.csv</code> 与 <code>ct_top52_install_dated_20260803_lite_v2.csv</code> 的直接统计。
+  <br><br>
+  口径提醒：本页所有一致率均为 <b>Codex 复评一致率</b>，不是人类标注者间信度，也不是物理装机日期的准确率；语义为「首次可见外观区间」（first-visible-appearance interval），仅对已冻结的 52 网格高密度队列成立，不可外推为开普敦全城精度。
+</footer>
+
+</div>
+</body>
+</html>

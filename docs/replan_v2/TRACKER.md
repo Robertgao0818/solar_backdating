@@ -3,6 +3,9 @@
 Source PRD: [`../install_date_optimization_v2_prd.md`](../install_date_optimization_v2_prd.md)
 (READY, 2026-07-03) · Source analysis: [`../install_date_optimization_replan_2026-07-03.md`](../install_date_optimization_replan_2026-07-03.md)
 
+Cape Town run-specific plan: [`RUN-cape-town-backdating-plan-2026-07-24.md`](RUN-cape-town-backdating-plan-2026-07-24.md) ·
+execution tracker: [`RUN-cape-town-backdating-tracker-2026-07-24.md`](RUN-cape-town-backdating-tracker-2026-07-24.md)
+
 **Goal:** reproducible-and-bounded-accurate install dates via five layered
 phases — deterministic decoder (P0), provenance + verdict store (P1), external
 accuracy channel (P2), corrected student distillation (P3, governed by the
@@ -19,8 +22,9 @@ python3 docs/replan_v2/render_tracker.py   # writes docs/replan_v2/tracker.html
 
 ## Status vocabulary
 
-`Status:` line in each issue file: `ready-for-agent` · `ready-for-human` ·
-`in-progress` · `done` · `wontfix`. An issue is **effectively blocked** when
+`Status:` line in each issue file: `ready-for-agent` · `in-progress` · `done` ·
+`wontfix`. Codex review is an agent-executed review mode; an issue is
+**effectively blocked** when
 any dependency is not `done` (computed by the renderer, not hand-maintained).
 
 ## Slices
@@ -37,7 +41,7 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 8 | [CoJ audit pilot (tracer)](ISSUE-08-coj-audit-pilot.md) | 2 | done | — |
 | 9 | [CoJ audit cohort scale](ISSUE-09-coj-audit-cohort.md) | 2 | done | 8 |
 | 10 | [Gold-set tooling (jump-point UI)](ISSUE-10-goldset-tooling.md) | 2 | done | — |
-| 11 | [Gold-set adjudication + accuracy report](ISSUE-11-goldset-adjudication-run.md) | 2 | ready-for-human | 9, 10 |
+| 11 | [Codex-reviewed reference set + QA report](ISSUE-11-goldset-adjudication-run.md) | 2 | ready-for-agent | 9, 10 |
 | 12 | [Student PRD amendments (D12)](ISSUE-12-student-prd-amendments.md) | 3 | done | — |
 | 13 | [GEHI availability-catalog cache](ISSUE-13-gehi-availability-cache.md) | 4 | done | — |
 | 14 | [P4-E student-selected windows](ISSUE-14-p4e-student-selected-windows.md) | 4 | ready-for-agent | 5, 12, 13 (+dinov3 slice 3) |
@@ -55,6 +59,7 @@ any dependency is not `done` (computed by the renderer, not hand-maintained).
 | 26 | [Census-date scan-window cutoff (download + decoder semantics)](ISSUE-26-census-cutoff-scan-window.md) | 4 | done | — |
 | 27 | [Anchors-table v2 clean rebuild (offset fix + source_grids recompute + legacy builder archived)](ISSUE-27-anchors-v2-clean-rebuild.md) | 4 | done 2026-07-18 — tests re-verified, owner approved pre-flight QA (`.approved` written) | — |
 | 28 | [Gemini per-model quota exhaustion — gemini-3-flash fallback evaluation](ISSUE-28-gemini-quota-fallback-eval.md) | 4 | open — owner evaluation pending | — |
+| 29 | [CoJ 2019/2023 fixed-epoch external robustness check for RUN 3](ISSUE-29-coj-run3-external-robustness.md) | 2 | ready-for-agent — execution deferred until DINO R4/R5 closes | dinov3 slice 10 R4/R5 closure (sequencing only) |
 
 Slice 27 note (2026-07-18): opened from the build-chain audit + stale-offset
 postmortem ([DATA-fullscan-run2-buildchain-audit-2026-07-18.md](DATA-fullscan-run2-buildchain-audit-2026-07-18.md)).
