@@ -50,6 +50,15 @@ owner's bounded baseline + one-correction-per-failed-gate stop discipline are
 locked. Slice 10 remains 🔄: next mainline step is the R4 implementation slice;
 full training and R5 remain not started.
 
+**Slice 10 R4 A1 update (2026-08-03):** real materialization found 2,146
+empty-`K_i` `done_appears` anchors. The owner approved the conservative
+frame-only amendment before any seed/test result. The frozen 4,292-row sidecar
+sets only the two exact boundary frames to `uninformative`, consumes no
+V3/V4/V5/CoJ/CT/test labels, and independently leaves
+`empty_k_anchors=0`. Sidecar SHA `fefac6fe…`; the binding R4 prereg now names
+all exact hashes. Formal training remains not started pending the isolated
+clean implementation lock and fresh preflight.
+
 ## Dependency graph
 
 ```mermaid
@@ -134,6 +143,15 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
   field — on disk the field is `confidence`.
 
 ## Progress log
+
+- 2026-08-03 — **R4 Amendment A1 owner-confirmed; conservative empty-`K_i`
+  sidecar frozen; training still not started.** Population 2,146 anchors / 4,292
+  boundary rows (train 1,593; calibration 553; test 0), all exact boundary
+  labels fail closed to `uninformative`, affected anchors are frame-loss-only,
+  and all other rows remain unchanged. Independent application leaves 30,818
+  interval-eligible anchors and `empty_k_anchors=0`. Sidecar SHA `fefac6fe…`.
+  Next gate is the owner-authorized isolated clean implementation commit and
+  fresh clean-lock preflight.
 
 - 2026-07-20 — **Run3-native R4 prereg frozen; training not started.** Owner
   approved proceeding despite T0's aggregate-TVD premise failure because

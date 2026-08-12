@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "amendment_id": "r4_empty_k_conservative_abstain_v1",
+  "parent_prereg": "docs/dinov3_scorer/RUN-r4-training-calibration-prereg-2026-07-20.md",
+  "population": {
+    "selection": "train_or_calibration_done_appears_with_empty_K_i_under_gap_days_45",
+    "expected_anchors": 2146,
+    "expected_boundary_rows": 4292
+  },
+  "policy": {
+    "interval_loss_eligible": false,
+    "earlier_boundary_override": "uninformative",
+    "later_boundary_override": "uninformative",
+    "non_boundary_frames_unchanged": true,
+    "r0_manifest_unchanged": true,
+    "v3_v4_v5_labels_consumed": false,
+    "test_split_consumed": false
+  },
+  "owner_confirmation": {
+    "confirmed": true,
+    "confirmed_at_utc": "2026-08-03T09:00:53Z",
+    "confirmation_evidence": "User message: 确认 R4 保守修订和隔离提交"
+  }
+}

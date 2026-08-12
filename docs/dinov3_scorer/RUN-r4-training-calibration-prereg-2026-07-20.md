@@ -201,9 +201,10 @@ otherwise                                -> label=uninformative; q_effective=0;
 In particular, `target_localized=True and abstain=True` still abstains. Missing
 TLO is the approved bridge state and is not silently treated as localization
 failure. The current R4 v1 input lock has no full-corpus TLO sidecar and freezes
-`tlo_source=null`; therefore all rows retain R0 `label_v1` with
-`localization_pending=true`. This preserves the approved Phase-0 bridge
-semantics but does **not** claim that v1 absent labels have independent
+`tlo_source=null`; therefore rows retain R0 `label_v1` with
+`localization_pending=true`, except for the exact owner-approved empty-`K_i`
+boundary overrides in Amendment A1 below. This preserves the approved Phase-0
+bridge semantics but does **not** claim that v1 absent labels have independent
 per-frame localization proof.
 
 Quality target is 1 for effective `present/absent`, 0 for effective
@@ -227,6 +228,42 @@ The expected anchor counts are respectively 18,340 / 17,395 / 2,119 / 3,315 /
 `right_censored`; support remains in the approved decoder but is not fabricated
 for this corpus. `build_k_i` uses date-interval overlap with the student's cells,
 never teacher/student epoch-index identity, and an empty `K_i` is fatal.
+
+### Amendment A1 — owner-approved conservative empty-`K_i` sidecar (2026-08-03)
+
+The real pre-start materialization found exactly 2,146 `done_appears` anchors
+whose two teacher boundary dates collapse into one frozen 45-day student epoch,
+making `K_i` empty. Owner evidence `确认 R4 保守修订和隔离提交` was recorded at
+`2026-08-03T09:00:53Z`, before any valid seed result or R5/test access.
+
+The binding additive sidecar is:
+
+```text
+~/zasolar_data/geid_temporal/run3_native_line_2026-07/
+  r4_empty_k_conservative_sidecar_v1/frame_label_overrides.parquet
+```
+
+- sidecar SHA-256:
+  `fefac6fe234e2a9e2c21ea77aa0bd7cc8b788ff19e89f89310cf0171da23a82a`;
+- sidecar run lock SHA-256:
+  `ba083fcb8587254836ee78a493ff05802a184996f86f45a2f89089c0cbc6dd35`;
+- artifact manifest SHA-256:
+  `8cfcec2047415192bec12883b7496502f24dead62f23c5cf76ae472f76cbeb49`;
+- amendment-config SHA-256:
+  `199881012234e66472a272e8b718599e729d07f9b3159992c4e475f45f1ac576`.
+
+It contains 4,292 unique boundary rows for 2,146 anchors: 1,593 train and
+553 calibration, with zero test anchors. For each affected anchor, both exact
+teacher boundary frames become `uninformative`, the anchor becomes
+`interval_loss_eligible=false`, and every non-boundary row remains unchanged.
+The sidecar consumes no V3/V4/V5, CoJ, CT, repeat-panel, or R5/test label and
+does not rewrite R0. Independent application reconciled `empty_k_anchors=0`
+over the remaining 30,818 interval-eligible train/calibration anchors.
+
+This A1 amendment is a pre-start input-contract repair: it changes no decoder,
+head, optimizer, seed, calibration role, threshold, or acceptance gate and does
+not consume the post-R5 correction budget in §9. The loader must verify the
+sidecar SHA from its pre-run lock before any seed starts.
 
 ## 4. Decoder and loss lock
 
