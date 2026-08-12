@@ -36,6 +36,8 @@ directly, since `poster` injection bypasses the transport layer entirely.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any, Callable
 
 import pytest
@@ -407,6 +409,109 @@ def test_limiter_reacquired_before_every_retry(monkeypatch: pytest.MonkeyPatch) 
     )
     assert attempts["n"] == 3
     assert limiter.wait_calls == 3  # once per attempt, including the two retries
+
+
+def test_limiter_has_no_startup_burst_from_first_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A large worker pool must not be dumped into sub2api at startup.
+
+    The production contract is a strict shared request-start pacer from request
+    one.  At 8 QPS, the 481st admitted request may start at 60 seconds, but no
+    two starts may share the initial instant or any later 125 ms slot.
+    """
+    now = 0.0
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(gsir.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(gsir.time, "sleep", fake_sleep)
+
+    limiter = RateLimiter(8, max_in_flight=0)
+    starts: list[float] = []
+    for _ in range(481):
+        limiter.acquire()
+        starts.append(fake_monotonic())
+        limiter.release()
+
+    assert starts[0] == pytest.approx(0.0)
+    assert starts[1] == pytest.approx(0.125)
+    assert starts[-1] == pytest.approx(60.0)
+    assert all(
+        later - earlier == pytest.approx(0.125)
+        for earlier, later in zip(starts, starts[1:])
+    )
+
+
+def test_limiter_caps_simultaneous_http_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QPS pacing must be paired with an explicit in-flight cap.
+
+    A slow gateway response can leave many worker threads inside requests even
+    when request starts are paced.  The CT production route uses this cap to
+    avoid exhausting the gateway's per-user concurrency slots.
+    """
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_post(*_args: Any, **_kwargs: Any) -> FakeResponse:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return FakeResponse(200, json_data=_native_ok("ok"))
+
+    monkeypatch.setattr(gsir.requests, "post", fake_post)
+    limiter = RateLimiter(None, max_in_flight=2)
+    errors: list[BaseException] = []
+
+    def run_one() -> None:
+        try:
+            post_native_generate_content(
+                base_url="https://stub.example",
+                native_path="/v1beta",
+                api_key="k",
+                model="m",
+                prompt="hi",
+                image_paths=[],
+                max_tokens=None,
+                timeout=30,
+                limiter=limiter,
+            )
+        except BaseException as exc:  # pragma: no cover - assertion below reports it
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_one) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert max_active <= 2
+
+
+def test_limiter_slot_released_when_before_attempt_fails() -> None:
+    limiter = RateLimiter(None, max_in_flight=1)
+
+    with pytest.raises(RuntimeError, match="stop"):
+        gsir._post_with_transport_retry(
+            lambda: FakeResponse(200, json_data=_native_ok("unreachable")),
+            limiter=limiter,
+            before_attempt=lambda _attempt: (_ for _ in ()).throw(RuntimeError("stop")),
+        )
+
+    # If the fail-closed callback leaked the slot, this acquire would block.
+    limiter.acquire()
+    limiter.release()
 
 
 # --- integration: score_batch_with_fallback does not fossilize a transient ---
