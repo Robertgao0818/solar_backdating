@@ -7,8 +7,8 @@ Blocked by: none — ISSUE-09 contradiction flags are now AVAILABLE (`cohort_aud
 Agent-side build + tests + 10-anchor dry run complete 2026-07-05 (see
 `docs/replan_v2/ISSUE-10-design-2026-07-05.md` and the progress note below).
 One BLOCKING integration defect found in dry run (WP-C/WP-A chip-layout mismatch)
-must be fixed before ISSUE-11 adjudication; human dry-run adjudication + timing
-capture still pending.
+must be fixed before ISSUE-11 adjudication; the future review operator is now
+Codex (see `CODEX_VISUAL_REVIEW_PROTOCOL.md`).
 
 ## Parent
 
@@ -16,7 +16,7 @@ capture still pending.
 
 ## What to build
 
-Everything needed so a human can adjudicate the **jump critical point only**
+Everything needed so Codex can adjudicate the **jump critical point only**
 (owner decision 2026-07-03 — no whole-stack review):
 
 1. **Strip UI**: extend the existing per-anchor chip-strip QA HTML builder to
@@ -27,7 +27,7 @@ Everything needed so a human can adjudicate the **jump critical point only**
    machine-readable verdict manifest. Self-contained HTML (works offline).
 2. **Stratified sampler**: seeded, reproducible sampling of n=300–500 anchors
    by terminal status × confidence × audit-contradiction flag, with a 20%
-   double-annotation overlap assignment.
+   second-pass Codex review assignment.
 3. **Window chip re-download**: idempotent, LLM-free re-render of the window
    frames from retained scan metadata (chips were deleted in the disk
    cleanup); unrecoverable frames (imagery availability shifted) are dropped
@@ -89,11 +89,10 @@ with no dated rounds, so they render empty strips (no crash) — flag for
 ISSUE-11 that a forced-dispute anchor may currently be unadjudicable.
 
 **What remains before ISSUE-11 can start:** (1) fix the WP-C/WP-A chip-layout
-mismatch above, (2) a human runs the dry-run browser step, adjudicates the
-16 sampled anchors, downloads the verdict manifest, and the resulting
-`adjudication_seconds` values feed the n=300-vs-500 sample-size decision,
-(3) decide the `c0000542`/`c0009873` degenerate-scan_state handling for
-ISSUE-11's forced-dispute completeness claim.
+mismatch above, (2) Codex runs the dry-run browser/strip review, exports the
+16 sampled verdicts, and records the review-run metadata, and (3) decide the
+`c0000542`/`c0009873` degenerate-scan_state handling for ISSUE-11's
+forced-dispute completeness claim.
 
 **Update 2026-07-05 (integration fix):** DO treat the blocking finding as
 resolved — WP-C now normalizes each recovered scan chip to the flat

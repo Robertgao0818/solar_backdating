@@ -13,7 +13,10 @@ phases before and after it. Issues for this PRD live in
 
 Owner decisions locked 2026-07-03: sample-repair API budget **approved**; gold
 set adjudicates the **jump critical point only** (transition window, not whole
-stacks); student-head training compute = **RunPod first**.
+stacks); student-head training compute = **RunPod first**. Owner decision
+2026-08-01: future review is performed by Codex visual review over frozen local
+artifacts; no human annotation is required. This is an external AI review
+channel, not an independent human gold standard.
 
 ## Problem Statement
 
@@ -68,14 +71,14 @@ and composes into one endgame architecture:
   the version-drift kill *before* any student model exists, makes re-runs and
   multi-rep protocols nearly free, and turns "which model dated this roof?"
   into a lookup.
-- **Phase 2 — an accuracy channel that breaks the closed loop.** Use the
+- **Phase 2 — an external review channel that breaks the closed loop.** Use the
   municipal true-flight-date aerial archive (15 cm, in-domain for the existing
   detector) to automatically bracket every dated anchor with independent dated
-  presence bits, then have a human adjudicate **only the jump critical point**
-  (the claimed absent→present transition window) for a stratified sample of
-  300–500 anchors. This converts fidelity-only claims into a citable
-  first-visible-appearance accuracy claim with a Wilson confidence interval,
-  and arbitrates the systematic disagreements no internal metric can.
+  presence bits, then have Codex visually adjudicate **only the jump critical
+  point** (the claimed absent→present transition window) for a stratified sample
+  of 300–500 anchors. This produces a structured external-AI QA result with a
+  Wilson interval and arbitrates systematic disagreements no internal metric
+  can. It does not create a human-gold or physical-install-date accuracy claim.
 - **Phase 3 — the frozen student, on corrected inputs.** Proceed with the
   DINOv3-L-SAT distillation per its existing PRD, amended: corrected cohort
   counts, the chip-manifest dependency made explicit, RunPod as training
@@ -139,16 +142,16 @@ and composes into one endgame architecture:
 16. As an evaluator, I want the audit self-gated on known-sign strata and on
     monotone consistency with the existing present-clamp, so that the audit's
     own noise floor is measured before it judges the pipeline.
-17. As a human annotator, I want to adjudicate only the jump critical point —
-    the claimed latest-absent and earliest-present frames plus one or two
-    flanks, with true-dated aerial overlays — so that a 300–500-anchor gold
-    set costs hours, not weeks.
-18. As a human annotator, I want three verdicts (CONFIRM / SHIFT with a
-    corrected bracket / UNDATABLE) and a portable strip UI, so that
-    adjudication is fast, unambiguous, and recorded in a machine-readable
-    form.
-19. As a researcher, I want 20% of the gold set double-annotated, so that
-    inter-annotator agreement bounds the gold set's own quality.
+17. As the review operator, I want Codex to adjudicate only the jump critical
+    point — the claimed latest-absent and earliest-present frames plus one or
+    two flanks, with true-dated aerial overlays — so that a 300–500-anchor
+    Codex-reviewed reference set is bounded and reproducible.
+18. As the review operator, I want three verdicts (CONFIRM / SHIFT with a
+    corrected bracket / UNDATABLE) and a portable strip UI, so that Codex review
+    is blind, fast, unambiguous, and recorded in a machine-readable form.
+19. As a researcher, I want 20% of the review set re-run in a fresh blind Codex
+    pass, so that review-repeat agreement measures the stability of the review
+    instrument without being mislabeled as inter-annotator agreement.
 20. As a researcher, I want the gold sample stratified by terminal status,
     confidence, and audit-contradiction flag, so that the accuracy claim
     covers the strata where methods disagree, not just easy cases.
@@ -315,18 +318,20 @@ JHB inventory: fetch anchor-centered chips from the municipal 2019 and 2023
 aerial layers (true single flight dates, 15 cm), score PV presence with the
 existing census detector / classifier (in-domain GSD), and emit per-anchor
 dated presence bits plus a contradiction flag against the inferred interval.
-Only high-margin presence calls count; low-margin calls route to the human
-queue. Self-gates: known-sign strata (>95% expected agreement) and monotone
+Only high-margin presence calls count; low-margin calls route to the Codex
+review queue. Self-gates: known-sign strata (>95% expected agreement) and monotone
 consistency with the Vexcel present-clamp.
 
-**D10 — Gold set (Phase 2b, owner decision).** Human adjudication of the
-**jump critical point only**: the claimed latest-absent and earliest-present
-frames ±1–2 flanks, overlaid with municipal true-date chips, the Vexcel chip,
-and any Wayback capture in-window. Verdicts CONFIRM / SHIFT (corrected
-bracket) / UNDATABLE. n = 300–500, stratified by terminal status × confidence
-× audit-contradiction flag; 20% double-annotated. Tooling extends the existing
-per-anchor chip-strip QA HTML builder. Output metric: first-visible-appearance
-interval-hit-rate with Wilson 95% CI (±3.5–5.5 pp at target n).
+**D10 — Codex-reviewed reference set (Phase 2b, owner decision).** Codex visual
+adjudication of the **jump critical point only**: the claimed latest-absent and
+earliest-present frames ±1–2 flanks, overlaid with municipal true-date chips,
+the Vexcel chip, and any Wayback capture in-window. Verdicts CONFIRM / SHIFT
+(corrected bracket) / UNDATABLE. n = 300–500, stratified by terminal status ×
+confidence × audit-contradiction flag; 20% receives a fresh blind Codex pass.
+Tooling extends the existing per-anchor chip-strip QA HTML builder. Output
+metrics: Codex-reviewed bracket agreement and Codex repeat agreement, each with
+Wilson 95% CI. These metrics are not human inter-annotator agreement or physical
+install-date accuracy.
 
 **D11 — Claim phrasing.** All accuracy claims are phrased as
 first-visible-appearance under imagery-cadence censoring; physical install
@@ -355,7 +360,9 @@ detected transition, and anomaly patterns; the escalation set is a pure
 function of student scores (bounded, enumerable, cacheable; expected 7–18% of
 frames). **D** — teacher exits the hot path; a frozen stratified sentinel
 cohort is re-scored on a schedule and student-vs-current-teacher agreement is
-tracked as a drift time series; a human queue remains for high-value anchors.
+tracked as a drift time series; a Codex review queue remains for high-value
+anchors. The review protocol is
+[`replan_v2/CODEX_VISUAL_REVIEW_PROTOCOL.md`](replan_v2/CODEX_VISUAL_REVIEW_PROTOCOL.md).
 The escalation policy is part of the scorer-side composition at the
 PresenceScorer seam (owner declined a third seam).
 
