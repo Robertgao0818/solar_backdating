@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RUN 3 vs delivery scope v1</title>
+<style>
+:root{--page:#f9f9f7;--surface:#fff;--ink:#10100f;--muted:#66645f;--grid:#deddd6;--blue:#2a78d6;--green:#138a4a;--amber:#c77b00;--pink:#c95c87}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1000px;margin:auto;padding:2rem 1.4rem 4rem}header{border-bottom:1px solid var(--grid);padding-bottom:1.2rem;margin-bottom:1.8rem}
+h1{font-size:1.55rem;margin:.1rem 0 .4rem}h2{font-size:1.1rem;border-top:1px solid var(--grid);padding-top:1.2rem;margin:2rem 0 .8rem}
+.meta{color:var(--muted)}.tiles{display:flex;gap:.7rem;flex-wrap:wrap}.tile{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:.8rem 1rem;min-width:155px;flex:1}
+.n{display:block;font-size:1.45rem;font-weight:700}.lbl{color:var(--muted);font-size:.82rem}.grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}@media(max-width:760px){.grid{grid-template-columns:1fr}}
+section,figure,.note{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:1rem 1.1rem}
+table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{text-align:left;padding:.42rem .5rem;border-bottom:1px solid var(--grid);vertical-align:top}th{color:var(--muted);font-weight:600}.num{text-align:right;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;border-radius:4px;padding:.08rem .35rem;font-size:.78rem}.main{background:#e7f0ff;color:#15549f}.side{background:#fff1d7;color:#875300}.cal{background:#f8e6ee;color:#8d3159}
+code{background:#f0f0eb;border:1px solid var(--grid);border-radius:3px;padding:.05rem .25rem;font-size:.88em}
+</style>
+</head>
+<body><div class="wrap">
+<header>
+<h1>JHB rooftop-solar delivery comparison</h1>
+<div class="meta">RUN 3 production deliverable (2026-07-18) versus delivery scope v1 (2026-07-24).</div>
+<div class="meta">This is a scope comparison, not a row-for-row replacement claim.</div>
+</header>
+
+<h2>Headline</h2>
+<section>
+<p><strong>RUN 3</strong> is the full 41,393-anchor economic inventory. <strong>Delivery scope v1</strong> is a
+targeted 2,146-row short-window correction package derived from V4/V5 review results. The new package is
+additive and should not replace the RUN 3 full-corpus file.</p>
+</section>
+
+<div class="tiles" style="margin-top:1rem">
+<div class="tile"><span class="n">41,393</span><span class="lbl">RUN 3 full anchors</span></div>
+<div class="tile"><span class="n">2,146</span><span class="lbl">new inherited short-window rows</span></div>
+<div class="tile"><span class="n">1,397</span><span class="lbl">new clean install intervals</span></div>
+<div class="tile"><span class="n">200</span><span class="lbl">CoJ high-thinking calibration only</span></div>
+</div>
+
+<h2>What changed</h2>
+<table>
+<tr><th>Dimension</th><th>RUN 3</th><th>Delivery scope v1</th></tr>
+<tr><td>Population</td><td>Full JHB inventory, 41,393 targets.</td><td>2,146 inherited short-window rows; targeted correction layer.</td></tr>
+<tr><td>Primary unit</td><td>One install-date record per target.</td><td>One reviewed short interval per anchor, with additive frame/censoring sidecars.</td></tr>
+<tr><td>Imagery/model</td><td><code>gemini-3.1-flash-lite</code>, merged GEHI/Wayback changepoint decoder.</td><td>V4/V5 low-thinking recovery plus <code>gemini-3.6-flash-high</code> on a 200-anchor CoJ calibration panel.</td></tr>
+<tr><td>Primary date evidence</td><td>Dated, census upper-bound, left-censored, or undated.</td><td>Only explicit absent→present brackets enter the clean interval table.</td></tr>
+<tr><td>Geometry output</td><td>CSV + GPKG, full inventory geometry.</td><td>Parquet sidecars and provenance; no R0 rewrite and no replacement GPKG.</td></tr>
+</table>
+
+<h2>Coverage counts</h2>
+<div class="grid">
+<section>
+<h3>RUN 3</h3>
+<table>
+<tr><td>Dated real bracket</td><td class="num">18,783</td></tr>
+<tr><td>Census upper-bound</td><td class="num">15,664</td></tr>
+<tr><td>Bounded total</td><td class="num">34,447</td></tr>
+<tr><td>Left-censored</td><td class="num">4,058</td></tr>
+<tr><td>Undated</td><td class="num">2,888</td></tr>
+</table>
+</section>
+<section>
+<h3>Delivery scope v1</h3>
+<table>
+<tr><td><span class="tag main">V4 strict confirmed</span></td><td class="num">888</td></tr>
+<tr><td><span class="tag main">V5 boundary moved</span></td><td class="num">412</td></tr>
+<tr><td><span class="tag main">V5 same interval</span></td><td class="num">97</td></tr>
+<tr><td><strong>Clean interval total</strong></td><td class="num"><strong>1,397</strong></td></tr>
+<tr><td><span class="tag side">Censored/manual/unreviewable sidecars</span></td><td class="num">687</td></tr>
+<tr><td>Non-strict V4 rows</td><td class="num">3</td></tr>
+<tr><td>V4 unreviewable</td><td class="num">59</td></tr>
+</table>
+</section>
+</div>
+
+<h2>Interpretation for economics</h2>
+<section>
+<ul>
+<li>Keep RUN 3 as the full-corpus baseline.</li>
+<li>Use <code>clean_install_intervals.parquet</code> as a conservative, interval-censored correction layer with 1,397 rows.</li>
+<li>Do not treat the 97 same-interval rows as boundary improvements; retain <code>boundary_moved=false</code>.</li>
+<li>Keep left/right-censored and manual-review records outside the main interval loss, but include them for survival/censoring analyses.</li>
+<li>The 200 high-thinking CoJ rows are calibration evidence only; they are not a population-wide replacement for RUN 3.</li>
+</ul>
+</section>
+
+<div class="note" style="margin-top:1rem">
+<strong>Provenance.</strong> The delivery package is
+<code>delivery_scope_v1</code>. Its artifact manifest SHA256 is
+<code>88a83958532ddef4ec047fbf55a63b7438add947a888d0edf3a62ee338ee8b6f</code>.
+The prior RUN 3 descriptive report remains
+<code>descriptive_stats_2026-07-18-run3.html</code>.
+</div>
+</div></body></html>
