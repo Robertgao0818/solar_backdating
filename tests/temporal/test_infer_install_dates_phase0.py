@@ -125,6 +125,25 @@ def test_done_appears_picks_latest_absent_and_earliest_present() -> None:
     assert interval.confidence == "medium"
 
 
+def test_post_census_reference_rows_do_not_change_production_inference() -> None:
+    pre = [
+        _result("2023-01-01", present=False),
+        _result("2024-01-01", present=True),
+    ]
+    with_reference = _state_with(
+        "done_appears",
+        [*pre, _result("2025-06-01", present=False), _result("2025-12-01", present=True)],
+    )
+    with_reference.census_date = "2025-01-31"
+    without_reference = _state_with("done_appears", pre)
+    without_reference.census_date = "2025-01-31"
+
+    got = infer_one(with_reference, census_mid_date=date(2025, 1, 31), scan_state_path=Path("/x.json"))
+    expected = infer_one(without_reference, census_mid_date=date(2025, 1, 31), scan_state_path=Path("/x.json"))
+
+    assert got.as_row() == expected.as_row()
+
+
 def test_done_installed_during_census_uses_census_upper_bound() -> None:
     state = _state_with(
         "done_installed_during_census",

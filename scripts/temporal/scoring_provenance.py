@@ -351,7 +351,12 @@ class ProvenanceRecordingScorer:
             provenance_context: Mapping[str, Any] | None = None,
             **kwargs: Any,
         ) -> list[Any]:
-            observations = inner_batch(picks, config=config, **kwargs)
+            # ``routing_salt_seed`` is a verdict/provenance identity extra,
+            # not a Gemini transport argument.  Keep it in this wrapper's
+            # context, but never leak it into a raw scorer callable.
+            inner_kwargs = dict(kwargs)
+            inner_kwargs.pop("routing_salt_seed", None)
+            observations = inner_batch(picks, config=config, **inner_kwargs)
             columns, leftover = self._resolve_context(provenance_context)
             by_index = {getattr(p, "chip_index", None): p for p in picks}
             for obs in observations:

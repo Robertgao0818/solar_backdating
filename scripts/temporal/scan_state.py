@@ -23,7 +23,8 @@ from typing import Any
 
 from scripts.temporal import presence_scorer
 
-SPEC_VERSION = "phase0_v2"
+SPEC_VERSION = "phase0_v3_reference_only"
+LEGACY_SPEC_VERSIONS = frozenset({"phase0_v2"})
 LEGACY_V1_GEOMETRY_VERSION = "legacy-v1"
 
 ROUND_TYPES = {"initial", "walk_back", "bisection", "tail", "anchor_recovery"}
@@ -64,6 +65,7 @@ class Pick:
     version: int | str
     requested_zoom: int
     provider: str = "TM"
+    reference_only: bool = False
 
 
 @dataclass
@@ -80,6 +82,7 @@ class RoundResult:
     chip_path: str = ""
     actual_zoom: int | None = None
     provider: str = "TM"
+    reference_only: bool = False
 
 
 @dataclass
@@ -139,10 +142,17 @@ def now_iso() -> str:
 
 def create_scan_state(anchor: dict[str, Any]) -> ScanState:
     ts = now_iso()
+    # Frozen CT v1 anchor manifests use ``source_grid`` as the provenance
+    # column; older adaptive-scan manifests called the same value ``grid_id``.
+    # Prefer the legacy key when present for byte-compatible existing callers,
+    # then adapt the CT schema at the state boundary.
+    grid_id = anchor.get("grid_id") or anchor.get("source_grid") or anchor.get("centroid_grid")
+    if not grid_id:
+        raise KeyError("anchor has no grid_id/source_grid/centroid_grid")
     return ScanState(
         anchor_id=str(anchor["anchor_id"]),
         region_key=str(anchor["region_key"]),
-        grid_id=str(anchor["grid_id"]),
+        grid_id=str(grid_id),
         started_at=ts,
         updated_at=ts,
         geometry_version=str(
@@ -155,12 +165,12 @@ def state_path_for(anchor_id: str, scan_states_dir: Path) -> Path:
     return scan_states_dir / f"{anchor_id}.json"
 
 
-def load_scan_state(path: Path) -> ScanState | None:
+def load_scan_state(path: Path, *, allow_legacy: bool = True) -> ScanState | None:
     if not path.exists():
         return None
     raw = json.loads(path.read_text(encoding="utf-8"))
     spec = raw.get("spec_version")
-    if spec != SPEC_VERSION:
+    if spec != SPEC_VERSION and not (allow_legacy and spec in LEGACY_SPEC_VERSIONS):
         raise ValueError(
             f"scan_state spec_version mismatch at {path}: file={spec!r} expected={SPEC_VERSION!r}"
         )
@@ -230,9 +240,13 @@ def save_scan_state(state: ScanState, path: Path) -> None:
         for pick in rnd.get("picks", []):
             if pick.get("provider") == "TM":
                 pick.pop("provider", None)
+            if pick.get("reference_only") is False:
+                pick.pop("reference_only", None)
         for result in rnd.get("results", []):
             if result.get("provider") == "TM":
                 result.pop("provider", None)
+            if result.get("reference_only") is False:
+                result.pop("reference_only", None)
     fd, tmp_path = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

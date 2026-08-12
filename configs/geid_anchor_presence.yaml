@@ -54,5 +54,8 @@ adaptive_scan:
   post_census_reference_frames: 3
   catalog_max_date: "2025-12-31"
   availability_parallel: 4
-  gemini_max_dates_per_call: 5
+  # Five pre-census evidence picks plus one explicit reference-only frame in
+  # the CT-52 primary instrument.  The latter is never adaptive evidence.
+  initial_reference_slots: 1
+  gemini_max_dates_per_call: 6
   max_anchor_recovery_rounds: 2

@@ -228,6 +228,7 @@ class _FakeGeminiScorer:
     def batch(self):
         def _batch(picks, *, config, audit_writer=None, census_mid_date_iso=None, routing_salt=None, **kw):
             assert "provenance_context" not in kw
+            assert "routing_salt_seed" not in kw
             self.batch_kwargs.append({"config": config, "audit_writer": audit_writer, **kw})
             return [
                 GeminiObservation(
@@ -319,7 +320,13 @@ def test_wrapper_batch_records_both_model_tiers(tmp_path: Path) -> None:
     wrapped = with_scoring_provenance(inner, rows.append)
     picks = _batch_picks(tmp_path, 2)
 
-    wrapped.batch(picks, config=_config(model="cheap-model"), audit_writer=None)
+    wrapped.batch(
+        picks,
+        config=_config(model="cheap-model"),
+        audit_writer=None,
+        routing_salt_seed="rep1",
+        provenance_context={"routing_salt_seed": "rep1"},
+    )
     wrapped.batch(picks, config=_config(model="capable-model"), audit_writer=None)
 
     assert {r["model_id"] for r in rows if r["chip_index"]} == {"cheap-model", "capable-model"}

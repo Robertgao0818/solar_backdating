@@ -5,9 +5,10 @@ The adaptive-scan chips were deleted in disk cleanup, so the jump-window frames 
 human needs to adjudicate must be re-rendered from retained scan metadata. This
 tool reads a sample-assignments CSV (WP-B output) and, per sampled anchor:
 
-1. resolves the jump-window frames (``latest_absent`` / ``earliest_present`` +/-
-   flanks) from the retained ``scan_states/<anchor_id>.json`` (frame selection
-   reuses ``run_census2023_scan._anchor_frames``);
+1. resolves the jump-window frames from the assignment's frozen claimed
+   ``latest_absent_date`` / ``earliest_present_date`` when present, then adds
+   flanks from ``scan_states/<anchor_id>.json``. Legacy assignments without
+   claimed bounds fall back to ``run_census2023_scan._anchor_frames``;
 2. joins the anchor bbox from the chipgroups CSV (scan_states carry NO
    coordinates) and re-renders each frame with the shared GEHistoricalImagery
    zoom-ladder path (``download_chip_with_zoom_ladder``);
@@ -142,6 +143,7 @@ class FrameSpec:
     capture_date: str
     version: int | None
     actual_zoom: int | None
+    chip_path: str = ""   # retained production chip; reuse before any GEHI fallback
     note: str = ""       # analysis-side annotation, never shown
 
 
@@ -177,7 +179,10 @@ def _usable_observations(state: ScanState) -> list:
         r
         for rnd in state.rounds
         for r in rnd.results
-        if r.quality_flag == "usable" and r.pv_present is not None and (r.chip_path or "")
+        if r.quality_flag == "usable"
+        and r.pv_present is not None
+        and not getattr(r, "reference_only", False)
+        and (r.chip_path or "")
     ]
 
 
@@ -188,21 +193,48 @@ def _spec(result, role: str) -> FrameSpec:
         capture_date=str(result.capture_date),
         version=result.version,
         actual_zoom=result.actual_zoom,
+        chip_path=str(result.chip_path or ""),
     )
 
 
-def resolve_window_frames(state: ScanState, *, flank: int = DEFAULT_FLANK) -> list[FrameSpec]:
+def resolve_window_frames(
+    state: ScanState,
+    *,
+    flank: int = DEFAULT_FLANK,
+    claimed_latest_absent: str | None = None,
+    claimed_earliest_present: str | None = None,
+) -> list[FrameSpec]:
     """Resolve the jump-window scan frames for one anchor.
 
-    Bounds come from ``_anchor_frames`` (single source of truth for
-    latest-absent / earliest-present). Flanks are the ``flank`` usable scan slots
+    Bounds come from the frozen sample assignment when either claimed-bound
+    argument is supplied. This is required for dip-repaired intervals: taking
+    the raw last absent from scan state can select a later contradictory frame
+    and silently omit the actual deliverable boundary. Legacy callers that
+    provide neither argument retain the historical ``_anchor_frames`` behavior.
+    Flanks are the ``flank`` usable scan slots
     immediately before ``latest_absent`` (role ``flank_before``) and immediately
     after ``earliest_present`` (role ``flank_after``), by ``capture_date``. Each
     (capture_date, version) slot is emitted at most once; the bracket bounds win
     over a flank role for the same slot.
     """
-    latest_absent, earliest_present = _anchor_frames(state)
     usable = sorted(_usable_observations(state), key=lambda r: str(r.capture_date))
+
+    def _claimed(date: str | None, role: str):
+        value = (date or "").strip()[:10]
+        if not value:
+            return None
+        matches = [result for result in usable if str(result.capture_date)[:10] == value]
+        if not matches:
+            raise ValueError(
+                f"{state.anchor_id}: claimed {role}={value} is absent from usable scan results"
+            )
+        return matches[0]
+
+    if claimed_latest_absent is not None or claimed_earliest_present is not None:
+        latest_absent = _claimed(claimed_latest_absent, "latest_absent")
+        earliest_present = _claimed(claimed_earliest_present, "earliest_present")
+    else:
+        latest_absent, earliest_present = _anchor_frames(state)
 
     frames: list[FrameSpec] = []
     seen: set[tuple[str, object]] = set()
@@ -587,6 +619,35 @@ def _render_scan_frame(
     runner: Callable[..., GehiRunResult],
 ) -> dict[str, object]:
     ladder = frame_zoom_ladder(frame.actual_zoom, override=zoom_override)
+
+    # CT production retains its frozen GEHI chips.  Reusing those exact bytes is
+    # both the strongest provenance path and materially faster than downloading
+    # the same vintage again.  Older ISSUE-10 runs may still carry dead paths,
+    # so only fall through to the existing zoom-ladder fetch when the retained
+    # path is absent or empty.
+    retained = Path(frame.chip_path) if frame.chip_path else None
+    if retained is not None and retained.is_file() and retained.stat().st_size > 0:
+        flat = _materialize_flat_scan_chip(
+            retained,
+            chips_root / anchor_id,
+            frame.capture_date,
+            frame.version,
+            prefix=_SOURCE_FLAT_PREFIX.get(frame.source, "scan"),
+        )
+        if flat is not None:
+            return _report_row(
+                anchor_id,
+                source=frame.source,
+                role=frame.role,
+                capture_date=frame.capture_date,
+                version=frame.version,
+                requested_zoom_ladder=ladder,
+                achieved_zoom=frame.actual_zoom,
+                status="skipped_existing",
+                chip_path=flat,
+                error=frame.note or None,
+            )
+
     outcome: DownloadResult = download_chip_with_zoom_ladder(
         bbox_row,
         capture_date=frame.capture_date,
@@ -812,6 +873,8 @@ def rerender_anchor(
     gehi_exe: Path = DEFAULT_GEHI_EXE,
     zoom_override: Sequence[int] | None = None,
     flank: int = DEFAULT_FLANK,
+    claimed_latest_absent: str | None = None,
+    claimed_earliest_present: str | None = None,
     timeout: float = 600.0,
     coj_chips_dir: Path | None = None,
     coj_years: Sequence[int] = DEFAULT_COJ_YEARS,
@@ -842,7 +905,12 @@ def rerender_anchor(
         )]
 
     rows: list[dict[str, object]] = []
-    for frame in resolve_window_frames(state, flank=flank):
+    for frame in resolve_window_frames(
+        state,
+        flank=flank,
+        claimed_latest_absent=claimed_latest_absent,
+        claimed_earliest_present=claimed_earliest_present,
+    ):
         rows.append(_render_scan_frame(
             anchor_id, bbox_row, frame,
             chips_root=chips_root, provider=provider, gehi_exe=gehi_exe,
@@ -897,11 +965,13 @@ def rerender_from_assignments(
     seen_anchors: set[str] = set()
     ordered_anchors: list[str] = []
     dispute_info: dict[str, list[str]] = {}  # anchor_id -> dispute_target_ids (forced only)
+    assignment_by_anchor: dict[str, dict[str, str]] = {}
     for row in assignments:
         aid = (row.get("anchor_id") or "").strip()
         if aid and aid not in seen_anchors:
             seen_anchors.add(aid)
             ordered_anchors.append(aid)
+            assignment_by_anchor[aid] = row
             if str(row.get("is_dispute_forced", "")).strip().lower() in ("true", "1", "yes"):
                 dispute_info[aid] = decode_target_ids(row.get("dispute_target_ids", ""))
 
@@ -911,10 +981,21 @@ def rerender_from_assignments(
         state_path = state_path_for(anchor_id, scan_states_dir)
         state = load_scan_state(state_path) if state_path.exists() else None
         bbox_row = bbox_index.get(anchor_id)
+        assignment = assignment_by_anchor[anchor_id]
+        claimed_latest_absent = (assignment.get("latest_absent_date") or "").strip()
+        claimed_earliest_present = (assignment.get("earliest_present_date") or "").strip()
+        has_claimed_columns = bool(
+            claimed_latest_absent
+            or claimed_earliest_present
+            or (assignment.get("pipeline_interval_start") or "").strip()
+            or (assignment.get("pipeline_interval_end") or "").strip()
+        )
         report_rows.extend(rerender_anchor(
             anchor_id, state, bbox_row,
             chips_root=chips_root, provider=provider, gehi_exe=gehi_exe,
             zoom_override=zoom_override, flank=flank, timeout=timeout,
+            claimed_latest_absent=claimed_latest_absent if has_claimed_columns else None,
+            claimed_earliest_present=claimed_earliest_present if has_claimed_columns else None,
             coj_chips_dir=coj_chips_dir, coj_years=coj_years, runner=runner,
         ))
         if fullstack_on and anchor_id in dispute_info and anchor_id in artifacts_by_chip:

@@ -23,6 +23,7 @@ prior round results.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Collection, Iterable, Literal
@@ -45,6 +46,7 @@ class VintageEntry:
     # the pre-downloaded basemap chip filenames, which carry _vnoversion).
     version: int | str
     provider: str = "TM"
+    reference_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,7 @@ def select_evenly_spaced_picks(
             version=v.version,
             requested_zoom=requested_zoom,
             provider=v.provider,
+            reference_only=v.reference_only,
         )
         for i, v in enumerate(chosen)
     ]
@@ -184,8 +187,17 @@ def _scored_dates(results: Iterable[RoundResult]) -> set[str]:
 def plan_initial_round(
     vintages: list[VintageEntry],
     config: AdaptiveScanConfig,
+    *,
+    census_date: str | None = None,
 ) -> Round:
-    """Round 1 picks = anchor [floor_year nearest, latest] + middle evenly spaced.
+    """Plan the initial instrument round.
+
+    ``picks_per_round`` is reserved for historical evidence.  When a census
+    cutoff is supplied, at most ``initial_reference_slots`` newer frames are
+    appended and explicitly marked ``reference_only``.  The newest historical
+    frame is always selected by ``select_evenly_spaced_picks`` (its end anchor),
+    while a reference frame can calibrate appearance without entering the
+    adaptive evidence timeline.
 
     If no vintage has year >= floor_year, fall back to the earliest available and
     let the orchestrator note the degradation. The returned Round carries the
@@ -194,22 +206,66 @@ def plan_initial_round(
     if not vintages:
         raise ValueError("Cannot plan initial round: vintage list is empty")
     sorted_vintages = sorted(vintages, key=lambda v: v.capture_date)
+    if census_date is None:
+        historical = sorted_vintages
+        reference = []
+    else:
+        cutoff = census_date[:10]
+        historical = [v for v in sorted_vintages if v.capture_date[:10] < cutoff]
+        post_census = [v for v in sorted_vintages if v.capture_date[:10] > cutoff]
+        slots = max(0, int(config.initial_reference_slots))
+        # Use the newest available post-census frame as the single calibration
+        # reference.  Sorting first keeps the choice deterministic when the
+        # catalog carries duplicate provider labels for a date.
+        reference = [dataclasses.replace(post_census[-1], reference_only=True)] if slots and post_census else []
+        if slots > 1 and len(post_census) > 1:
+            reference = [
+                dataclasses.replace(v, reference_only=True)
+                for v in post_census[-slots:]
+            ]
+    if not historical and census_date is not None:
+        # A post-census-only catalog cannot provide install-date evidence.  Do
+        # not silently repurpose a reference frame as historical evidence; an
+        # empty initial round lets the state machine terminate explicitly as
+        # no-recent-anchor without issuing a Gemini request.
+        return Round(
+            round_id=1,
+            round_type="initial",
+            window_start_date=None,
+            window_end_date=None,
+            picks=[],
+            notes="no_pre_census_history; post_census_frames_not_used_as_evidence",
+        )
+    if not historical:
+        historical = sorted_vintages
+        reference = []
     floor_year = config.round_1_floor_year
-    in_window = [v for v in sorted_vintages if parse_iso(v.capture_date).year >= floor_year]
+    in_window = [v for v in historical if parse_iso(v.capture_date).year >= floor_year]
     notes = ""
     if in_window:
         window = in_window
     else:
-        window = sorted_vintages
+        window = historical
         notes = f"round1_floor_degraded=true (no vintage >= {floor_year})"
     picks = select_evenly_spaced_picks(
         window, target_count=config.picks_per_round, requested_zoom=config.download_zoom_ladder[0]
     )
+    if reference:
+        notes = (notes + " | " if notes else "") + f"reference_only={len(reference)}"
+        reference_picks = select_evenly_spaced_picks(
+            reference,
+            target_count=len(reference),
+            requested_zoom=config.download_zoom_ladder[0],
+        )
+        for offset, reference_pick in enumerate(reference_picks, start=len(picks) + 1):
+            reference_pick.chip_index = offset
+        picks.extend(reference_picks)
+    evidence_picks = [pick for pick in picks if not pick.reference_only]
     return Round(
         round_id=1,
         round_type="initial",
-        window_start_date=picks[0].capture_date if picks else None,
-        window_end_date=picks[-1].capture_date if picks else None,
+        window_start_date=evidence_picks[0].capture_date if evidence_picks else None,
+        window_end_date=evidence_picks[-1].capture_date if evidence_picks else None,
         picks=picks,
         notes=notes,
     )
@@ -425,14 +481,21 @@ def decide_next_action(
 
     if not state.rounds:
         return ExecuteRoundAction(
-            kind="execute_round", round=plan_initial_round(bounded_vintages, config)
+            kind="execute_round",
+            round=plan_initial_round(
+                bounded_vintages, config, census_date=census_date
+            ),
         )
 
     all_results = collect_all_results(state.rounds)
     evidence_results = (
         all_results
         if census_date is None
-        else [r for r in all_results if r.capture_date[:10] < census_date[:10]]
+        else [
+            r
+            for r in all_results
+            if not r.reference_only and r.capture_date[:10] < census_date[:10]
+        ]
     )
     evidence_vintages = (
         bounded_vintages
@@ -440,7 +503,7 @@ def decide_next_action(
         else [
             v
             for v in bounded_vintages
-            if v.capture_date[:10] < census_date[:10]
+            if not v.reference_only and v.capture_date[:10] < census_date[:10]
         ]
     )
 

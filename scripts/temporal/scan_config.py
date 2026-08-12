@@ -47,7 +47,12 @@ class AdaptiveScanConfig:
     catalog_max_date: str = "2025-12-31"
     post_census_reference_frames: int = 3
     availability_parallel: int = 4
-    gemini_max_dates_per_call: int = 5
+    # ``picks_per_round`` is the number of historical evidence frames.  The
+    # CT-52 production instrument may append one explicit post-census
+    # reference-only frame, so the batch transport cap is six even though the
+    # adaptive evidence budget remains five.
+    initial_reference_slots: int = 1
+    gemini_max_dates_per_call: int = 6
     max_anchor_recovery_rounds: int = 2
     # GEHI imagery provider: "TM" (Google Earth Time Machine) or "Wayback"
     # (ESRI World Imagery). Usually set from run_adaptive_scan --provider, not
@@ -89,6 +94,7 @@ CONSUMED_KEYS: frozenset[tuple[str, str]] = frozenset(
         ("adaptive_scan", "catalog_min_date"),
         ("adaptive_scan", "catalog_max_date"),
         ("adaptive_scan", "post_census_reference_frames"),
+        ("adaptive_scan", "initial_reference_slots"),
         ("adaptive_scan", "availability_parallel"),
         ("adaptive_scan", "gemini_max_dates_per_call"),
         ("adaptive_scan", "max_anchor_recovery_rounds"),
@@ -156,7 +162,8 @@ def load_config(path: Path | None = None) -> AdaptiveScanConfig:
             section.get("post_census_reference_frames", 3)
         ),
         availability_parallel=int(section.get("availability_parallel", 4)),
-        gemini_max_dates_per_call=int(section.get("gemini_max_dates_per_call", 5)),
+        initial_reference_slots=int(section.get("initial_reference_slots", 1)),
+        gemini_max_dates_per_call=int(section.get("gemini_max_dates_per_call", 6)),
         max_anchor_recovery_rounds=int(section.get("max_anchor_recovery_rounds", 2)),
         provider=str(section.get("provider", "TM")),
     )

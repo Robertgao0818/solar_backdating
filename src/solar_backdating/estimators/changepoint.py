@@ -83,6 +83,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from solar_backdating.estimators.emissions import (
+    PooledEpochEmission,
     SYMBOL_INDEX,
     frame_loglik,
     pool_epoch_frame_emissions,
@@ -257,9 +258,29 @@ def _decode_frame_emissions(
     it today); it applies only clamp #1 (phantom-future cap), like PAVA. The TLO
     hard-gate is already baked into each frame's ``q`` upstream
     (``gate_frame_emission``), so it is not re-applied here."""
-    pooled_all = pool_epoch_frame_emissions(
-        config.frame_emissions, config.decoder_epoch_gap_days
+    evidence_cutoff = (
+        clamp.ceiling_date
+        if clamp.ceiling_date is not None
+        else clamp.census_end_date
     )
+    frames = list(config.frame_emissions)
+    if evidence_cutoff is not None:
+        frames = [frame for frame in frames if frame.capture_date < evidence_cutoff]
+    pooled_all = pool_epoch_frame_emissions(frames, config.decoder_epoch_gap_days)
+    if evidence_cutoff is not None and any(p.q >= _FRAME_ABSTAIN_EPS for p in pooled_all):
+        # The census mosaic is a known-present observation and intentionally
+        # remains its own epoch even when a historical frame is within the
+        # normal gap-collapse distance.
+        pooled_all.append(
+            PooledEpochEmission(
+                start_date=evidence_cutoff,
+                end_date=evidence_cutoff,
+                q=1.0,
+                e0=0.0,
+                e1=1.0,
+                n_members=1,
+            )
+        )
     # Drop q<eps epochs (the continuous "epoch is abstain" filter, §4.1) — the
     # frame analogue of the discrete branch's abstain-symbol drop.
     epochs = [p for p in pooled_all if p.q >= _FRAME_ABSTAIN_EPS]

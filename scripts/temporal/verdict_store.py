@@ -70,6 +70,7 @@ seeded into this store — replay coverage begins at sidecar deployment.
 from __future__ import annotations
 
 import argparse
+import copy
 import dataclasses
 import fcntl
 import json
@@ -547,12 +548,37 @@ class VerdictCachingScorer:
         else:
             self._store.bump("failures_not_cached")
 
+    @staticmethod
+    def _reindex_batch_item(item: Any, chip_index: int) -> Any:
+        """Return a batch pick/observation with a dense local chip index.
+
+        The native Gemini batch contract requires indices ``1..N``.  A partial
+        verdict-store hit leaves only a sparse subset for the inner scorer
+        (for example, the original chip 3 alone); pass a copied dataclass with
+        a dense index and restore the caller's index after the inner call.
+        """
+        if getattr(item, "chip_index", None) == chip_index:
+            return item
+        if dataclasses.is_dataclass(item):
+            return dataclasses.replace(item, chip_index=chip_index)
+        cloned = copy.copy(item)
+        setattr(cloned, "chip_index", chip_index)
+        return cloned
+
     @property
     def batch(self) -> Callable[..., list[Any]]:
         inner_batch = self._inner.batch  # type: ignore[attr-defined]
 
         def _wrapped(picks: list[Any], *, config: Any, **kwargs: Any) -> list[Any]:
-            extras = {"census_mid_date_iso": kwargs.get("census_mid_date_iso")}
+            extras = {
+                "census_mid_date_iso": kwargs.get("census_mid_date_iso"),
+                # A rescue repetition must never hit a primary/repetition cache
+                # entry merely because the chip bytes are identical.  The salt
+                # seed is an explicit instruction/key extra, not only an audit
+                # annotation.
+                "routing_salt": kwargs.get("routing_salt"),
+                "routing_salt_seed": kwargs.get("routing_salt_seed"),
+            }
             chip_paths = [getattr(p, "chip_path", None) for p in picks]
             indices = [getattr(p, "chip_index", i + 1) for i, p in enumerate(picks)]
             hits, keys, miss_positions = self._lookup_chips(picks, chip_paths, config, extras)
@@ -561,7 +587,53 @@ class VerdictCachingScorer:
             fresh: list[Any] = []
             if misses or not picks:
                 self._store.bump("inner_calls")
-                fresh = inner_batch(misses if hits else picks, config=config, **kwargs)
+                # The repetition seed is part of the content-addressed cache
+                # extras above, but is not a Gemini scorer parameter.  Strip it
+                # at this boundary so a wrapper chain cannot forward it to the
+                # raw ``score_batch_with_fallback`` callable.
+                inner_kwargs = dict(kwargs)
+                inner_kwargs.pop("routing_salt_seed", None)
+                inner_picks = picks
+                dense_to_requested: dict[int, int] = {}
+                if hits:
+                    # The outer call may have picks [1, 2, 3] while only
+                    # original chip 3 is a miss.  Do not send [3] to the
+                    # fail-closed Gemini scorer; its prompt and parser are
+                    # explicitly indexed 1..N.  Restamp fresh observations
+                    # below before merging them with cache hits.
+                    inner_picks = []
+                    for dense_index, pos in enumerate(miss_positions, start=1):
+                        inner_picks.append(
+                            self._reindex_batch_item(picks[pos], dense_index)
+                        )
+                        dense_to_requested[dense_index] = indices[pos]
+                elif picks and [getattr(p, "chip_index", i + 1) for i, p in enumerate(picks)] != list(
+                    range(1, len(picks) + 1)
+                ):
+                    # Keep the proxy safe even when a legacy caller bypasses
+                    # the temporal chunker and hands us a sparse full miss.
+                    inner_picks = []
+                    for dense_index, (pos, pick) in enumerate(
+                        enumerate(picks), start=1
+                    ):
+                        inner_picks.append(
+                            self._reindex_batch_item(pick, dense_index)
+                        )
+                        dense_to_requested[dense_index] = indices[pos]
+                fresh = inner_batch(
+                    inner_picks, config=config, **inner_kwargs
+                )
+                if dense_to_requested:
+                    fresh = [
+                        self._reindex_batch_item(
+                            obs,
+                            dense_to_requested.get(
+                                getattr(obs, "chip_index", None),
+                                getattr(obs, "chip_index", 0),
+                            ),
+                        )
+                        for obs in fresh
+                    ]
             if not hits:
                 # Full miss: store cacheable verdicts, return the inner result as-is.
                 self._record_fresh_batch(fresh, picks, keys, chip_paths, config, extras)
@@ -598,7 +670,11 @@ class VerdictCachingScorer:
     def score(
         self, picks: list[Any], *, config: Any = None, **kwargs: Any
     ) -> list[Any]:
-        extras = {"census_mid_date_iso": kwargs.get("census_mid_date_iso")}
+        extras = {
+            "census_mid_date_iso": kwargs.get("census_mid_date_iso"),
+            "routing_salt": kwargs.get("routing_salt"),
+            "routing_salt_seed": kwargs.get("routing_salt_seed"),
+        }
         chip_paths = [getattr(p, "chip_path", None) for p in picks]
         indices = [getattr(p, "index", 0) or (i + 1) for i, p in enumerate(picks)]
         hits, keys, miss_positions = self._lookup_chips(picks, chip_paths, config, extras)

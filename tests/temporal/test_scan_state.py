@@ -69,6 +69,18 @@ def test_create_scan_state_stamps_explicit_geometry_version() -> None:
     assert state.geometry_version == "fullscan_target96_review24_v2"
 
 
+def test_create_scan_state_accepts_ct_source_grid_schema() -> None:
+    state = create_scan_state(
+        {
+            "anchor_id": "ct-a",
+            "region_key": "cape_town",
+            "source_grid": "CPT1855",
+            "geometry_version": "fullscan_target96_review24_v2",
+        }
+    )
+    assert state.grid_id == "CPT1855"
+
+
 def test_old_state_without_geometry_version_loads_as_absent(
     tmp_state_dir: Path, sample_anchor: dict[str, str]
 ) -> None:
@@ -311,8 +323,10 @@ def test_cape_town_catalog_bound_resolves_from_region_registry(monkeypatch) -> N
         census_date=resolved,
     )
 
-    assert resolved == "2025-06-30"
-    assert catalog.catalog_max_date == "2025-12-01"
+    assert resolved == "2025-01-31"
+    # All four dates are post-census under the conservative January ceiling;
+    # the catalog stops at the third retained reference date.
+    assert catalog.catalog_max_date == "2025-10-01"
 
 
 def test_census_mid_date_prefers_per_grid_vexcel_capture_date() -> None:
@@ -365,7 +379,7 @@ def test_census_mid_date_missing_grid_falls_back_to_region_registry() -> None:
         override=None,
         grid_capture_dates={"JNB0001": date(2024, 4, 19)},
     )
-    assert resolved == "2025-06-30"
+    assert resolved == "2025-01-31"
 
 
 def test_orchestrator_failure_persists_terminal_state(

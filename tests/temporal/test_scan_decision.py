@@ -18,6 +18,7 @@ from scripts.temporal.scan_decision import (
     decide_next_action,
     find_transitions,
     is_nonmonotonic,
+    plan_initial_round,
     select_evenly_spaced_picks,
 )
 from scripts.temporal.scan_state import (
@@ -111,6 +112,42 @@ def test_evenly_spaced_picks_preserve_imagery_provider() -> None:
     picks = select_evenly_spaced_picks(vintages, target_count=5, requested_zoom=20)
 
     assert [pick.provider for pick in picks] == ["TM", "Wayback"]
+
+
+def test_initial_round_uses_five_pre_census_and_one_explicit_reference() -> None:
+    vintages = [
+        VintageEntry(capture_date=f"{year}-06-01", version=year)
+        for year in range(2019, 2027)
+    ]
+    round_ = plan_initial_round(
+        vintages,
+        AdaptiveScanConfig(picks_per_round=5, initial_reference_slots=1),
+        census_date="2025-01-31",
+    )
+
+    assert len(round_.picks) == 6
+    assert [pick.capture_date for pick in round_.picks[:5]] == [
+        "2019-06-01",
+        "2020-06-01",
+        "2021-06-01",
+        "2023-06-01",
+        "2024-06-01",
+    ]
+    assert round_.picks[-1].capture_date == "2026-06-01"
+    assert not any(pick.reference_only for pick in round_.picks[:5])
+    assert round_.picks[-1].reference_only is True
+    assert round_.window_end_date == "2024-06-01"
+
+
+def test_initial_round_does_not_use_post_census_as_history() -> None:
+    round_ = plan_initial_round(
+        [VintageEntry(capture_date="2025-06-01", version=1)],
+        AdaptiveScanConfig(),
+        census_date="2025-01-31",
+    )
+
+    assert round_.picks == []
+    assert "no_pre_census_history" in round_.notes
 
 
 def test_nonmonotonic_ignores_post_census_phantom_absent() -> None:

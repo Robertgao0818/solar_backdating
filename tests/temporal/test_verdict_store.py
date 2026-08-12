@@ -275,7 +275,9 @@ def test_batch_partial_miss_scores_only_never_seen_chips(tmp_path: Path) -> None
     results = wrapped.batch(picks, config=_Config())
 
     assert len(fake.calls) == 2
-    assert [p.chip_index for p in fake.calls[1]] == [3], "only the never-seen chip is scored"
+    assert [p.chip_index for p in fake.calls[1]] == [1], (
+        "the only never-seen chip is scored through a dense local batch index"
+    )
     assert sorted(o.chip_index for o in results) == [1, 2, 3]
     by_index = {o.chip_index: o for o in results}
     assert by_index[1].evidence == "call 1" and by_index[2].evidence == "call 1"

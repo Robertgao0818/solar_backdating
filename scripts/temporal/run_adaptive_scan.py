@@ -26,6 +26,7 @@ import argparse
 import csv
 import dataclasses
 import hashlib
+import inspect
 import json
 import sys
 import threading
@@ -91,7 +92,14 @@ def _default_gemini_env() -> Path:
     return _resolve_default_env_file()
 
 
-def _routing_salt(mode: str, model: str, anchor_id: str, round_id: object) -> str | None:
+def _routing_salt(
+    mode: str,
+    model: str,
+    anchor_id: str,
+    round_id: object,
+    *,
+    seed: str | None = None,
+) -> str | None:
     """Per-anchor routing nonce so concurrent native calls fan out across the
     gateway account pool instead of all hashing onto one account.
 
@@ -106,7 +114,8 @@ def _routing_salt(mode: str, model: str, anchor_id: str, round_id: object) -> st
         return None
     if mode == "auto" and "pro" not in (model or "").lower():
         return None
-    return f"{model}:{anchor_id}:r{round_id}"
+    prefix = f"{seed}:" if seed else ""
+    return f"{prefix}{model}:{anchor_id}:r{round_id}"
 
 DRY_RUN_PROFILE_LABELS = (
     "appears_2015",
@@ -285,24 +294,60 @@ def parse_args() -> argparse.Namespace:
         "--qps",
         type=float,
         default=0.0,
-        help="Global Gemini requests/sec across ALL anchor workers (shared "
-        "RateLimiter). 0 = no throttle, worker count alone caps concurrency. "
+        help="Strict global Gemini request-start rate across ALL anchor workers, "
+        "enforced from the first request with no startup burst (shared RateLimiter). "
+        "0 = no throttle, worker count alone caps concurrency. "
         "Match to the gateway account pool; the FP-cut full run used qps 8 at 30 workers.",
+    )
+    parser.add_argument(
+        "--gemini-max-in-flight",
+        type=int,
+        default=0,
+        help="Maximum simultaneous Gemini HTTP attempts across all anchor workers. "
+        "0 = no explicit cap; use with --qps because QPS alone does not bound "
+        "in-flight requests when gateway latency is high.",
     )
     parser.add_argument(
         "--round1-model",
         type=str,
-        default="gemini-3-flash",
-        help="Cheap-tier model for routine present/absent rounds (see --cheap-round-types). "
-        "Default gemini-3-flash. Empty string = reuse round2 model (single tier).",
+        default="gemini-3.1-flash-lite",
+        help="Routine-tier model for initial and ordinary follow-up rounds (see "
+        "--cheap-round-types). Default gemini-3.1-flash-lite. Empty string = "
+        "reuse round2 model (single tier).",
     )
     parser.add_argument(
         "--round2-model",
         type=str,
+        default="gemini-3.1-flash-lite",
+        help="Recovery-tier model for round_types NOT in --cheap-round-types "
+        "(by default just anchor_recovery). Default gemini-3.1-flash-lite. "
+        "Primary CT runs must keep this equal to --round1-model.",
+    )
+    parser.add_argument(
+        "--troubleshooting-model",
+        type=str,
+        default="",
+        help="Deprecated in-process escalation. Must be empty: rescue is a "
+        "separate run root/manifest, never an automatic route.",
+    )
+    parser.add_argument(
+        "--model-tier",
+        choices=("primary", "rescue"),
+        default="primary",
+        help="Audit/routing contract. Primary is Lite-only; rescue is the "
+        "isolated gemini-3.6-flash-high run.",
+    )
+    parser.add_argument(
+        "--expected-model-version",
         default=None,
-        help="Capable-tier model for the round_types NOT in --cheap-round-types "
-        "(by default just anchor_recovery). "
-        "Default: GEMINI_MODEL from the gemini env file (gemini-3-flash-agent).",
+        help="Exact gateway modelVersion. Defaults to the primary alias or "
+        "gemini-3.6-flash for --model-tier rescue.",
+    )
+    parser.add_argument(
+        "--routing-salt-seed",
+        default=None,
+        help="Explicit repetition/rescue seed. It enters the routing nonce and "
+        "verdict-store key; required for rescue runs.",
     )
     parser.add_argument(
         "--cheap-round-types",
@@ -315,6 +360,21 @@ def parse_args() -> argparse.Namespace:
         "Pass 'initial' to restore the old round_id==1-only escalation.",
     )
     parser.add_argument(
+        "--initial-reference-slots",
+        type=int,
+        default=None,
+        help="Optional run-local override for the number of post-census reference-only "
+        "frames appended to the initial round. The CT optimized primary default is 1; "
+        "the paired control pilot uses 0. Does not change historical evidence slots.",
+    )
+    parser.add_argument(
+        "--gemini-max-dates-per-call",
+        type=int,
+        default=None,
+        help="Optional run-local override for the batch transport cap. The CT optimized "
+        "primary default is 6; the paired control pilot uses 5.",
+    )
+    parser.add_argument(
         "--routing-salt-mode",
         choices=("auto", "none", "target"),
         default="auto",
@@ -322,6 +382,21 @@ def parse_args() -> argparse.Namespace:
         "out across the gateway account pool. 'target' salts every call; 'auto' salts "
         "pro models only; 'none' disables. Use 'target' for high-concurrency flash runs.",
     )
+    parser.add_argument("--run-id", default=None, help="Stable run identifier for attempt ledger rows.")
+    parser.add_argument("--wave-id", default="", help="Stable production wave identifier for ledger rows.")
+    parser.add_argument(
+        "--quota-window-id",
+        default=None,
+        help="Shared quota window identifier. Supplying it enables fail-closed HTTP attempt accounting.",
+    )
+    parser.add_argument("--quota-ledger", type=Path, default=None)
+    parser.add_argument("--quota-pause-path", type=Path, default=None)
+    parser.add_argument("--quota-gross-safe-budget", type=int, default=0)
+    parser.add_argument("--quota-work-budget", type=int, default=0)
+    parser.add_argument("--quota-warning-budget", type=int, default=0)
+    parser.add_argument("--quota-canary-reserve", type=int, default=0)
+    parser.add_argument("--quota-retry-reserve", type=int, default=0)
+    parser.add_argument("--quota-reset-after", default=None)
     parser.add_argument(
         "--census-mid-date-override",
         type=str,
@@ -508,16 +583,34 @@ def make_fixed_extent_review_renderer(
 
         geometry = validate_fixed_extent_anchor_geometry(anchor, extent_m)
         try:
-            source_extent_m = float(anchor["chip_size_m"])
-            offset_x_m = float(anchor["target_offset_x_m"])
-            offset_y_m = float(anchor["target_offset_y_m"])
             bbox_width_m = float(anchor["source_width_m"])
             bbox_height_m = float(anchor["source_height_m"])
+            if "chip_size_m" in anchor and str(anchor.get("chip_size_m", "")).strip():
+                source_extent_m = float(anchor["chip_size_m"])
+                offset_x_m = float(anchor["target_offset_x_m"])
+                offset_y_m = float(anchor["target_offset_y_m"])
+            else:
+                # CT's frozen target-anchor CSV intentionally contains the
+                # source-box fields, while the derived groups contract adds
+                # chip_size_m/target_offset_{x,y}_m.  CT validation guarantees
+                # a 96 m square, target-centred source box, so these values are
+                # unambiguous and can be reconstructed without changing the
+                # frozen input schema.  Non-zero offsets remain fail-closed.
+                source_extent_m = float(anchor["source_box_width_m"])
+                source_height_box_m = float(anchor["source_box_height_m"])
+                center_offset_m = float(anchor.get("center_offset_m", "0") or 0)
+                if abs(center_offset_m) > 1e-9 or abs(source_extent_m - source_height_box_m) > 1e-9:
+                    raise ValueError(
+                        "CT target-anchor fallback requires a square, zero-offset source box"
+                    )
+                offset_x_m = 0.0
+                offset_y_m = 0.0
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(
                 "fixed-extent rendering requires chip_size_m, "
                 "target_offset_x_m, target_offset_y_m, source_width_m, and "
-                f"source_height_m for {anchor.get('anchor_id', '<unknown>')}"
+                f"source_height_m (or CT source_box_* fields) for "
+                f"{anchor.get('anchor_id', '<unknown>')}"
             ) from exc
         if geometry.min_crop_size_m > source_extent_m:
             raise ValueError(
@@ -648,6 +741,7 @@ def execute_round_dry_run(
                 notes=obs.notes,
                 chip_path="",
                 actual_zoom=pick.requested_zoom,
+                reference_only=pick.reference_only,
             )
         )
     rnd.results = results
@@ -790,6 +884,7 @@ def _build_batch_picks_with_remap(
                 capture_date=pick.capture_date,
                 version=str(pick.version),
                 actual_zoom=outcome.actual_zoom,
+                reference_only=pick.reference_only,
             )
         )
         batch_to_original[batch_idx] = pick.chip_index
@@ -807,6 +902,13 @@ def _score_batch_picks_chunked(
     scorer: PresenceScorer | None = None,
     limiter=None,
     routing_salt: str | None = None,
+    routing_salt_seed: str | None = None,
+    anchor_id: str = "",
+    run_id: str = "",
+    wave_id: str = "",
+    round_id: int | None = None,
+    round_type: str = "",
+    model_tier: str = "primary",
 ):
     """Score date picks in bounded scorer calls and return original-index observations.
 
@@ -855,6 +957,7 @@ def _score_batch_picks_chunked(
                     capture_date=pick.capture_date,
                     version=pick.version,
                     actual_zoom=pick.actual_zoom,
+                    reference_only=pick.reference_only,
                 )
             )
 
@@ -867,15 +970,71 @@ def _score_batch_picks_chunked(
         if limiter is not None and scorer.name != "gemini":
             limiter.wait()
         salt_kwargs = {} if routing_salt is None else {"routing_salt": routing_salt}
+        if routing_salt_seed is not None:
+            salt_kwargs["routing_salt_seed"] = routing_salt_seed
         limiter_kwargs = {} if limiter is None else {"limiter": limiter}
-        observations = scorer.batch(
-            local_picks,
-            config=gemini_config,
-            audit_writer=_chunk_audit,
-            census_mid_date_iso=census_mid_date_iso,
+        attempt_context = {
+            "anchor_id": anchor_id,
+            "run_id": run_id,
+            "wave_id": wave_id,
+            "round_id": round_id if round_id is not None else "",
+            "round_type": round_type,
+            "chunk_index": chunk_idx,
+            "n_picks": len(local_picks),
+            "requested_alias": getattr(gemini_config, "model", ""),
+            "model_tier": model_tier,
+            "logical_call_id": f"{run_id}:{wave_id}:{anchor_id}:r{round_id}:c{chunk_idx}",
+        }
+        scorer_kwargs = {
+            "attempt_context": attempt_context,
+            "provenance_context": {
+                "anchor_id": anchor_id,
+                "run_id": run_id,
+                "wave_id": wave_id,
+                "round_id": round_id if round_id is not None else "",
+                "round_type": round_type,
+                "chunk_index": chunk_idx,
+                "model_tier": model_tier,
+                "routing_salt_seed": routing_salt_seed,
+            },
+        }
+        # The production scorer is sometimes a raw Gemini callable and
+        # sometimes a transparent wrapper (verdict store / provenance).  The
+        # wrappers intentionally expose ``**kwargs`` and consume
+        # ``provenance_context`` themselves, while older injected test seams
+        # have the pre-ISSUE-06 fixed signature.  Filter only kwargs that the
+        # selected callable cannot accept; this preserves the full audit and
+        # quota context for real routes without breaking those legacy seams.
+        call_kwargs = {
+            "config": gemini_config,
+            "audit_writer": _chunk_audit,
+            "census_mid_date_iso": census_mid_date_iso,
             **salt_kwargs,
             **limiter_kwargs,
-        )
+            **scorer_kwargs,
+        }
+        try:
+            signature = inspect.signature(scorer.batch)
+        except (TypeError, ValueError):
+            # Some extension/builtin callables do not expose a signature; the
+            # safest behavior for those is to retain the complete production
+            # call shape and let their own TypeError remain visible.
+            supported_kwargs = call_kwargs
+        else:
+            parameters = signature.parameters.values()
+            accepts_var_kwargs = any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+            if accepts_var_kwargs:
+                supported_kwargs = call_kwargs
+            else:
+                supported_kwargs = {
+                    key: value
+                    for key, value in call_kwargs.items()
+                    if key in signature.parameters
+                }
+        observations = scorer.batch(local_picks, **supported_kwargs)
         for obs in observations:
             original = local_to_original.get(obs.chip_index)
             if original is not None:
@@ -896,6 +1055,9 @@ def execute_round_real(
     census_mid_date_iso: str | None = None,
     limiter=None,
     routing_salt_mode: str = "none",
+    routing_salt_seed: str | None = None,
+    run_id: str = "",
+    wave_id: str = "",
     overwrite_chips: bool = False,
     min_cache_zoom: int | None = None,
     provenance_writer: Callable[[Mapping[str, object]], None] | None = None,
@@ -987,15 +1149,21 @@ def execute_round_real(
             getattr(gemini_config, "model", ""),
             anchor["anchor_id"],
             rnd.round_id,
+            seed=routing_salt_seed,
         )
 
     audit_path = audit_dir / anchor["anchor_id"] / f"round_{rnd.round_id}.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
     obs_by_original: dict[int, object] = {}
     if score_picks:
-        with audit_path.open("w", encoding="utf-8") as audit_fh:
+        # A checkpoint resume can re-enter an interrupted round after one or
+        # more chunks already reached the transport ledger.  Preserve those
+        # earlier chunk records; truncating here creates an unreconcilable
+        # ledger/audit gap when the resumed round starts at a later chunk.
+        with audit_path.open("a", encoding="utf-8") as audit_fh:
             def _audit(payload: dict) -> None:
                 audit_fh.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+                audit_fh.flush()
 
             obs_by_original = _score_batch_picks_chunked(
                 score_picks,
@@ -1007,6 +1175,13 @@ def execute_round_real(
                 scorer=scorer,
                 limiter=limiter,
                 routing_salt=routing_salt,
+                routing_salt_seed=routing_salt_seed,
+                anchor_id=anchor["anchor_id"],
+                run_id=run_id,
+                wave_id=wave_id,
+                round_id=rnd.round_id,
+                round_type=rnd.round_type,
+                model_tier=("rescue" if "3.6" in getattr(gemini_config, "model", "") else "primary"),
             )
 
     rnd_results: list[RoundResult] = []
@@ -1027,6 +1202,7 @@ def execute_round_real(
                     chip_path="",
                     actual_zoom=outcome.actual_zoom,
                     provider=pick.provider,
+                    reference_only=pick.reference_only,
                 )
             )
             continue
@@ -1046,6 +1222,7 @@ def execute_round_real(
                     chip_path=str(outcome.path),
                     actual_zoom=outcome.actual_zoom,
                     provider=pick.provider,
+                    reference_only=pick.reference_only,
                 )
             )
             continue
@@ -1063,6 +1240,7 @@ def execute_round_real(
                 chip_path=str(outcome.path),
                 actual_zoom=outcome.actual_zoom,
                 provider=pick.provider,
+                reference_only=pick.reference_only,
             )
         )
 
@@ -1072,7 +1250,12 @@ def execute_round_real(
     return rnd
 
 
-def _load_gemini_config(env_file: Path):
+def _load_gemini_config(
+    env_file: Path,
+    *,
+    expected_model_version: str | None = None,
+    quota_controller=None,
+):
     """Load GeminiClientConfig from .env.gemini.local. Lazy import to avoid hard dep in dry-run."""
     from scripts.validation.gemini_solar_image_review import (
         API_FORMATS,
@@ -1103,6 +1286,9 @@ def _load_gemini_config(env_file: Path):
         model=model,
         api_format=api_format,
         native_path=native_path,
+        max_tokens_per_chip=int(env_value(env, "GEMINI_MAX_TOKENS_PER_CHIP", "600")),
+        expected_model_version=expected_model_version,
+        quota_controller=quota_controller,
     )
 
 
@@ -1117,9 +1303,13 @@ def run_one_anchor(
     audit_dir: Path | None = None,
     gemini_config=None,
     gemini_config_round1=None,
+    gemini_config_troubleshooting=None,
     cheap_round_types: frozenset[str] | None = None,
     limiter=None,
     routing_salt_mode: str = "none",
+    routing_salt_seed: str | None = None,
+    run_id: str = "",
+    wave_id: str = "",
     census_mid_date_iso: str | None = None,
     scorer: PresenceScorer | None = None,
     overwrite_chips: bool = False,
@@ -1138,6 +1328,11 @@ def run_one_anchor(
     no_live_gehi: bool = False,
 ) -> ScanState:
     anchor_id = anchor["anchor_id"]
+    if gemini_config_troubleshooting is not None:
+        raise ValueError(
+            "in-process troubleshooting routing is disabled; run an isolated "
+            "rescue manifest with model-tier=rescue"
+        )
     state_path = state_path_for(anchor_id, scan_states_dir)
 
     state: ScanState | None = None
@@ -1352,14 +1547,26 @@ def run_one_anchor(
                 issue18_kwargs["provider_chips_dirs"] = provider_chips_dirs
             if no_live_gehi:
                 issue18_kwargs["no_live_gehi"] = True
+            run_context_kwargs: dict[str, object] = {}
+            if routing_salt_seed is not None:
+                run_context_kwargs["routing_salt_seed"] = routing_salt_seed
+            if run_id:
+                run_context_kwargs["run_id"] = run_id
+            if wave_id:
+                run_context_kwargs["wave_id"] = wave_id
             rnd = execute_round_real(
-                rnd, anchor, config,
-                chips_dir=chips_dir, audit_dir=audit_dir, gemini_config=round_config,
+                rnd,
+                anchor,
+                config,
+                chips_dir=chips_dir,
+                audit_dir=audit_dir,
+                gemini_config=round_config,
                 scorer=scorer,
                 vintage_check=vintage_check,
                 census_mid_date_iso=census_mid_date_iso,
                 limiter=limiter,
                 routing_salt_mode=routing_salt_mode,
+                **run_context_kwargs,
                 **issue18_kwargs,
             )
         state.rounds.append(rnd)
@@ -2037,13 +2244,83 @@ def _exit_code_for_states(states: Iterable[ScanState]) -> int:
 
 def main() -> None:
     args = parse_args()
+    if args.troubleshooting_model:
+        raise SystemExit(
+            "--troubleshooting-model must be empty: in-process model switching "
+            "is disabled; use an isolated --model-tier rescue run"
+        )
+    if args.model_tier == "primary":
+        if args.round1_model != "gemini-3.1-flash-lite" or args.round2_model != "gemini-3.1-flash-lite":
+            raise SystemExit(
+                "primary runs are Lite-only: both --round1-model and --round2-model "
+                "must be gemini-3.1-flash-lite"
+            )
+        if args.routing_salt_seed and not str(args.routing_salt_seed).strip():
+            raise SystemExit("--routing-salt-seed must be non-empty when supplied")
+        expected_model_version = args.expected_model_version or "gemini-3.1-flash-lite"
+    else:
+        if args.round1_model != "gemini-3.6-flash-high" or args.round2_model != "gemini-3.6-flash-high":
+            raise SystemExit(
+                "rescue runs are high-only: both model aliases must be "
+                "gemini-3.6-flash-high"
+            )
+        if not args.routing_salt_seed:
+            raise SystemExit("rescue runs require --routing-salt-seed")
+        expected_model_version = args.expected_model_version or "gemini-3.6-flash"
+
+    quota_controller = None
+    if args.quota_window_id or args.quota_ledger is not None:
+        required = {
+            "--quota-window-id": args.quota_window_id,
+            "--quota-ledger": args.quota_ledger,
+            "--quota-gross-safe-budget": args.quota_gross_safe_budget,
+            "--quota-work-budget": args.quota_work_budget,
+            "--quota-warning-budget": args.quota_warning_budget,
+            "--quota-reset-after": args.quota_reset_after,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise SystemExit("quota accounting requires: " + ", ".join(missing))
+        from scripts.temporal.quota_control import QuotaCircuitBreaker, QuotaPolicy
+
+        quota_policy = QuotaPolicy(
+            window_id=str(args.quota_window_id),
+            gross_safe_budget=int(args.quota_gross_safe_budget),
+            work_budget=int(args.quota_work_budget),
+            warning_budget=int(args.quota_warning_budget),
+            canary_reserve=int(args.quota_canary_reserve),
+            retry_reserve=int(args.quota_retry_reserve),
+            reset_after=str(args.quota_reset_after),
+        )
+        quota_controller = QuotaCircuitBreaker(
+            args.quota_ledger,
+            policy=quota_policy,
+            pause_path=args.quota_pause_path,
+            model_tier=args.model_tier,
+        )
+        print(f"[CFG] quota={json.dumps(quota_controller.summary(), sort_keys=True)}")
     review_renderer = (
         make_fixed_extent_review_renderer(args.review_extent_m)
         if args.review_extent_m is not None
         else None
     )
     config = load_config(args.config)
+    if args.initial_reference_slots is not None:
+        if args.initial_reference_slots < 0:
+            raise SystemExit("--initial-reference-slots must be non-negative")
+        config_overrides_initial_reference = {
+            "initial_reference_slots": args.initial_reference_slots
+        }
+    else:
+        config_overrides_initial_reference = {}
+    if args.gemini_max_dates_per_call is not None:
+        if args.gemini_max_dates_per_call <= 0:
+            raise SystemExit("--gemini-max-dates-per-call must be positive")
+        config_overrides_initial_reference["gemini_max_dates_per_call"] = (
+            args.gemini_max_dates_per_call
+        )
     config_overrides: dict[str, object] = {"provider": args.provider}
+    config_overrides.update(config_overrides_initial_reference)
     if args.provider == "Wayback":
         # Wayback `availability` returns layer-release dates, not captured dates,
         # so intersecting it with the captured-date info catalog yields the empty
@@ -2075,6 +2352,7 @@ def main() -> None:
 
     gemini_config = None
     gemini_config_round1 = None
+    gemini_config_troubleshooting = None
     cheap_round_types: frozenset[str] | None = None
     limiter = None
     # The real-path scorer is selected via the registry (default 'gemini'), never
@@ -2084,7 +2362,11 @@ def main() -> None:
     if not args.dry_run:
         scorer = get_scorer(args.scorer)
         env_file = args.gemini_env_file or _default_gemini_env()
-        gemini_config = _load_gemini_config(env_file)
+        gemini_config = _load_gemini_config(
+            env_file,
+            expected_model_version=expected_model_version,
+            quota_controller=quota_controller,
+        )
         if args.round2_model:
             gemini_config = dataclasses.replace(gemini_config, model=args.round2_model)
         if args.round1_model:
@@ -2094,7 +2376,9 @@ def main() -> None:
         )
         from scripts.validation.gemini_solar_image_review import RateLimiter
 
-        limiter = RateLimiter(args.qps)
+        if args.gemini_max_in_flight < 0:
+            raise ValueError("--gemini-max-in-flight must be >= 0")
+        limiter = RateLimiter(args.qps, max_in_flight=args.gemini_max_in_flight)
         args.chips_dir.mkdir(parents=True, exist_ok=True)
         if provider_chips_dirs is not None:
             for provider_dir in provider_chips_dirs.values():
@@ -2102,10 +2386,14 @@ def main() -> None:
         args.audit_dir.mkdir(parents=True, exist_ok=True)
         round1_model = gemini_config_round1.model if gemini_config_round1 is not None else gemini_config.model
         print(
-            f"[CFG] cheap_model={round1_model} capable_model={gemini_config.model} "
+            f"[CFG] routine_model={round1_model} recovery_model={gemini_config.model} "
+            f"troubleshooting_model={gemini_config_troubleshooting.model if gemini_config_troubleshooting else ''} "
             f"cheap_round_types={','.join(sorted(cheap_round_types))} "
-            f"qps={args.qps} anchor_workers={args.anchor_workers} "
-            f"routing_salt_mode={args.routing_salt_mode}"
+            f"qps={args.qps} gemini_max_in_flight={args.gemini_max_in_flight} "
+            f"anchor_workers={args.anchor_workers} "
+            f"routing_salt_mode={args.routing_salt_mode} "
+            f"routing_salt_seed={args.routing_salt_seed or ''} "
+            f"run_id={args.run_id or args.scan_states_dir.parent.name} wave_id={args.wave_id}"
         )
 
     marker = "[DRY]" if args.dry_run else "[RUN]"
@@ -2212,6 +2500,14 @@ def main() -> None:
         offline_tm_catalog, offline_wayback_catalog = load_offline_provider_catalogs(
             args.offline_tm_catalog_csv
         )
+        # A provider can be present in the merged catalog while the other
+        # provider has zero rows (CT-05's Wayback-only anchor is the important
+        # case).  Preserve the frozen anchor denominator explicitly so an empty
+        # TM list means "queried and empty", not "missing -> try live GEHI".
+        for anchor in anchors:
+            offline_tm_catalog.setdefault(anchor["anchor_id"], [])
+            if offline_wayback_catalog is not None:
+                offline_wayback_catalog.setdefault(anchor["anchor_id"], [])
         covered = sum(1 for a in anchors if a["anchor_id"] in offline_tm_catalog)
         print(
             f"[CFG] offline_tm_catalog={args.offline_tm_catalog_csv} "
@@ -2310,9 +2606,13 @@ def main() -> None:
                 audit_dir=args.audit_dir,
                 gemini_config=gemini_config,
                 gemini_config_round1=gemini_config_round1,
+                gemini_config_troubleshooting=gemini_config_troubleshooting,
                 cheap_round_types=cheap_round_types,
                 limiter=limiter,
                 routing_salt_mode=args.routing_salt_mode,
+                routing_salt_seed=args.routing_salt_seed,
+                run_id=args.run_id or args.scan_states_dir.parent.name,
+                wave_id=args.wave_id,
                 census_mid_date_iso=census_by_anchor[anchor_id],
                 scorer=scorer,
                 overwrite_chips=args.overwrite_chips,
@@ -2334,7 +2634,17 @@ def main() -> None:
             # Never convert a geometry-epoch mismatch into a terminal state: that
             # would make the next resume silently skip mixed-geometry evidence.
             raise
-        except Exception as exc:  # noqa: BLE001 - continue-on-error: record + keep batch running
+        except Exception as exc:
+            from scripts.validation.gemini_solar_image_review import ModelIdentityError
+            from scripts.temporal.quota_control import QuotaControlError
+
+            if isinstance(exc, (QuotaControlError, ModelIdentityError)):
+                # A quota/model-integrity event must leave the state resumable;
+                # converting it to a terminal anchor failure would make the
+                # cooldown/resume protocol impossible.
+                with print_lock:
+                    print(f"{marker} {anchor_id}: FAIL_CLOSED {type(exc).__name__}: {exc}", file=sys.stderr)
+                raise
             state = _record_orchestrator_failure(anchor, args.scan_states_dir, exc)
             with print_lock:
                 print(f"{marker} {anchor_id}: ERROR status={state.status} reason={exc!r}")

@@ -370,6 +370,7 @@ class GeminiPresenceScorer:
                 capture_date=pick.capture_date,
                 version=pick.version,
                 actual_zoom=pick.actual_zoom,
+                reference_only=bool(getattr(pick, "reference_only", False)),
             )
             for i, pick in enumerate(picks)
         ]

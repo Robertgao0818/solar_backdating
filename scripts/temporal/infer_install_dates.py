@@ -167,12 +167,38 @@ def _all_results(state: ScanState) -> list[RoundResult]:
     return [r for rnd in state.rounds for r in rnd.results]
 
 
+def _evidence_results(state: ScanState, census_mid_date: date) -> list[RoundResult]:
+    """Return only pre-census, non-reference observations.
+
+    Scan state deliberately retains post-census reference rows for provenance,
+    but they are not install-date evidence.  The explicit flag handles the CT
+    six-slot instrument; the date check remains a defensive fence for legacy or
+    hand-authored state files.
+    """
+    # Production v3 states persist the resolved census cutoff.  Older synthetic
+    # states (and historical fixtures) may call infer_one with a cutoff but have
+    # no state-level cutoff metadata; retain their pre-v3 behavior so this
+    # inference helper remains backwards compatible.  CT run roots always carry
+    # ``state.census_date`` and therefore take the strict fence below.
+    cutoff = (state.census_date or "").strip()[:10]
+    if not cutoff:
+        return [r for r in _all_results(state) if not r.reference_only]
+    return [
+        r
+        for r in _all_results(state)
+        if not r.reference_only and r.capture_date[:10] < cutoff
+    ]
+
+
 def _usable(results: list[RoundResult]) -> list[RoundResult]:
     return [r for r in results if r.quality_flag == "usable" and r.pv_present is not None]
 
 
 def apply_dip_repair(
-    state: ScanState, *, flank_min_confidence: float = 0.5
+    state: ScanState,
+    *,
+    census_mid_date: date | None = None,
+    flank_min_confidence: float = 0.5,
 ) -> tuple[ScanState, list[str]]:
     """Monotonic dip repair as a separate, non-destructive pre-pass.
 
@@ -186,7 +212,11 @@ def apply_dip_repair(
 
     Returns ``(state_or_repaired_copy, repaired_date_strings)``.
     """
-    usable = _usable(_all_results(state))
+    usable = _usable(
+        _all_results(state)
+        if census_mid_date is None
+        else _evidence_results(state, census_mid_date)
+    )
     if len(usable) < 3:
         return state, []
     obs = [
@@ -215,7 +245,11 @@ def apply_dip_repair(
     # Re-derive status from the repaired observations, but only override the
     # non-monotonic ambiguous verdict the repair was meant to resolve.
     if new_state.status == "done_ambiguous_nonmonotonic":
-        repaired_usable = _usable(_all_results(new_state))
+        repaired_usable = _usable(
+            _all_results(new_state)
+            if census_mid_date is None
+            else _evidence_results(new_state, census_mid_date)
+        )
         if not is_nonmonotonic(repaired_usable):
             n_present = sum(1 for r in repaired_usable if r.pv_present)
             n_absent = sum(1 for r in repaired_usable if not r.pv_present)
@@ -240,13 +274,14 @@ def infer_one(
     vexcel_capture_by_grid: dict[str, date] | None = None,
 ) -> Phase0InstallInterval:
     all_results = _all_results(state)
-    usable = _usable(all_results)
-    n_obs = len(all_results)
+    evidence_results = _evidence_results(state, census_mid_date)
+    usable = _usable(evidence_results)
+    n_obs = len(evidence_results)
     n_present = sum(1 for r in usable if r.pv_present)
     n_absent = sum(1 for r in usable if not r.pv_present)
     n_unusable = sum(
         1
-        for r in all_results
+        for r in evidence_results
         if r.quality_flag != "usable" or r.pv_present is None
     )
 
@@ -532,7 +567,11 @@ def main() -> None:
             print(f"[SKIP] non-terminal {state.anchor_id}: status={state.status}", file=sys.stderr)
             continue
         if not args.no_dip_repair:
-            state, repaired = apply_dip_repair(state, flank_min_confidence=args.dip_flank_min_confidence)
+            state, repaired = apply_dip_repair(
+                state,
+                census_mid_date=census_mid,
+                flank_min_confidence=args.dip_flank_min_confidence,
+            )
             if repaired:
                 n_repaired_total += len(repaired)
                 n_anchors_repaired += 1

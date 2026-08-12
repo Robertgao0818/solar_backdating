@@ -173,6 +173,41 @@ def test_resolve_window_frames_flank_zero() -> None:
     assert {f.role for f in frames} == {"latest_absent", "earliest_present"}
 
 
+def test_resolve_window_frames_uses_frozen_claim_over_later_dip() -> None:
+    state = _state(
+        ANCHOR_1,
+        [
+            _result("2018-03-30", present=False, version=1),
+            _result("2019-06-01", present=True, version=2),
+            _result("2020-08-15", present=False, version=3),
+            _result("2021-11-02", present=True, version=4),
+        ],
+    )
+
+    frames = resolve_window_frames(
+        state,
+        flank=0,
+        claimed_latest_absent="2018-03-30",
+        claimed_earliest_present="2019-06-01",
+    )
+
+    assert [(frame.role, frame.capture_date) for frame in frames] == [
+        ("latest_absent", "2018-03-30"),
+        ("earliest_present", "2019-06-01"),
+    ]
+
+
+def test_resolve_window_frames_fails_if_frozen_claim_is_missing() -> None:
+    state = _state(ANCHOR_1, _default_results())
+
+    with pytest.raises(ValueError, match="claimed latest_absent=2018-04-01"):
+        resolve_window_frames(
+            state,
+            claimed_latest_absent="2018-04-01",
+            claimed_earliest_present="2019-06-01",
+        )
+
+
 def test_frame_zoom_ladder() -> None:
     assert frame_zoom_ladder(19) == (19, 18)
     assert frame_zoom_ladder(None) == (19, 18)
