@@ -1,0 +1,36 @@
+{
+  "anchor_id": "r1_census",
+  "region_key": "cape_town",
+  "grid_id": "CPT0001",
+  "status": "done_installed_during_census",
+  "rounds": [
+    {
+      "round_id": 1,
+      "round_type": "initial",
+      "window_start_date": "2024-03-01",
+      "window_end_date": "2024-03-01",
+      "picks": [
+        {"chip_index": 1, "capture_date": "2024-03-01", "version": 0, "requested_zoom": 20}
+      ],
+      "results": [
+        {
+          "chip_index": 1, "capture_date": "2024-03-01", "version": 0, "pv_present": false,
+          "confidence": 0.9, "quality_flag": "usable", "decision_source": "gemini_batch",
+          "evidence": "", "notes": "", "chip_path": "", "actual_zoom": 20
+        }
+      ],
+      "completed": true,
+      "failed": false,
+      "notes": ""
+    }
+  ],
+  "next_action": null,
+  "started_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "spec_version": "phase0_v3_reference_only",
+  "notes": "",
+  "census_date": null,
+  "catalog_max_date": null,
+  "post_census_reference_frames": null,
+  "geometry_version": "repro_r1_fixture"
+}

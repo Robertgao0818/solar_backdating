@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import sqlite3
 
 import fiona
 import geopandas as gpd
@@ -16,9 +17,11 @@ from scripts.temporal.build_ct_chip_groups_v1 import (
 )
 from scripts.temporal.build_ct_install_dated_deliverable import (
     CENSUS_CUTOFF,
+    GPKG_LAST_CHANGE,
     METRIC_CRS,
     build_rows as build_deliverable_rows,
     classify,
+    freeze_gpkg_last_change,
     load_geometry,
     run_gates,
     write_gpkg,
@@ -167,9 +170,13 @@ def test_ct_deliverable_join_crs_and_gates(tmp_path: Path) -> None:
 
     gpkg = tmp_path / "out.gpkg"
     write_gpkg(rows, gpkg)
+    freeze_gpkg_last_change(gpkg)
     with fiona.open(gpkg, layer="ct_solar_install_dated") as src:
         assert len(src) == 3
         assert "32734" in str(src.crs)
+    with sqlite3.connect(gpkg) as connection:
+        stamp = connection.execute("SELECT last_change FROM gpkg_contents").fetchone()[0]
+    assert stamp == GPKG_LAST_CHANGE
 
 
 def test_ct_deliverable_rejects_post_census_output() -> None:

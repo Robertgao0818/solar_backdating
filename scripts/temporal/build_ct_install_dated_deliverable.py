@@ -13,6 +13,7 @@ import argparse
 import csv
 import hashlib
 import json
+import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -38,6 +39,9 @@ OUTPUT_LAYER = "ct_solar_install_dated"
 METRIC_CRS = "EPSG:32734"
 CENSUS_CUTOFF = date(2025, 1, 31)
 EXPECTED_COUNT = 21_453
+# Fiona/GDAL stamps gpkg_contents.last_change with wall-clock UTC. Freeze it so
+# two writes of the same rows are byte-identical (Leg-R R1).
+GPKG_LAST_CHANGE = "2025-01-31T00:00:00.000Z"
 
 ANCHOR_REQUIRED_FIELDS = {
     "anchor_id",
@@ -385,6 +389,13 @@ def write_gpkg(rows: list[dict[str, Any]], path: Path) -> None:
             )
 
 
+def freeze_gpkg_last_change(path: Path, last_change: str = GPKG_LAST_CHANGE) -> None:
+    """Overwrite GDAL's wall-clock ``gpkg_contents.last_change`` with a frozen stamp."""
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE gpkg_contents SET last_change = ?", (last_change,))
+        connection.commit()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--geometry-gpkg", type=Path, default=DEFAULT_GEOMETRY)
@@ -433,6 +444,7 @@ def main() -> None:
     gates_path = args.output_dir / "gates.json"
     write_csv(rows, csv_path)
     write_gpkg(rows, gpkg_path)
+    freeze_gpkg_last_change(gpkg_path)
     gates_path.write_text(json.dumps(gates, indent=2, sort_keys=True) + "\n")
     manifest = {
         "schema_version": "ct_top52_install_dated_v1",

@@ -89,6 +89,11 @@ OUTPUT_FIELDS = [
     "confidence",
     "notes",
 ]
+# Interval math + status fields. Excludes scan_state_path so dual-run / frozen
+# comparisons can ignore the old absolute-path column.
+INTERVAL_VALUE_FIELDS = tuple(field for field in OUTPUT_FIELDS if field != "scan_state_path")
+SCAN_STATE_PATH_MODES = ("basename", "relative", "absolute")
+SCAN_STATE_PATH_SIDECAR_FIELDS = ("anchor_id", "scan_state_path", "scan_state_path_abs")
 
 
 @dataclass
@@ -509,7 +514,73 @@ def parse_args() -> argparse.Namespace:
         "Default behavior is to abort, which prevents silently dropping rows when a spec_version "
         "mismatch or corrupted state file appears.",
     )
+    parser.add_argument(
+        "--scan-state-path-mode",
+        choices=SCAN_STATE_PATH_MODES,
+        default="basename",
+        help="How to write the scan_state_path column. Default basename (<anchor_id>.json) so "
+        "dual-runs are byte-identical. Use absolute for the legacy host-specific path.",
+    )
+    parser.add_argument(
+        "--scan-state-path-root",
+        type=Path,
+        default=None,
+        help="Root for --scan-state-path-mode=relative. Ignored for basename/absolute.",
+    )
+    parser.add_argument(
+        "--scan-state-path-sidecar",
+        type=Path,
+        default=None,
+        help="Optional CSV mapping canonical scan_state_path to the absolute source path. "
+        "Default: <output>.scan_state_path_map.csv.",
+    )
+    parser.add_argument(
+        "--no-scan-state-path-sidecar",
+        action="store_true",
+        help="Do not write the absolute-path sidecar next to the intervals CSV.",
+    )
     return parser.parse_args()
+
+
+def format_scan_state_path(
+    path: Path,
+    *,
+    mode: str = "basename",
+    root: Path | None = None,
+) -> str:
+    """Stable scan_state_path for byte-identical dual-run CSVs.
+
+    ``basename`` writes ``<anchor_id>.json`` (default). ``relative`` requires
+    ``--scan-state-path-root``. ``absolute`` is the legacy host-specific form.
+    """
+    resolved = path.resolve()
+    if mode == "basename":
+        return resolved.name
+    if mode == "absolute":
+        return str(resolved)
+    if mode == "relative":
+        if root is None:
+            raise ValueError("--scan-state-path-root is required when --scan-state-path-mode=relative")
+        return str(resolved.relative_to(root.resolve()))
+    raise ValueError(f"unknown scan-state-path-mode {mode!r}")
+
+
+def write_scan_state_path_sidecar(
+    rows: list[tuple[str, str, str]],
+    path: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SCAN_STATE_PATH_SIDECAR_FIELDS)
+        writer.writeheader()
+        for anchor_id, canonical, absolute in rows:
+            writer.writerow(
+                {
+                    "anchor_id": anchor_id,
+                    "scan_state_path": canonical,
+                    "scan_state_path_abs": absolute,
+                }
+            )
 
 
 def write_intervals(intervals: list[Phase0InstallInterval], path: Path) -> None:
@@ -550,7 +621,18 @@ def main() -> None:
     if not state_files:
         raise SystemExit(f"No scan_state JSON files in {args.scan_states_dir}")
 
+    try:
+        path_root = args.scan_state_path_root
+        format_scan_state_path(
+            args.scan_states_dir / "_probe.json",
+            mode=args.scan_state_path_mode,
+            root=path_root,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
     intervals: list[Phase0InstallInterval] = []
+    sidecar_rows: list[tuple[str, str, str]] = []
     load_failures: list[tuple[Path, str]] = []
     n_repaired_total = 0
     n_anchors_repaired = 0
@@ -581,6 +663,13 @@ def main() -> None:
             scan_state_path=state_path,
             vexcel_capture_by_grid=vexcel_dates,
         )
+        canonical_path = format_scan_state_path(
+            state_path,
+            mode=args.scan_state_path_mode,
+            root=path_root,
+        )
+        interval.scan_state_path = canonical_path
+        sidecar_rows.append((interval.anchor_id, canonical_path, str(state_path.resolve())))
         intervals.append(interval)
 
     if load_failures and not args.allow_load_failures:
@@ -596,6 +685,14 @@ def main() -> None:
         )
 
     write_intervals(intervals, output_path)
+    if not args.no_scan_state_path_sidecar:
+        sidecar_path = (
+            args.scan_state_path_sidecar
+            if args.scan_state_path_sidecar is not None
+            else output_path.with_suffix(output_path.suffix + ".scan_state_path_map.csv")
+        )
+        write_scan_state_path_sidecar(sidecar_rows, sidecar_path)
+        print(f"Wrote scan_state_path sidecar -> {sidecar_path}")
 
     by_status: dict[str, int] = defaultdict(int)
     by_confidence: dict[str, int] = defaultdict(int)

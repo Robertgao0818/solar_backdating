@@ -646,3 +646,95 @@ def test_cli_walks_scan_states_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert by_anchor["a000001"]["status"] == "done_appears"
     assert by_anchor["a000002"]["status"] == "done_installed_during_census"
     assert by_anchor["a000002"]["install_interval_end"] == "2024-06-30"
+
+
+def test_format_scan_state_path_modes(tmp_path: Path) -> None:
+    states = tmp_path / "run" / "scan_states"
+    states.mkdir(parents=True)
+    path = states / "a000001.json"
+    path.write_text("{}", encoding="utf-8")
+    from scripts.temporal.infer_install_dates import format_scan_state_path
+
+    assert format_scan_state_path(path, mode="basename") == "a000001.json"
+    assert format_scan_state_path(path, mode="relative", root=tmp_path / "run") == "scan_states/a000001.json"
+    assert format_scan_state_path(path, mode="absolute") == str(path.resolve())
+    with pytest.raises(ValueError, match="scan-state-path-root"):
+        format_scan_state_path(path, mode="relative")
+
+
+def test_cli_scan_state_path_basename_is_dual_run_stable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two infer runs from different host paths must write identical interval CSVs."""
+    from scripts.temporal.infer_install_dates import main as infer_main
+
+    hashes = []
+    for label in ("run_a", "run_b"):
+        states_dir = tmp_path / label / "scan_states"
+        states_dir.mkdir(parents=True)
+        state = _state_with(
+            "done_appears",
+            [_result("2020-04-15", present=False), _result("2020-08-15", present=True)],
+            anchor_id="a000001",
+        )
+        save_scan_state(state, state_path_for(state.anchor_id, states_dir))
+        output_path = tmp_path / label / "install_intervals.csv"
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "infer_install_dates.py",
+                "--scan-states-dir",
+                str(states_dir),
+                "--output",
+                str(output_path),
+                "--census-mid-date",
+                "2024-06-30",
+                "--no-scan-state-path-sidecar",
+            ],
+        )
+        infer_main()
+        hashes.append(output_path.read_bytes())
+        with output_path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        assert rows[0]["scan_state_path"] == "a000001.json"
+    assert hashes[0] == hashes[1]
+
+
+def test_cli_scan_state_path_absolute_mode_and_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scripts.temporal.infer_install_dates import main as infer_main
+
+    states_dir = tmp_path / "scan_states"
+    states_dir.mkdir()
+    state = _state_with(
+        "done_appears",
+        [_result("2020-04-15", present=False), _result("2020-08-15", present=True)],
+        anchor_id="a000001",
+    )
+    saved = state_path_for(state.anchor_id, states_dir)
+    save_scan_state(state, saved)
+    output_path = tmp_path / "install_intervals.csv"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "infer_install_dates.py",
+            "--scan-states-dir",
+            str(states_dir),
+            "--output",
+            str(output_path),
+            "--census-mid-date",
+            "2024-06-30",
+            "--scan-state-path-mode",
+            "absolute",
+        ],
+    )
+    infer_main()
+    with output_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["scan_state_path"] == str(saved.resolve())
+    sidecar = output_path.with_suffix(output_path.suffix + ".scan_state_path_map.csv")
+    assert sidecar.exists()
+    with sidecar.open(newline="", encoding="utf-8") as handle:
+        side_rows = list(csv.DictReader(handle))
+    assert side_rows[0]["scan_state_path_abs"] == str(saved.resolve())

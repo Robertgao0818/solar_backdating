@@ -1,0 +1,42 @@
+{
+  "anchor_id": "r1_already",
+  "region_key": "cape_town",
+  "grid_id": "CPT0001",
+  "status": "done_already_present_before_geid_history",
+  "rounds": [
+    {
+      "round_id": 1,
+      "round_type": "initial",
+      "window_start_date": "2009-04-15",
+      "window_end_date": "2018-06-15",
+      "picks": [
+        {"chip_index": 1, "capture_date": "2009-04-15", "version": 0, "requested_zoom": 20},
+        {"chip_index": 2, "capture_date": "2018-06-15", "version": 0, "requested_zoom": 20}
+      ],
+      "results": [
+        {
+          "chip_index": 1, "capture_date": "2009-04-15", "version": 0, "pv_present": true,
+          "confidence": 0.9, "quality_flag": "usable", "decision_source": "gemini_batch",
+          "evidence": "", "notes": "", "chip_path": "", "actual_zoom": 20
+        },
+        {
+          "chip_index": 2, "capture_date": "2018-06-15", "version": 0, "pv_present": true,
+          "confidence": 0.9, "quality_flag": "usable", "decision_source": "gemini_batch",
+          "evidence": "", "notes": "", "chip_path": "", "actual_zoom": 20
+        }
+      ],
+      "completed": true,
+      "failed": false,
+      "notes": ""
+    }
+  ],
+  "next_action": null,
+  "started_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "spec_version": "phase0_v3_reference_only",
+  "notes": "",
+  "census_date": null,
+  "catalog_max_date": null,
+  "post_census_reference_frames": null,
+  "geometry_version": "repro_r1_fixture"
+}

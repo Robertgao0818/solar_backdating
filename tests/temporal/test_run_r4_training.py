@@ -1,4 +1,4 @@
-"""Contract tests for the Run3-native R4 v1 training runner."""
+"""Contract tests for the Run3-native R4 training runner (v2 H1 default)."""
 
 from __future__ import annotations
 
@@ -282,8 +282,11 @@ def test_tiny_anchor_training_loop_selects_checkpoint(tmp_path):
                     "source_area_m2": [25.0] * 3,
                     "src_tiff_sha256": [f"{anchor_id}-{i}" for i in range(3)],
                     "quality_flag": ["usable", "usable", "unusable"],
+                    "label_v1": ["absent", "present", "uninformative"],
+                    "scan_status": ["done_appears"] * 3,
                 }
         )
+        rows = r4.attach_quality_supervision(rows)
         return r4.AnchorSequence(
             anchor_id=anchor_id,
             split_role=role,
@@ -311,12 +314,13 @@ def test_tiny_anchor_training_loop_selects_checkpoint(tmp_path):
     assert equivalence["max_abs_posterior_difference"] <= 1e-6
     assert (tmp_path / "locks/decoder_equivalence_200.json").exists()
     r4.atomic_json(tmp_path / "locks/RUN_LOCK.json", {"attempt_id": r4.ATTEMPT_ID})
-    r4.atomic_json(tmp_path / "config/r4_v1.yaml", r4.RESOLVED_CONFIG)
+    r4.atomic_json(tmp_path / r4.config_relpath(), r4.RESOLVED_CONFIG)
     labels = [label for anchor in sequences[:4] for label in anchor.labels]
+    q_targets, q_eligible = r4._flatten_quality_supervision(sequences[:4])
     result = r4.train_one_seed(
         sequences,
         cohort_prior,
-        r4.class_weights(labels),
+        r4.class_weights(labels, q_targets, q_eligible),
         r4.SEEDS[0],
         tmp_path,
         device="cpu",
@@ -371,3 +375,100 @@ def test_health_and_run_lock_finalize_required_artifacts(tmp_path):
     assert "metrics/R4_HEALTH.json" in lock["output_hashes"]
     assert r4.write_artifact_manifest(tmp_path) > 0
     assert (tmp_path / "artifacts.sha256").exists()
+
+
+def test_quality_supervision_maps_flag_not_effective_label():
+    rows = pd.DataFrame({
+        "label_v1": ["present", "absent", "uninformative", "present"],
+        "quality_flag": ["usable", "ambiguous", "unusable", "usable"],
+        "scan_status": ["done_appears"] * 4,
+        "a1_override": [False, False, False, False],
+    })
+    rows["label_v1_r0"] = rows["label_v1"]
+    out = r4.attach_quality_supervision(rows)
+    assert out["quality_supervision_eligible"].tolist() == [True, True, True, True]
+    assert out["quality_target"].tolist() == [1.0, 0.0, 0.0, 1.0]
+    assert out["quality_target_reason"].tolist() == [
+        "usable_verdict", "quality_negative", "quality_negative", "usable_verdict",
+    ]
+
+
+def test_quality_supervision_excludes_a1_and_ambiguous_status():
+    rows = pd.DataFrame({
+        "label_v1": ["uninformative", "absent", "present"],
+        "label_v1_r0": ["absent", "absent", "present"],
+        "quality_flag": ["usable", "unusable", "usable"],
+        "scan_status": [
+            "done_appears",
+            "done_appears",
+            "done_ambiguous_nonmonotonic",
+        ],
+        "a1_override": [True, False, False],
+    })
+    out = r4.attach_quality_supervision(rows)
+    assert out["quality_supervision_eligible"].tolist() == [False, True, False]
+    assert np.isnan(out["quality_target"].iloc[0])
+    assert out["quality_target"].iloc[1] == 0.0
+    assert np.isnan(out["quality_target"].iloc[2])
+    assert out["quality_target_reason"].tolist() == [
+        "a1_empty_k_patch", "quality_negative", "d12iii_ambiguous_anchor",
+    ]
+
+
+def test_anchor_loss_skips_ineligible_quality_frames():
+    import torch
+
+    q_logits = torch.tensor([-8.0, -8.0, 8.0], dtype=torch.float64)
+    state_logits = torch.zeros((3, 2), dtype=torch.float64)
+    labels = ["absent", "absent", "present"]
+    dates = [date(2019, 1, 1), date(2020, 1, 1), date(2021, 1, 1)]
+    weights = {"quality_0": 1.0, "quality_1": 1.0, "absent": 1.0, "present": 1.0}
+    _, _, q_all, _, _, _ = r4.anchor_loss(
+        q_logits, state_logits, labels, dates, None, weights,
+        quality_targets=[1.0, 0.0, 1.0],
+        quality_eligible=[True, True, True],
+    )
+    _, _, q_masked, _, _, _ = r4.anchor_loss(
+        q_logits, state_logits, labels, dates, None, weights,
+        quality_targets=[1.0, 0.0, 1.0],
+        quality_eligible=[False, True, False],
+    )
+    assert float(q_masked) < 0.01
+    assert float(q_all) > 2.0
+
+
+def test_class_weights_use_quality_targets_when_provided():
+    labels = ["absent", "present", "uninformative", "absent"]
+    v1 = r4.class_weights(labels)
+    h1 = r4.class_weights(
+        labels,
+        quality_targets=[1.0, 0.0, 0.0, 1.0],
+        quality_eligible=[True, True, False, True],
+    )
+    assert v1["quality_0"] != h1["quality_0"]
+    assert h1["absent"] == v1["absent"]
+
+
+def test_calibration_quality_uses_reconstructed_target():
+    n = 240
+    frames = pd.DataFrame({
+        "anchor_id": [f"a{i:03d}" for i in range(n)],
+        "capture_date": ["2020-01-01"] * 120 + ["2023-01-01"] * 120,
+        "effective_label": (["uninformative", "absent", "present"] * 80),
+        "raw_q": np.linspace(0.05, 0.95, n),
+        "cal_q": np.linspace(0.10, 0.90, n),
+        "raw_e1": np.linspace(0.05, 0.95, n),
+        "cal_e1": np.linspace(0.10, 0.90, n),
+        "chip_arm": ["A24"] * 120 + ["A48"] * 120,
+        "area_bin": ["[15,40)"] * 120 + ["[40,100)"] * 120,
+        "source_area_m2": [20.0] * 120 + [60.0] * 120,
+        "era_bin": ["2019-2020"] * 120 + ["2023-2025"] * 120,
+        "raw_quality_bin": ["low"] * 80 + ["medium"] * 80 + ["high"] * 80,
+        "quality_flag": ["usable", "ambiguous", "unusable"] * 80,
+        "quality_supervision_eligible": [True] * 200 + [False] * 40,
+        "quality_target": [1.0] * 160 + [0.0] * 40 + [np.nan] * 40,
+    })
+    report = r4.calibration_slice_report(frames, target="quality", train_prevalence=0.8)
+    assert report["overall"]["rows"] == 200
+    assert report["overall"]["negatives"] == 40
+    assert report["overall"]["positives"] == 160

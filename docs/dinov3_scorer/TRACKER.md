@@ -31,7 +31,7 @@ in `docs/` markdown and the GitHub issue tracker is unused (PRD → Further Note
 | 7 | Feature-flag rollout + ops profile | ⛔ | 6 (gate-2 FAIL — no production swap) | [ISSUE-07](ISSUE-07-rollout-ops-profile.md) |
 | 8 | Bonus: deterministic run-to-run experiment (not gated) | ⬜ | 4 | [ISSUE-08](ISSUE-08-determinism-experiment.md) |
 | 9 | Path C0: training-free census-anchored reverse template matching (latent match + amended census-conditioned one-sided decode; new-prereg lane per revival memo) | ⛔ | 2026-07-15 mathematical amendment implementation + calibration lock + mandatory tests | [ISSUE-09](ISSUE-09-c0-reverse-template-matching.md) |
-| 10 | Run3-native local line (research-only revival: 311,195-obs manifest, 3-state quality-marginalized emissions on the Phase-0 decoder, interval-level loss, marker-free ROI, localization gating layer; shelve-to-CapeTown rule) — licensed as a NEW prereg under the revival memo's "teacher geometry + re-distill" reopening condition; **owner-approved 2026-07-19** (gates + shelve rule + repeat-ceiling quota; LoRA/backbone veto maintained). **§9 foundations DELIVERED + R0 FROZEN & OWNER-CONFIRMED 2026-07-19** (311,195-obs manifest reconciled exact, `leakage_component_stratum_greedy` split, chip-overlap leakage graph deviation ratified with R0 sign-off; lock at `~/zasolar_data/geid_temporal/run3_native_line_2026-07/r0_manifest_v1/MANIFEST_LOCK.json`; TLO schema + cascade skeleton landed in `src/solar_backdating/localization/`). Phase-0 emission design is **APPROVED and implemented** ([DESIGN-phase0-emission-extension-2026-07-19](DESIGN-phase0-emission-extension-2026-07-19.md)); T0 is complete and leaves per-anchor fidelity open. **Wave 2 (R1/R2/repeat-ceiling) DELIVERED 2026-07-19**: R1 marker-free crops `r1_cropgeo_v1` (teacher byte-identical, [DATA-r1-crops](DATA-r1-crops-2026-07-19.md)); R2 cascade real (phase_corr+weak_lock, 2k replay; conflict handling remains off pending its separate shadow/blind protocol, [DATA-r2](DATA-r2-localization-replay-2026-07-19.md)); **new teacher ceiling 0.7708 ± 0.0166 (replaces 0.7724), <40 m² 0.7529 ± 0.0192** on frozen 576-anchor test panel, same instrument as RUN 3, old 0.65–0.67 provenance traced ([DATA-ceiling](DATA-run3native-repeat-ceiling-2026-07-19.md) §5.5). R4 prereg frozen 2026-07-20; training not started | 🔄 | — | [PRD-run3-native-local-line-2026-07-19](PRD-run3-native-local-line-2026-07-19.md) |
+| 10 | Run3-native local line (research-only revival: 311,195-obs manifest, 3-state quality-marginalized emissions on the Phase-0 decoder, interval-level loss, marker-free ROI, localization gating layer; shelve-to-CapeTown rule) — licensed as a NEW prereg under the revival memo's "teacher geometry + re-distill" reopening condition; **owner-approved 2026-07-19** (gates + shelve rule + repeat-ceiling quota; LoRA/backbone veto maintained). **§9 foundations DELIVERED + R0 FROZEN & OWNER-CONFIRMED 2026-07-19** (311,195-obs manifest reconciled exact, `leakage_component_stratum_greedy` split, chip-overlap leakage graph deviation ratified with R0 sign-off; lock at `~/zasolar_data/geid_temporal/run3_native_line_2026-07/r0_manifest_v1/MANIFEST_LOCK.json`; TLO schema + cascade skeleton landed in `src/solar_backdating/localization/`). Phase-0 emission design is **APPROVED and implemented** ([DESIGN-phase0-emission-extension-2026-07-19](DESIGN-phase0-emission-extension-2026-07-19.md)); T0 is complete and leaves per-anchor fidelity open. **Wave 2 (R1/R2/repeat-ceiling) DELIVERED 2026-07-19**: R1 marker-free crops `r1_cropgeo_v1` (teacher byte-identical, [DATA-r1-crops](DATA-r1-crops-2026-07-19.md)); R2 cascade real (phase_corr+weak_lock, 2k replay; conflict handling remains off pending its separate shadow/blind protocol, [DATA-r2](DATA-r2-localization-replay-2026-07-19.md)); **new teacher ceiling 0.7708 ± 0.0166 (replaces 0.7724), <40 m² 0.7529 ± 0.0192** on frozen 576-anchor test panel, same instrument as RUN 3, old 0.65–0.67 provenance traced ([DATA-ceiling](DATA-run3native-repeat-ceiling-2026-07-19.md) §5.5). R4 prereg frozen 2026-07-20. **R4 v1 executed 2026-08-03/04 — verdict CALIBRATION_FAILED** (state head AUROC 0.93 strong; quality head 0.57–0.59 near-random on 3.0% negatives; map-in-K 0.660–0.664, no threshold clears Wilson 0.7542 @ coverage 0.80; [DATA-r4-v1-result-2026-08-13](DATA-r4-v1-result-2026-08-13.md)). Single-correction licence spent on **H1 quality-head supervision repair** ([OWNER_DECISIONS D3](../replan_v2/OWNER_DECISIONS.md)); r4_v2 prereg frozen 2026-08-13 ([RUN-r4-v2-h1](RUN-r4-v2-h1-quality-supervision-prereg-2026-08-13.md)); implementation in runner, formal train waits on a clean commit; on second FAIL → D2 pre-authorized LoRA-level round (backbone swap still vetoed) | 🔄 | — | [PRD-run3-native-local-line-2026-07-19](PRD-run3-native-local-line-2026-07-19.md) |
 
 **Slice 10 Wave 3 update (2026-07-20):** crop geometry v2 is delivered as a
 sidecar-driven, area-preserving rectangular ROI index with byte-identical v1
@@ -143,6 +143,34 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
   field — on disk the field is `confidence`.
 
 ## Progress log
+
+- 2026-08-13 — **R4 v2 / H1 prereg frozen; quality-supervision reconstruction
+  implemented in `run_r4_training.py` (attempt_id `r4_v2`).** Diagnosis:
+  [DATA-r4-v1-quality-head-diagnosis-2026-08-13](DATA-r4-v1-quality-head-diagnosis-2026-08-13.md)
+  — 84% of v1 cal_select quality negatives were A1 usable boundary patches.
+  H1 q-target = teacher `quality_flag` on non-ambiguous-status frames;
+  A1 patches excluded from quality BCE. Locked train counts q0=8,375 /
+  q1=197,229. Formal three-seed train not started: runner requires
+  `git_dirty=false`. Bars unchanged (0.7542 / 0.7337 / 0.80).
+
+- 2026-08-13 — **R4 v1 result memo backfilled; verdict CALIBRATION_FAILED
+  (run actually executed 2026-08-03 21:05 → 08-04 00:47, ≈3.7 h on local
+  RTX 4070; this tracker's "training not started" was stale for 9 days).**
+  Training/leakage/decoder-equivalence checks all PASS; calibration gate
+  fails on `selected_threshold=None` across all three seeds: best
+  qualifying-region point t=0.57 gives Wilson 0.6725 @ coverage 0.8051 vs
+  bar 0.7542 (8.2 pp short); plateau 0.660–0.664 matches the historical
+  0.639/0.654 band — the run3-native input corrections did not move it.
+  Mechanism suspect: quality head near-random (AUROC 0.568/0.591/0.579 on
+  410/13,797 = 3.0% negatives) while the state head is strong (0.93) —
+  distillation works at frame-state, fails at quality. Full numbers:
+  [DATA-r4-v1-result-2026-08-13](DATA-r4-v1-result-2026-08-13.md).
+  Owner decisions same day ([OWNER_DECISIONS](../replan_v2/OWNER_DECISIONS.md)):
+  D3 = the calibration gate's single hypothesis-led correction is **H1
+  quality-head supervision repair** (bars unchanged); D2 = pre-decided
+  failure branch — one LoRA-level round on second FAIL (own prereg
+  required; backbone swap stays vetoed), then shelve. Sequencing context:
+  [RUN-paper-program-sequencing-2026-08-13](../replan_v2/RUN-paper-program-sequencing-2026-08-13.md).
 
 - 2026-08-03 — **R4 Amendment A1 owner-confirmed; conservative empty-`K_i`
   sidecar frozen; training still not started.** Population 2,146 anchors / 4,292

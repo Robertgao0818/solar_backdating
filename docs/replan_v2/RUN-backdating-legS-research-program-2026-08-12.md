@@ -116,6 +116,12 @@ TRANSITION containment 提升;KILL 沿用 bounded-pilot 纪律。
 现状:gate-2 FAIL(A_LSAT=0.6392 vs teacher ceiling 0.7724/0.7708);
 R4 prereg 已冻结(含 empty-`K_i` 保守 sidecar A1)、训练未开;V4/V5
 short-gap 标签修复已回收 5,248 帧。
+**更新 2026-08-13**:上一行"训练未开"已 stale — R4 v1 实际已于
+08-03/04 执行,verdict CALIBRATION_FAILED(状态头 0.93 强、质量头
+~0.58 近随机、map-in-K 0.66 不过 0.7542 bar);单次修正名额已选定
+H1 质量头监督修复,r4_v2 待跑。见
+[DATA-r4-v1-result-2026-08-13](../dinov3_scorer/DATA-r4-v1-result-2026-08-13.md)
+与 [OWNER_DECISIONS D2/D3](OWNER_DECISIONS.md)。
 
 **内容**:按已冻结 prereg 执行 R4 训练(fidelity 对标 teacher ceiling,
 不冒充真值 accuracy);R5 视 R4 结果。噪声标签纪律:面板参考可作

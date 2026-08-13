@@ -1,9 +1,15 @@
 # RUN — R4 v1 frozen-head training and stratified calibration prereg (2026-07-20)
 
-Status: **FROZEN / NOT STARTED** (owner decision incorporated 2026-07-20).
-This document is the binding preregistration for the first R4 run in the
-Run3-native local research line. No R4 checkpoint, calibration result, or test
-metric existed when these rules were frozen.
+Status: **FROZEN / v1 EXECUTED 2026-08-03/04 — CALIBRATION_FAILED**.
+This document remains the binding v1 contract. The single licensed
+calibration-gate correction is
+[`RUN-r4-v2-h1-quality-supervision-prereg-2026-08-13.md`](RUN-r4-v2-h1-quality-supervision-prereg-2026-08-13.md)
+(`r4_v2` / `r4_g1c1`; OWNER D3). v2 inherits every unamended clause
+below. Do not edit the frozen body to “fix” v1 after the fact.
+
+Original header (historical): FROZEN / NOT STARTED (owner decision
+incorporated 2026-07-20). No R4 checkpoint existed when these rules
+were first frozen.
 
 Parent records:
 

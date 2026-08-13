@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Run3-native R4 v1 frozen-feature head training and calibration.
+"""Run3-native R4 frozen-feature head training and calibration.
 
-This is the executable companion to
-``docs/dinov3_scorer/RUN-r4-training-calibration-prereg-2026-07-20.md``.
-It is deliberately incapable of reading the R0 test split: R4 owns only
-``train`` and the deterministic ``cal_es/cal_fit/cal_select`` subdivision.
+Default attempt is ``r4_v2`` (H1 quality-head supervision repair). The
+v1 contract remains
+``docs/dinov3_scorer/RUN-r4-training-calibration-prereg-2026-07-20.md``;
+the v2 amendment is
+``docs/dinov3_scorer/RUN-r4-v2-h1-quality-supervision-prereg-2026-08-13.md``.
+The module cannot read the R0 test split: R4 owns only ``train`` and the
+deterministic ``cal_es/cal_fit/cal_select`` subdivision.
 
 The module keeps policy in small pure functions so input locks, the exact head,
 continuous Phase-0 posterior, calibration roles, and threshold rules can be
@@ -44,8 +47,18 @@ from solar_backdating.estimators.survival import (  # noqa: E402
     to_cohort_prior,
 )
 
-ATTEMPT_ID = "r4_v1"
+ATTEMPT_ID = "r4_v2"
 CAL_ROLE_SALT = b"r4_v1_cal_roles@2026-07-20"
+QUALITY_SUPERVISION_RULE = "r4_v2_h1_teacher_quality_d12iii"
+AMBIGUOUS_STATUSES = frozenset({
+    "done_ambiguous_nonmonotonic",
+    "done_ambiguous_no_recent_anchor",
+})
+EXPECTED_H1_ALLOWED = {
+    "eligible": 245_862, "q0": 9_547, "q1": 236_315,
+    "excluded_a1": 4_292, "excluded_ambiguous_status": 20_712,
+}
+EXPECTED_H1_TRAIN = {"eligible": 205_604, "q0": 8_375, "q1": 197_229}
 SEEDS = (2026072001, 2026072002, 2026072003)
 FEATURE_DIM = 1152
 HIDDEN_DIM = 256
@@ -106,7 +119,18 @@ RESOLVED_CONFIG = {
         "under40_wilson_min": 0.7337, "coverage_min": 0.80,
     },
     "seeds": list(SEEDS),
+    "quality_supervision": {
+        "rule": QUALITY_SUPERVISION_RULE,
+        "q_positive": "quality_flag==usable AND label_v1_r0 in {present,absent}",
+        "exclude": ["a1_empty_k_patch", "d12iii_ambiguous_anchor"],
+    },
 }
+
+
+def config_relpath() -> str:
+    return f"config/{ATTEMPT_ID}.yaml"
+
+
 R4_MANIFEST_COLUMNS = [
     "anchor_id", "capture_date", "chip_index", "src_tiff_sha256", "label_v1",
     "quality_flag", "chip_arm", "area_bin", "source_area_m2", "census_date",
@@ -121,6 +145,7 @@ FRAME_PRED_COLUMNS = {
     "effective_label", "localization_pending", "raw_q_logit", "raw_state_logit",
     "raw_q", "raw_e0", "raw_e1", "cal_q", "cal_e0", "cal_e1",
     "chip_arm", "area_bin", "source_area_m2", "era_bin", "quality_flag",
+    "quality_target", "quality_supervision_eligible", "quality_target_reason",
     "checkpoint_sha", "calibrator_hash", "config_hash",
 }
 ANCHOR_PRED_COLUMNS = {
@@ -257,6 +282,8 @@ def apply_shortgap_sidecar(
     """
     out = manifest.copy()
     if sidecar_path is None:
+        out["label_v1_r0"] = out["label_v1"]
+        out["a1_override"] = False
         out["interval_loss_eligible"] = True
         return out, set()
     if not sidecar_path.is_file():
@@ -284,11 +311,80 @@ def apply_shortgap_sidecar(
     matched = int(keyed["_merge"].eq("both").sum())
     if matched != len(sidecar):
         raise ValueError(f"short-gap sidecar matched {matched}/{len(sidecar)} R0 rows")
+    keyed["label_v1_r0"] = keyed["label_v1"]
+    keyed["a1_override"] = keyed["_merge"].eq("both")
     keyed["label_v1"] = keyed["override_label"].fillna(keyed["label_v1"])
     affected = set(sidecar["anchor_id"].astype(str))
     keyed["interval_loss_eligible"] = ~keyed["anchor_id"].astype(str).isin(affected)
     keyed = keyed.drop(columns=["override_label", "_merge"])
     return keyed, affected
+
+
+def attach_quality_supervision(frame: pd.DataFrame) -> pd.DataFrame:
+    """H1 quality-head targets from teacher quality_flag (D12.iii analogue).
+
+    A1 empty-K patches and ``done_ambiguous_*`` series are excluded from
+    quality BCE. State / interval labels are not rewritten here.
+    """
+    out = frame.copy()
+    if "label_v1_r0" not in out.columns:
+        out["label_v1_r0"] = out["label_v1"]
+    if "a1_override" not in out.columns:
+        out["a1_override"] = False
+    status = (
+        out["scan_status"].astype(str)
+        if "scan_status" in out.columns
+        else pd.Series("", index=out.index)
+    )
+    flag = (
+        out["quality_flag"].astype(str)
+        if "quality_flag" in out.columns
+        else pd.Series("usable", index=out.index)
+    )
+    label_r0 = out["label_v1_r0"].astype(str)
+    a1 = out["a1_override"].astype(bool)
+    excluded_status = status.isin(AMBIGUOUS_STATUSES)
+    eligible = (~a1) & (~excluded_status)
+    q_pos = flag.eq("usable") & label_r0.isin(["present", "absent"])
+    out["quality_supervision_eligible"] = eligible.to_numpy()
+    out["quality_target"] = np.where(eligible, q_pos.astype(np.float64), np.nan)
+    out["quality_target_reason"] = np.select(
+        [a1, excluded_status, q_pos],
+        ["a1_empty_k_patch", "d12iii_ambiguous_anchor", "usable_verdict"],
+        default="quality_negative",
+    )
+    return out
+
+
+def quality_supervision_counts(frame: pd.DataFrame) -> dict[str, int]:
+    eligible = frame["quality_supervision_eligible"].astype(bool)
+    return {
+        "eligible": int(eligible.sum()),
+        "q0": int((eligible & frame["quality_target"].eq(0)).sum()),
+        "q1": int((eligible & frame["quality_target"].eq(1)).sum()),
+        "excluded_a1": int(frame["a1_override"].astype(bool).sum()),
+        "excluded_ambiguous_status": int(
+            (~frame["a1_override"].astype(bool) & frame["scan_status"].isin(AMBIGUOUS_STATUSES)).sum()
+        ),
+    }
+
+
+def _quality_values(
+    quality_targets: Sequence[Any] | None,
+    quality_eligible: Sequence[bool] | None,
+) -> list[float]:
+    if quality_targets is None:
+        return []
+    eligible = (
+        list(quality_eligible)
+        if quality_eligible is not None
+        else [True] * len(quality_targets)
+    )
+    values = []
+    for target, keep in zip(quality_targets, eligible):
+        if keep and target == target:
+            values.append(float(target))
+    return values
 
 
 def _parse_date(value: Any) -> date:
@@ -421,7 +517,11 @@ def normalizer_frame(mean: np.ndarray, std: np.ndarray) -> pd.DataFrame:
     })
 
 
-def make_head(train_labels: Sequence[str]):
+def make_head(
+    train_labels: Sequence[str],
+    quality_targets: Sequence[Any] | None = None,
+    quality_eligible: Sequence[bool] | None = None,
+):
     import torch
     from torch import nn
 
@@ -439,8 +539,13 @@ def make_head(train_labels: Sequence[str]):
             return self.quality(h).squeeze(-1), self.state(h)
 
     labels = list(train_labels)
-    n_info = sum(x in {"present", "absent"} for x in labels)
-    n_uninfo = sum(x == "uninformative" for x in labels)
+    q_values = _quality_values(quality_targets, quality_eligible)
+    if q_values:
+        n_info = sum(value == 1.0 for value in q_values)
+        n_uninfo = sum(value == 0.0 for value in q_values)
+    else:
+        n_info = sum(x in {"present", "absent"} for x in labels)
+        n_uninfo = sum(x == "uninformative" for x in labels)
     n_absent = sum(x == "absent" for x in labels)
     n_present = sum(x == "present" for x in labels)
     if min(n_info, n_uninfo, n_absent, n_present) <= 0:
@@ -467,11 +572,22 @@ def make_head(train_labels: Sequence[str]):
     }
 
 
-def class_weights(labels: Sequence[str]) -> dict[str, float]:
+def class_weights(
+    labels: Sequence[str],
+    quality_targets: Sequence[Any] | None = None,
+    quality_eligible: Sequence[bool] | None = None,
+) -> dict[str, float]:
     labels = list(labels)
+    q_values = _quality_values(quality_targets, quality_eligible)
     counts = {
-        "quality_0": sum(x == "uninformative" for x in labels),
-        "quality_1": sum(x in {"present", "absent"} for x in labels),
+        "quality_0": (
+            sum(value == 0.0 for value in q_values)
+            if q_values else sum(x == "uninformative" for x in labels)
+        ),
+        "quality_1": (
+            sum(value == 1.0 for value in q_values)
+            if q_values else sum(x in {"present", "absent"} for x in labels)
+        ),
         "absent": sum(x == "absent" for x in labels),
         "present": sum(x == "present" for x in labels),
     }
@@ -628,16 +744,71 @@ def torch_phase0_posterior(
     return torch.softmax(torch.stack(scores), dim=0), bounds
 
 
-def anchor_loss(q_logits, state_logits, labels: Sequence[str], dates: Sequence[date], bracket: TeacherBracket | None, weights: Mapping[str, float], cohort_prior: Any | None = None, ceiling_date: date | None = None):
+def _quality_supervision_from_anchor(anchor: AnchorSequence) -> tuple[list[Any] | None, list[bool] | None]:
+    rows = anchor.frame_rows
+    if "quality_target" in rows.columns and "quality_supervision_eligible" in rows.columns:
+        return (
+            rows["quality_target"].tolist(),
+            rows["quality_supervision_eligible"].astype(bool).tolist(),
+        )
+    return None, None
+
+
+def _flatten_quality_supervision(
+    sequences: Sequence[AnchorSequence],
+) -> tuple[list[float], list[bool]]:
+    targets: list[float] = []
+    eligible: list[bool] = []
+    for anchor in sequences:
+        q_targets, q_eligible = _quality_supervision_from_anchor(anchor)
+        if q_targets is None or q_eligible is None:
+            targets.extend(float(label != "uninformative") for label in anchor.labels)
+            eligible.extend(True for _ in anchor.labels)
+        else:
+            targets.extend(q_targets)
+            eligible.extend(q_eligible)
+    return targets, eligible
+
+
+def anchor_loss(
+    q_logits,
+    state_logits,
+    labels: Sequence[str],
+    dates: Sequence[date],
+    bracket: TeacherBracket | None,
+    weights: Mapping[str, float],
+    cohort_prior: Any | None = None,
+    ceiling_date: date | None = None,
+    quality_targets: Sequence[Any] | None = None,
+    quality_eligible: Sequence[bool] | None = None,
+):
     import torch
     import torch.nn.functional as F
 
-    q_target = torch.tensor([x != "uninformative" for x in labels], dtype=q_logits.dtype, device=q_logits.device)
-    q_weight = torch.tensor(
-        [weights["quality_1"] if x else weights["quality_0"] for x in q_target.bool().tolist()],
-        dtype=q_logits.dtype, device=q_logits.device,
-    )
-    q_loss = (F.binary_cross_entropy_with_logits(q_logits, q_target, reduction="none") * q_weight).mean()
+    if quality_targets is None:
+        q_target_list = [float(x != "uninformative") for x in labels]
+        q_mask = [True] * len(labels)
+    else:
+        q_target_list = [0.0 if target != target else float(target) for target in quality_targets]
+        q_mask = (
+            list(quality_eligible)
+            if quality_eligible is not None
+            else [target == target for target in quality_targets]
+        )
+    eligible_idx = [i for i, keep in enumerate(q_mask) if keep]
+    if eligible_idx:
+        idx = torch.tensor(eligible_idx, device=q_logits.device)
+        q_target = torch.tensor(
+            [q_target_list[i] for i in eligible_idx],
+            dtype=q_logits.dtype, device=q_logits.device,
+        )
+        q_weight = torch.tensor(
+            [weights["quality_1"] if q_target_list[i] else weights["quality_0"] for i in eligible_idx],
+            dtype=q_logits.dtype, device=q_logits.device,
+        )
+        q_loss = (F.binary_cross_entropy_with_logits(q_logits[idx], q_target, reduction="none") * q_weight).mean()
+    else:
+        q_loss = q_logits.sum() * 0.0
     informative = [i for i, x in enumerate(labels) if x != "uninformative"]
     if informative:
         idx = torch.tensor(informative, device=q_logits.device)
@@ -859,7 +1030,7 @@ def prepare_contract(r0_root: Path, cache_root: Path, out_root: Path, *, allow_f
     audit = audit_inputs(manifest, splits) if not allow_fixture else {}
     roles = build_calibration_roles(splits, enforce_counts=not allow_fixture)
     atomic_parquet(out_root / "locks/calibration_roles.parquet", roles)
-    config_path = out_root / "config/r4_v1.yaml"
+    config_path = out_root / config_relpath()
     atomic_json(config_path, RESOLVED_CONFIG)
     commit, dirty = _git_state()
     run_lock = {
@@ -886,6 +1057,7 @@ def prepare_contract(r0_root: Path, cache_root: Path, out_root: Path, *, allow_f
         },
         "rule_versions": {
             "label": "r4_v1_three_state_tlo_bridge",
+            "quality_supervision": QUALITY_SUPERVISION_RULE,
             "bracket": "r4_v1_manifest_teacher_bracket",
             "decoder": "phase0_continuous_r4_v1",
             "calibration": "hierarchical_platt_r4_v1",
@@ -914,7 +1086,12 @@ def materialize_train_locks(
         raise ValueError(
             f"short-gap sidecar anchor count {len(frame_only_anchors)} != frozen 2146"
         )
+    allowed = attach_quality_supervision(allowed)
     allowed["effective_label"] = allowed["label_v1"].map(lambda x: effective_label(str(x))[0])
+    if not allow_fixture:
+        allowed_counts = quality_supervision_counts(allowed)
+        if allowed_counts != EXPECTED_H1_ALLOWED:
+            raise ValueError(f"H1 allowed quality counts {allowed_counts} != {EXPECTED_H1_ALLOWED}")
 
     interval_audit = audit_interval_representability(allowed)
     interval_audit_path = out_root / "locks/interval_cell_audit.json"
@@ -1006,7 +1183,18 @@ def materialize_train_locks(
     }
     prior_path = out_root / "locks/train_cohort_prior.json"
     atomic_json(prior_path, prior_payload)
-    label_weights = class_weights(train["effective_label"].tolist())
+    train_q_targets = train["quality_target"].tolist()
+    train_q_eligible = train["quality_supervision_eligible"].astype(bool).tolist()
+    train_counts = quality_supervision_counts(train)
+    if not allow_fixture and {
+        "eligible": train_counts["eligible"],
+        "q0": train_counts["q0"],
+        "q1": train_counts["q1"],
+    } != EXPECTED_H1_TRAIN:
+        raise ValueError(f"H1 train quality counts {train_counts} != {EXPECTED_H1_TRAIN}")
+    label_weights = class_weights(
+        train["effective_label"].tolist(), train_q_targets, train_q_eligible,
+    )
     run_lock.update({
         "status": "LOCKS_MATERIALIZED",
         "feature_normalizer": {"rows": FEATURE_DIM, "n_train_observations": n,
@@ -1015,6 +1203,11 @@ def materialize_train_locks(
         "train_cohort_prior": {"n_intervals": len(intervals), "sha256": sha256_file(prior_path),
                                "bracket_counts": bracket_counts},
         "class_weights": label_weights,
+        "quality_supervision": {
+            "rule": QUALITY_SUPERVISION_RULE,
+            "allowed": quality_supervision_counts(allowed),
+            "train": train_counts,
+        },
         "shortgap_sidecar": None if shortgap_sidecar is None else {
             "path": str(shortgap_sidecar),
             "sha256": sha256_file(shortgap_sidecar),
@@ -1040,6 +1233,7 @@ def load_r4_sequences(
     if sidecar_path is not None and sha256_file(sidecar_path) != sidecar_meta["sha256"]:
         raise ValueError("short-gap sidecar SHA differs from R4 run lock")
     allowed, frame_only_anchors = apply_shortgap_sidecar(allowed, sidecar_path)
+    allowed = attach_quality_supervision(allowed)
     roles = pd.read_parquet(out_root / "locks/calibration_roles.parquet")
     role_map = roles.set_index("anchor_id")["r4_role"].to_dict()
     allowed["split_role"] = np.where(
@@ -1240,9 +1434,11 @@ def _batch_loss(model: Any, anchors: Sequence[AnchorSequence], weights: Mapping[
     offset = 0
     for anchor, length in zip(anchors, lengths):
         frame_slice = slice(offset, offset + length)
+        q_targets, q_eligible = _quality_supervision_from_anchor(anchor)
         il, fl, quality_loss, state_loss, _posterior, _bounds = anchor_loss(
             q_logits[frame_slice], state_logits[frame_slice], anchor.labels, anchor.capture_dates,
             anchor.bracket, weights, cohort_prior, anchor.ceiling_date,
+            quality_targets=q_targets, quality_eligible=q_eligible,
         )
         if il is not None:
             interval_losses.append(il)
@@ -1294,7 +1490,10 @@ def train_one_seed(
     if not train or not cal_es:
         raise ValueError("train/cal_es sequences required")
     _seed_everything(seed, device=device)
-    model, prior_counts = make_head([label for a in train for label in a.labels])
+    q_targets, q_eligible = _flatten_quality_supervision(train)
+    model, prior_counts = make_head(
+        [label for a in train for label in a.labels], q_targets, q_eligible,
+    )
     model.to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=3e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-4
@@ -1436,8 +1635,12 @@ def calibration_slice_report(
     train_prevalence: float,
 ) -> dict[str, Any]:
     if target == "quality":
-        rows = frames.copy()
-        rows["_target"] = rows["effective_label"].ne("uninformative").astype(float)
+        if {"quality_target", "quality_supervision_eligible"} <= set(frames.columns):
+            rows = frames[frames["quality_supervision_eligible"].astype(bool)].copy()
+            rows["_target"] = rows["quality_target"].astype(float)
+        else:
+            rows = frames.copy()
+            rows["_target"] = rows["effective_label"].ne("uninformative").astype(float)
         raw_col, cal_col = "raw_q", "cal_q"
     elif target == "state":
         rows = frames[frames["effective_label"].ne("uninformative")].copy()
@@ -1544,8 +1747,19 @@ def calibrate_one_seed(
             raw_q = 1 / (1 + np.exp(-np.clip(qlog_np, -50, 50)))
             raw_state = np.exp(slog_np - slog_np.max(axis=1, keepdims=True))
             raw_state /= raw_state.sum(axis=1, keepdims=True)
+            q_targets, q_eligible = _quality_supervision_from_anchor(anchor)
             for i, row in enumerate(anchor.frame_rows.itertuples(index=False)):
                 geometry = f"{row.chip_arm}|{row.area_bin}"
+                eligible = bool(q_eligible[i]) if q_eligible is not None else True
+                target = (
+                    float(q_targets[i])
+                    if q_targets is not None and q_targets[i] == q_targets[i]
+                    else (1.0 if anchor.labels[i] != "uninformative" else 0.0)
+                )
+                reason = (
+                    str(getattr(row, "quality_target_reason", "usable_verdict"))
+                    if eligible else str(getattr(row, "quality_target_reason", "a1_empty_k_patch"))
+                )
                 frame_records.append({
                     "seed": seed, "anchor_id": anchor.anchor_id,
                     "capture_date": str(row.capture_date)[:10], "split_role": anchor.split_role,
@@ -1556,13 +1770,19 @@ def calibrate_one_seed(
                     "chip_arm": str(row.chip_arm), "area_bin": str(row.area_bin),
                     "source_area_m2": float(row.source_area_m2),
                     "era_bin": era_bin(row.capture_date), "quality_flag": str(row.quality_flag),
+                    "quality_target": target if eligible else float("nan"),
+                    "quality_supervision_eligible": eligible,
+                    "quality_target_reason": reason,
                     "geometry_cell": geometry, "raw_quality_bin": raw_quality_bin(raw_q[i]),
                 })
     frames = pd.DataFrame(frame_records)
     fit = frames[frames["split_role"].eq("cal_fit")]
+    fit_q = fit[fit["quality_supervision_eligible"].astype(bool)]
+    if fit_q.empty:
+        raise ValueError("cal_fit has no quality-supervision-eligible rows")
     q_cal = fit_hierarchical_platt(
-        fit["raw_q_logit"], fit["effective_label"].ne("uninformative").astype(int),
-        fit["geometry_cell"], fit["era_bin"], fit["raw_quality_bin"],
+        fit_q["raw_q_logit"], fit_q["quality_target"].astype(int),
+        fit_q["geometry_cell"], fit_q["era_bin"], fit_q["raw_quality_bin"],
     )
     fit_state = fit[fit["effective_label"].ne("uninformative")]
     state_cal = fit_hierarchical_platt(
@@ -1585,7 +1805,7 @@ def calibrate_one_seed(
     frames["cal_e0"] = 1.0 - frames["cal_e1"]
     frames["checkpoint_sha"] = str(selected["checkpoint_sha256"])
     frames["calibrator_hash"] = cal_hash
-    frames["config_hash"] = sha256_file(out_root / "config/r4_v1.yaml")
+    frames["config_hash"] = sha256_file(out_root / config_relpath())
 
     anchors = []
     seq_map = {a.anchor_id: a for a in sequences}
@@ -1656,9 +1876,6 @@ def calibrate_one_seed(
         atomic_parquet(seed_root / f"anchors_{role}.parquet", anchor_out)
 
     sel_frames = frames[frames["split_role"].eq("cal_select")]
-    q_y = sel_frames["effective_label"].ne("uninformative").astype(float).to_numpy()
-    state_rows = sel_frames[sel_frames["effective_label"].ne("uninformative")]
-    s_y = state_rows["effective_label"].eq("present").astype(float).to_numpy()
     q_prevalence = priors["informative"] / (priors["informative"] + priors["uninformative"])
     state_prevalence = priors["present"] / (priors["present"] + priors["absent"])
     q_report = calibration_slice_report(
@@ -1721,7 +1938,7 @@ def finalize_r4_artifacts(out_root: Path, seed_results: Sequence[Mapping[str, An
 
 def _required_r4_artifacts(out_root: Path) -> list[Path]:
     paths = [
-        out_root / "config/r4_v1.yaml",
+        out_root / config_relpath(),
         out_root / "locks/RUN_LOCK.json",
         out_root / "locks/calibration_roles.parquet",
         out_root / "locks/feature_normalizer.parquet",
