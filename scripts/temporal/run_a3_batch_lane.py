@@ -32,6 +32,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime, timezone
@@ -54,6 +55,7 @@ from scripts.temporal.gehi_download import (
     DownloadResult,
     build_chip_provenance,
     download_chip_with_zoom_ladder,
+    sha256_file,
 )
 from scripts.temporal.gehi_region_batch import (
     DEFAULT_MOSAIC_PAD_DEG,
@@ -389,6 +391,9 @@ def run_one_task(
         "n_tiles": outcome.n_tiles,
         "tile_dir": str(tile_dir),
         "mosaic_path": str(mosaic_path) if mosaic_info else "",
+        "mosaic_sha256": (
+            sha256_file(mosaic_path) if mosaic_info and mosaic_path.is_file() else ""
+        ),
         "mosaic": mosaic_info,
         "stitch_error": stitch_error,
         "gehi_command": outcome.gehi_command,
@@ -409,6 +414,30 @@ def run_one_task(
         "fallbacks": fallbacks,
     }
     return rec
+
+
+def _path_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def purge_task_intermediates(output_dir: Path, rec: Mapping[str, object]) -> None:
+    """Delete per-task dump tiles and uncompressed mosaics after crops exist.
+
+    Canary 10-grid left 5.1 GiB of mosaics on disk. Wave_01 is ~7–9× that
+    and would blow the 2-wave hot-set waterline if intermediates accumulated.
+    Resumability is the per-task sentinel + the chip files, not the tiles.
+    """
+    run_root = (output_dir / "run").resolve()
+    tile_dir = Path(str(rec.get("tile_dir") or ""))
+    mosaic = Path(str(rec.get("mosaic_path") or ""))
+    if tile_dir.is_dir() and _path_under(tile_dir, run_root):
+        shutil.rmtree(tile_dir, ignore_errors=True)
+    if mosaic.is_file() and _path_under(mosaic, run_root):
+        mosaic.unlink(missing_ok=True)
 
 
 def stage_run(
@@ -448,6 +477,8 @@ def stage_run(
                 raw_log_callback=_log,
             )
             _write_json(sentinel, rec)
+            if not args.keep_intermediates:
+                purge_task_intermediates(args.output_dir, rec)
             n_new += 1
             print(
                 f"[A3-lane] {task_id}: dump={rec['dump_status']} "
@@ -578,6 +609,7 @@ def stage_manifest(args: argparse.Namespace, plan: dict[str, object]) -> dict[st
                 tile_dir=str(rec.get("tile_dir", "")),
                 n_tiles=rec.get("n_tiles", ""),
                 mosaic_path=str(rec.get("mosaic_path", "")),
+                mosaic_sha256=str(rec.get("mosaic_sha256", "")),
                 dump_gehi_command=str(rec.get("gehi_command", "")),
                 dump_stdout_sha256=str(rec.get("dump_stdout_sha256", "")),
             )
@@ -723,6 +755,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="do not sequential-download members of failed clusters")
     parser.add_argument("--no-recompress", action="store_true",
                         help="skip the q=95 JPEG recompress on crops (test hook)")
+    parser.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help="keep per-task dump tiles and uncompressed mosaics (debug only)",
+    )
     parser.add_argument("--only", nargs="+", choices=STAGES)
     parser.add_argument("--force", action="store_true")
     return parser.parse_args(argv)

@@ -6,7 +6,8 @@
 #   gate                 report token + precondition status (fail-closed)
 #   plan-waves           copy remaining anchors, derive roster, freeze wave plan
 #   plan-wave-shards N   filter candidates, weighted shards, tm3 plans, assemble wave_NN
-#   launch-wave N        token-gated launch on home (+koko light; box when enabled)
+#   launch-wave N        token-gated A3 dump lane on rog (D5/D6/D7; ENABLE_REGION_BATCH=true)
+#   plan-wave-a3-split N greedy grid split rog+cursor (D9; does not launch)
 #   status               progress snapshot
 #   merge-wave N | qa-wave N | archive-wave N | score-wave N | release-wave N
 #                        (implemented in follow-up PR6b/PR7; currently refuse)
@@ -160,10 +161,30 @@ PY
   log "wave_${nn} shards assembled at ${wave_run}"
 }
 
+cmd_plan_wave_a3_split() {
+  local n="${1:?wave number required}"
+  local nn; nn=$(printf '%02d' "${n}")
+  local candidates="${DL_ROOT}/plan/waves/wave_${nn}/candidates_2019plus.csv"
+  local anchors="${CITYWIDE}/anchors_v1/anchors_all.csv"
+  local wave_run="${CITYWIDE}/wave_${nn}"
+  [[ -f "${candidates}" ]] || die "missing ${candidates} (run plan-wave-shards ${n})"
+  [[ -f "${anchors}" ]] || die "missing ${anchors}"
+  mkdir -p "${wave_run}/plan/a3_split"
+  "${PY}" "${REPO_ROOT}/scripts/temporal/split_a3_wave_grids.py" \
+    --candidates-csv "${candidates}" \
+    --anchors-csv "${anchors}" \
+    --out-dir "${wave_run}/plan/a3_split" \
+    --shares "rog=1,cursor=1"
+}
+
 cmd_launch_wave() {
   local n="${1:?wave number required}"
   local nn; nn=$(printf '%02d' "${n}")
   local wave_run="${CITYWIDE}/wave_${nn}"
+  local a3_dir="${wave_run}/a3"
+  local candidates="${DL_ROOT}/plan/waves/wave_${nn}/candidates_2019plus.csv"
+  local anchors="${CITYWIDE}/anchors_v1/anchors_all.csv"
+  local session="ct_cw_w${nn}_a3"
   require_tokens
   [[ -f "${CITYWIDE}/ct05_catalog_v1/merged/.done" ]] || die "E2 merge not PASS"
   # KD7: Top-52 archive must be verified restorable before citywide pixels.
@@ -174,43 +195,35 @@ cmd_launch_wave() {
   if [[ ! -f "${TOP52_STAGING}/RELEASE_OK.json" ]]; then
     log "WARNING: Top-52 RELEASE_OK missing; proceeding (recoverability proven, headroom ok)"
   fi
-  [[ -d "${wave_run}/plan/shards" ]] || die "wave_${nn} shards not assembled (run plan-wave-shards ${n})"
+  [[ -f "${candidates}" ]] || die "missing ${candidates} (run plan-wave-shards ${n})"
+  [[ -f "${anchors}" ]] || die "missing ${anchors}"
+  if [[ -f "${a3_dir}/stages/qa.done" ]]; then
+    log "A3 dump already complete for wave_${nn} (${a3_dir}/stages/qa.done); not relaunching"
+    return 0
+  fi
+  if tmux has-session -t "${session}" 2>/dev/null; then
+    die "tmux session ${session} already running; inspect with: tmux capture-pane -pt ${session}:0 -S -80"
+  fi
 
-  export REQUEST_INTERVAL
-
-  # koko: groups_v1 sync (idempotent) + wave plan rsync, then light lane-only
-  log "sync groups_v1 + wave_${nn} plan to koko"
-  ssh -o BatchMode=yes "${KOKO_SSH}" "mkdir -p '${KOKO_CITYWIDE}/groups_v1'"
-  rsync -a "${CITYWIDE}/groups_v1/chip_groups_as_anchors.csv" \
-    "${KOKO_SSH}:${KOKO_CITYWIDE}/groups_v1/"
-  ssh -o BatchMode=yes "${KOKO_SSH}" "mkdir -p '${KOKO_CITYWIDE}/wave_${nn}/chips' '${KOKO_CITYWIDE}/wave_${nn}/lanes'"
-  rsync -a --delete "${wave_run}/plan/" "${KOKO_SSH}:${KOKO_CITYWIDE}/wave_${nn}/plan/"
-
-  local route
-  for route in ${HOME_ROUTES}; do
-    mkdir -p "${wave_run}/lanes/${route}"
-    log "launch home ${route} lane (skip-tm-z19 knob) + TM3"
-    CT05_LANE_SKIP_TM_Z19=1 REQUEST_INTERVAL="${REQUEST_INTERVAL}" \
-      setsid nohup bash "${REPO_ROOT}/scripts/temporal/run_ct05_download_lane.sh" \
-      "${route}" "${wave_run}" >> "${wave_run}/lanes/${route}/launch.log" 2>&1 &
-    REQUEST_INTERVAL="${REQUEST_INTERVAL}" \
-      setsid nohup bash "${REPO_ROOT}/scripts/temporal/run_ct05_tm3_route.sh" \
-      "${route}" "${wave_run}" "" >> "${wave_run}/lanes/${route}/tm3_launch.log" 2>&1 &
-  done
-
-  log "launch koko_v4 light lane (1 process, nice/ionice, lane-only no TM3)"
-  # shellcheck disable=SC2087
-  ssh -o BatchMode=yes "${KOKO_SSH}" bash <<EOF
-set -euo pipefail
-RUN="${KOKO_CITYWIDE}/wave_${nn}"
-mkdir -p "\${RUN}/lanes/koko_v4"
-cd /home/koko/projects/solar_backdating
-REQUEST_INTERVAL=${REQUEST_INTERVAL} setsid nohup \
-  nice -n 19 ionice -c3 bash scripts/temporal/run_ct05_download_lane.sh koko_v4 "\${RUN}" \
-  >> "\${RUN}/lanes/koko_v4/launch.log" 2>&1 &
-echo "koko lane pid=\$!"
-EOF
-  log "wave_${nn} launched: home={home_v4,home_v6}+TM3, koko_v4 light; box disabled"
+  mkdir -p "${a3_dir}" "${wave_run}/lanes/a3"
+  local logf="${a3_dir}/launch.log"
+  # D5: dump arm is the sole production path. --provider '' --zoom 0 sends
+  # TM/Wayback and z18/z19 through the same cluster dump; failed clusters
+  # fall back to per-anchor download inside the lane. D6: scale-out past
+  # 10 grids requires ENABLE_REGION_BATCH=true. Intermediates purged per task.
+  log "launch A3 dump lane tmux=${session} candidates=$(wc -l < "${candidates}")"
+  tmux new-session -d -s "${session}" \
+    "cd '${REPO_ROOT}' && source scripts/activate_env.sh && \
+     export ENABLE_REGION_BATCH=true REQUEST_INTERVAL=${REQUEST_INTERVAL} && \
+     '${PY}' -u scripts/temporal/run_a3_batch_lane.py \
+       --candidates-csv '${candidates}' \
+       --anchors-csv '${anchors}' \
+       --output-dir '${a3_dir}' \
+       --provider '' --zoom 0 \
+       --request-interval ${REQUEST_INTERVAL} \
+       >> '${logf}' 2>&1; \
+     echo A3_EXIT=\$? >> '${logf}'"
+  log "wave_${nn} launched: A3 dump on rog (tmux ${session}); per-anchor lanes not started; koko idle"
 }
 
 # --- shared wave helpers ---------------------------------------------------
@@ -251,25 +264,36 @@ cmd_merge_wave() {
   local n="${1:?wave number required}"
   local nn; nn=$(printf '%02d' "${n}")
   local wave_run="${CITYWIDE}/wave_${nn}"
+  local a3_dir="${wave_run}/a3"
   local meta; meta="$(wave_meta "${n}")"
   enforce_hotset_gate
   mkdir -p "${meta}/lanes_merged" "${meta}/merge" "${DL_ROOT}/chips"
 
-  log "merge home work chips -> \$DL_ROOT/chips"
-  rsync -a --remove-source-files "${wave_run}/chips/" "${DL_ROOT}/chips/"
-  find "${wave_run}/chips" -depth -type d -empty -delete 2>/dev/null || true
-  mkdir -p "${meta}/lanes_merged/home"
-  rsync -a --include '*/' --include '*_manifest.csv' --exclude '*' \
-    "${wave_run}/lanes/" "${meta}/lanes_merged/home/"
+  if [[ -f "${a3_dir}/stages/qa.done" && -f "${a3_dir}/manifest/manifest.csv" ]]; then
+    log "merge A3 dump chips -> \$DL_ROOT/chips"
+    rsync -a --remove-source-files "${a3_dir}/chips/" "${DL_ROOT}/chips/"
+    find "${a3_dir}/chips" -depth -type d -empty -delete 2>/dev/null || true
+    mkdir -p "${meta}/lanes_merged/a3"
+    # merge_rewrite glob is *_manifest.csv; A3 writes manifest.csv.
+    cp -a "${a3_dir}/manifest/manifest.csv" "${meta}/lanes_merged/a3/a3_manifest.csv"
+  else
+    [[ -d "${wave_run}/lanes" ]] || die "A3 qa.done missing and no per-anchor lanes for wave_${nn}"
+    log "merge home work chips -> \$DL_ROOT/chips (legacy per-anchor path)"
+    rsync -a --remove-source-files "${wave_run}/chips/" "${DL_ROOT}/chips/"
+    find "${wave_run}/chips" -depth -type d -empty -delete 2>/dev/null || true
+    mkdir -p "${meta}/lanes_merged/home"
+    rsync -a --include '*/' --include '*_manifest.csv' --exclude '*' \
+      "${wave_run}/lanes/" "${meta}/lanes_merged/home/"
 
-  log "merge koko work chips -> \$DL_ROOT/chips (remove sources on koko)"
-  rsync -ac --remove-source-files \
-    "${KOKO_SSH}:${KOKO_CITYWIDE}/wave_${nn}/chips/" "${DL_ROOT}/chips/"
-  ssh -o BatchMode=yes "${KOKO_SSH}" \
-    "find '${KOKO_CITYWIDE}/wave_${nn}/chips' -depth -type d -empty -delete 2>/dev/null || true"
-  mkdir -p "${meta}/lanes_merged/koko"
-  rsync -a --include '*/' --include '*_manifest.csv' --exclude '*' \
-    "${KOKO_SSH}:${KOKO_CITYWIDE}/wave_${nn}/lanes/" "${meta}/lanes_merged/koko/"
+    log "merge koko work chips -> \$DL_ROOT/chips (remove sources on koko)"
+    rsync -ac --remove-source-files \
+      "${KOKO_SSH}:${KOKO_CITYWIDE}/wave_${nn}/chips/" "${DL_ROOT}/chips/"
+    ssh -o BatchMode=yes "${KOKO_SSH}" \
+      "find '${KOKO_CITYWIDE}/wave_${nn}/chips' -depth -type d -empty -delete 2>/dev/null || true"
+    mkdir -p "${meta}/lanes_merged/koko"
+    rsync -a --include '*/' --include '*_manifest.csv' --exclude '*' \
+      "${KOKO_SSH}:${KOKO_CITYWIDE}/wave_${nn}/lanes/" "${meta}/lanes_merged/koko/"
+  fi
 
   log "rewrite manifest paths -> ${DL_ROOT}/chips"
   "${PY}" "${REPO_ROOT}/scripts/temporal/merge_rewrite_manifest_paths.py" \
@@ -368,7 +392,7 @@ cmd_prepare_score_lock() {
     --outcomes-csv "${CITYWIDE}/ct05_catalog_v1/merged/anchor_catalog_outcomes.csv" \
     --chip-root "${DL_ROOT}/chips" \
     --expected-anchor-count 90348 \
-    --workers 40 --qps 6 --max-in-flight 0 \
+    --workers 40 --qps 6 --max-in-flight 40 \
     --projected-logical-calls 240000
 }
 
@@ -397,7 +421,7 @@ cmd_score_wave() {
       --merged-wayback-chips-dir "${DL_ROOT}/chips" \
       --audit-dir "${score_root}/primary/audit" \
       --provider Merged --scorer gemini \
-      --anchor-workers 40 --qps 6 \
+      --anchor-workers 40 --qps 6 --gemini-max-in-flight 40 \
       --round1-model gemini-3.1-flash-lite \
       --round2-model gemini-3.1-flash-lite \
       --troubleshooting-model "" \
@@ -434,9 +458,11 @@ cmd_status() {
   echo "--- b1 upload:"
   bash "${REPO_ROOT}/scripts/temporal/b1_top52_dropbox_archive.sh" status || true
   echo "--- wave processes:"
-  pgrep -af "run_ct05_download_lane|run_ct05_tm3_route|gehi_download" | head -20 || echo "(none)"
-  echo "--- recent wave logs:"
-  for logf in "${CITYWIDE}"/wave_*/lanes/*/launch.log; do
+  pgrep -af "run_a3_batch_lane|run_ct05_download_lane|run_ct05_tm3_route|gehi_download|GEHistoricalImagery" | head -20 || echo "(none)"
+  echo "--- tmux A3 sessions:"
+  tmux ls 2>/dev/null | grep -E 'ct_cw_w[0-9]+_a3' || echo "(none)"
+  echo "--- recent A3 / lane logs:"
+  for logf in "${CITYWIDE}"/wave_*/a3/launch.log "${CITYWIDE}"/wave_*/lanes/*/launch.log; do
     [[ -f "${logf}" ]] || continue
     echo "== ${logf}"
     tail -2 "${logf}"
@@ -448,6 +474,7 @@ case "${cmd}" in
   gate) cmd_gate ;;
   plan-waves) cmd_plan_waves ;;
   plan-wave-shards) shift; cmd_plan_wave_shards "$@" ;;
+  plan-wave-a3-split) shift; cmd_plan_wave_a3_split "$@" ;;
   launch-wave) shift; cmd_launch_wave "$@" ;;
   status) cmd_status ;;
   merge-wave) shift; cmd_merge_wave "$@" ;;
@@ -457,5 +484,5 @@ case "${cmd}" in
   score-wave) shift; cmd_score_wave "$@" ;;
   release-wave) shift; cmd_release_wave "$@" ;;
   stage-wave) die "stage-wave (Dropbox restore) not yet implemented; chips are staged by archive-wave by default" ;;
-  *) echo "usage: $0 {gate|plan-waves|plan-wave-shards N|launch-wave N|merge-wave N|qa-wave N|archive-wave N|prepare-score-lock|score-wave N|release-wave N|status}" >&2; exit 2 ;;
+  *) echo "usage: $0 {gate|plan-waves|plan-wave-shards N|plan-wave-a3-split N|launch-wave N|merge-wave N|qa-wave N|archive-wave N|prepare-score-lock|score-wave N|release-wave N|status}" >&2; exit 2 ;;
 esac

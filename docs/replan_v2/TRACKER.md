@@ -6,9 +6,12 @@ Source PRD: [`../install_date_optimization_v2_prd.md`](../install_date_optimizat
 Cape Town run-specific plan: [`RUN-cape-town-backdating-plan-2026-07-24.md`](RUN-cape-town-backdating-plan-2026-07-24.md) ·
 execution tracker: [`RUN-cape-town-backdating-tracker-2026-07-24.md`](RUN-cape-town-backdating-tracker-2026-07-24.md)
 
-Cape Town citywide disk pipeline (rev-6, 2026-08-18, awaiting E0+E6 tokens):
+Cape Town citywide disk pipeline (rev-6.2, 2026-08-26, D7+D9 topology,
+E0+E6 signed D10):
 [`RUN-cape-town-citywide-batch-disk-pipeline-2026-08-18.md`](RUN-cape-town-citywide-batch-disk-pipeline-2026-08-18.md)
-— Dropbox 主归档 · koko 轻载 · 单相位 · 下载加速计划（§9）
+— Dropbox 主归档 · koko 轻载 · A3 dump 生产路径（D5/D6）· Gemini 留在
+rog（D7）· grok bot 跑在 **cursor**，可半波下载（D9）· bot prompt
+[`HANDOFF-ct-citywide-cursor-bot-2026-08-26.md`](HANDOFF-ct-citywide-cursor-bot-2026-08-26.md)
 
 A3 region-batch pilot (2026-08-18): **MIXED** on the preregistered
 `download` arm —
@@ -41,9 +44,27 @@ Executed same day:
 10-grid canary 14,796 chips, QA 14,795/14,796 (99.99%), no 403; canary caught
 GEHI dump SILENTLY SKIPPING vintage-uncovered tiles (99 holes in non-member
 rectangle areas) — fixed with hole-tolerant stitch + surgical crop-level
-fallback, steady-state ≈ 296 calls vs 14,796 sequential (~50×). **Remaining
-gate: owner releases `ENABLE_REGION_BATCH=true` after reading the canary
-report.**
+fallback, steady-state ≈ 296 calls vs 14,796 sequential (~50×). **Owner released
+`ENABLE_REGION_BATCH=true` on 2026-08-26 ([OWNER_DECISIONS D6](OWNER_DECISIONS.md))**
+— scale-out of `run_a3_batch_lane.py` past the 10-grid cap is authorized.
+`launch-wave` wired to A3 dump on 2026-08-26 (`run_a3_batch_lane.py`,
+tmux `ct_cw_wNN_a3`, `ENABLE_REGION_BATCH=true` at process start).
+D9: grok bot host is tailnet **cursor**; it may run half the A3 dump
+grids (high BW) and rsync chips to rog. Prompt:
+[`HANDOFF-ct-citywide-cursor-bot-2026-08-26.md`](HANDOFF-ct-citywide-cursor-bot-2026-08-26.md).
+Top-52 B1: three tar volumes on Dropbox (38.738 GiB). **Local release
+DONE 2026-08-26 08:32:42Z** (`RELEASE_OK`; 1,208,195 `.tif` deleted;
+koko 23G copy gone; `/home` 77G→115G avail). Leftover ~26G under the
+old chips tree is provenance/deletion jsonl + empty dirs, **0 tif**.
+**E0+E6 signed D10.** Rog half-wave A3 is already running (`tmux
+ct_cw_w01_a3_rog`).
+**Scoring rate contract 2026-08-26:** citywide `score-wave` is
+`--anchor-workers 40 --qps 6 --gemini-max-in-flight 40`. QPS 6 is the
+startup ramp (about 6 new HTTP in the first second, so Sub2API can
+spread load across accounts). 40 is the later ceiling, not a chop: do
+not set `max_in_flight` equal to QPS. RateLimiter now assigns start
+times under a lock and sleeps outside it, so 40 waiters cannot share
+t=0.
 
 **Goal:** reproducible-and-bounded-accurate install dates via five layered
 phases — deterministic decoder (P0), provenance + verdict store (P1), external

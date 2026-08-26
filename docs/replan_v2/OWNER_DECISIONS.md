@@ -91,3 +91,78 @@ MAE≤5」）+ `~/zasolar_data/geid_temporal/a3_region_batch_pilot_20260818/repo
 **依据**：owner 于 2026-08-19 会话确认（接续 D4 的「继续推进」）；
 机制真源 [RUN-a3-fullcell-coldcell-probe-2026-08-19](RUN-a3-fullcell-coldcell-probe-2026-08-19.md)
 （整格 availability 57 日期、冷格 17.2×、manifest 过生产 QA）。
+
+## D6 — `ENABLE_REGION_BATCH=true` 放量授权 · 2026-08-26
+
+**决议**：owner 已读
+[RUN-a3-batch-lane-canary-2026-08-19](RUN-a3-batch-lane-canary-2026-08-19.md)
+（整格 pilot QA 341/341；10 格 canary QA 14,795/14,796），放行
+`ENABLE_REGION_BATCH=true`。含义仅限：`run_a3_batch_lane.py` 的 plan
+阶段允许覆盖 **>10 格**（D5 留下的唯一放量闸门打开）。
+
+**范围限定**：
+
+- 不签 E0/E6。`ALLOW_CITYWIDE_DOWNLOAD` / `ALLOW_GEMINI_WAVES` 仍 false。
+- 不自动改 `launch-wave`。全城编排器此刻仍起逐张
+  `run_ct05_download_lane.sh`；接到 A3 dump lane 是后续接线，不是本决议。
+- 运行时仍须在进程环境里出现字面值 `ENABLE_REGION_BATCH=true`
+  （代码读 env，不读本文件）。本条是治理授权，不是 systemd 单元。
+- Gemini 网关放哪、grok bot（tailnet `bot`，128G 盘）承担编排还是打分，
+  不在本决议内，另定拓扑后再动。
+
+**依据**：owner 于 2026-08-26 会话确认「可以，接受=TRUE」。
+
+## D7 — 全城执行拓扑：rog 过夜开着，Gemini 留在 rog，bot 只编排 · 2026-08-26
+
+**决议**：rog **过夜保持开机**。由此锁定角色，不再把 Gemini 网关或
+chip 热集迁到 grok bot（128G 盘）。
+
+| 主机 | 角色 | 不做什么 |
+|---|---|---|
+| **rog**（本机，250G，Sub2API 已在 `0.0.0.0:8080`） | Gemini 网关 + 打分进程 + ≤2 波 chip 热集 + merge/archive 控制面 + A3 dump 主下载 | 不把 64G Top-52 chip 当长期热集（B1 已 BACKUP_OK，待 release） |
+| **koko** | 轻载下载 egress（最多 1 个 GEHI 进程） | 不跑 40-worker 打分；不存归档 |
+| **bot**（tailnet `bot`，128G） | 编排 agent：SSH 发命令、盯 tmux/日志 | **不**跑 Sub2API、不存 chip、不跑 GEHI。128G 只留仓库与日志 |
+| **Dropbox** | 唯一 durable archive | — |
+
+**范围限定**：不签 E0/E6。全城仍 fail-closed。bot 当前 tailnet offline
+（2026-08-26 实测，上次出现约 6 天前），在它上线之前编排仍由 rog 本机
+会话承担。`launch-wave` 接到 A3 dump 仍是后续接线。
+
+**依据**：owner 于 2026-08-26 会话确认「rog能过夜」。
+
+## D9 — grok bot 跑在 cursor；cursor 可承担半波 A3 dump · 2026-08-26
+
+**决议**：执行 agent 的宿主是 tailnet **`cursor`**（`100.103.225.76`），
+不是已离线的 `bot`（`100.86.6.50`）。cursor 上下行带宽高，授权它做
+**A3 dump 下载 egress（按格子对半分波）**，与 rog 并行。
+
+仍锁定：Gemini 网关、打分、Dropbox 归档、≤2 波热集合集在 **rog**。
+cursor 按 128G 纪律：只留当前波属于自己的那一半 chip；禁止 Top-52
+副本；禁止把 dump 中间 mosaic 留盘（lane 默认每簇删除）。chip 完成后
+**从 cursor rsync 推到 rog**，不依赖 cursor 开 22 端口给 rog。
+
+**范围限定**：不签 E0/E6。全城仍 fail-closed。2026-08-26 从 rog 测
+cursor TCP 22 = connection refused，故半波下载由 cursor 本机 agent
+启动，而不是 `launch-wave` SSH 进去。koko 轻载合同不变。
+
+**依据**：owner 于 2026-08-26 会话确认 bot 机器名 = cursor，并要求
+「下载可以分一部分给 bot，它的上下行带宽都很高」。交接 prompt：
+[HANDOFF-ct-citywide-cursor-bot-2026-08-26](HANDOFF-ct-citywide-cursor-bot-2026-08-26.md)。
+
+## D10 — E0 全城预取 + E6 打分放行 · 2026-08-26
+
+**决议**：授权 Cape Town 全城 outcome-blind 预取，并授权各波 chip
+staged 之后用本机 Sub2API + `gemini-3.1-flash-lite` 打分。交付口径 =
+内部 release，不构成 CT-11 翻盘，不得写入对外准确度声称。
+明示覆盖 CT-11「全城下载不得启动」。
+
+范围：non-Top-52 90,348 锚 / 27 波 /
+`cape_town_citywide_backdating_v1_20260812`。
+磁盘：Dropbox 归档 + rog 热集 ≤2 波；停止条件 = 流水线 §5/§7 水线。
+拓扑：D7（rog 过夜，Gemini 留在 rog）+ D9（cursor 半波 A3 dump）。
+下载路径：A3 dump（D5/D6）。
+
+owner 于 2026-08-26 会话确认「帮我签完E0+E6,我授权你，日期写今天」。
+
+E0_PREFETCH_DISK_SIGNED=2026-08-26
+E6_SCORER_GO=2026-08-26

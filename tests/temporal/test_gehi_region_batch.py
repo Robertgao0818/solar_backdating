@@ -907,6 +907,35 @@ def test_batch_lane_fallback_when_dump_fails(tmp_path: Path) -> None:
     assert all(r["crop_status"] == "sequential_fallback:ok" for r in sidecar)
 
 
+def test_batch_lane_purges_intermediates_by_default(tmp_path: Path) -> None:
+    args = _lane_args(tmp_path, "--grids", "GRID_A,GRID_B")
+    dump_runner, _ = _fake_covering_dump_runner()
+    seq_runner, _ = _fake_seq_runner()
+    _run_lane_stages(args, dump_runner, seq_runner)
+    tiles = args.output_dir / "run" / "tiles"
+    mosaics = args.output_dir / "run" / "mosaics"
+    leftover_tiles = list(tiles.iterdir()) if tiles.exists() else []
+    leftover_mosaics = list(mosaics.glob("*.tif")) if mosaics.exists() else []
+    assert leftover_tiles == []
+    assert leftover_mosaics == []
+    assert any((args.output_dir / "chips").rglob("*.tif"))
+    sidecar = list(
+        __import__("csv").DictReader(
+            (args.output_dir / "manifest" / "manifest_sidecar.csv").open()
+        )
+    )
+    assert any(r.get("mosaic_sha256") for r in sidecar)
+
+
+def test_batch_lane_keep_intermediates(tmp_path: Path) -> None:
+    args = _lane_args(tmp_path, "--grids", "GRID_A", "--keep-intermediates")
+    dump_runner, _ = _fake_covering_dump_runner()
+    seq_runner, _ = _fake_seq_runner()
+    _run_lane_stages(args, dump_runner, seq_runner)
+    assert any((args.output_dir / "run" / "tiles").iterdir())
+    assert list((args.output_dir / "run" / "mosaics").glob("*.tif"))
+
+
 def test_batch_lane_plan_fail_closed_over_canary_cap(tmp_path: Path, monkeypatch) -> None:
     # 11 grids of candidates, no env release -> plan must refuse.
     anchors = [

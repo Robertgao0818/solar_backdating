@@ -294,18 +294,19 @@ def parse_args() -> argparse.Namespace:
         "--qps",
         type=float,
         default=0.0,
-        help="Strict global Gemini request-start rate across ALL anchor workers, "
-        "enforced from the first request with no startup burst (shared RateLimiter). "
-        "0 = no throttle, worker count alone caps concurrency. "
-        "Match to the gateway account pool; the FP-cut full run used qps 8 at 30 workers.",
+        help="Global Gemini request-start rate across ALL anchor workers "
+        "(shared RateLimiter). This is the ramp from the first request: "
+        "qps 6 admits ~6 HTTP in the first second, not 40. 0 = no throttle. "
+        "Pair with --gemini-max-in-flight for the steady-state ceiling.",
     )
     parser.add_argument(
         "--gemini-max-in-flight",
         type=int,
         default=0,
-        help="Maximum simultaneous Gemini HTTP attempts across all anchor workers. "
-        "0 = no explicit cap; use with --qps because QPS alone does not bound "
-        "in-flight requests when gateway latency is high.",
+        help="Steady-state ceiling on simultaneous Gemini HTTP attempts. "
+        "0 = no ceiling. Citywide scoring uses 40 (same as --anchor-workers). "
+        "Do not set this equal to --qps: that chops steady-state concurrency. "
+        "QPS is the ramp; this flag is the cap after the ramp.",
     )
     parser.add_argument(
         "--round1-model",

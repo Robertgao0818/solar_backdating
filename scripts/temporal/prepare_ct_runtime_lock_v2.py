@@ -257,8 +257,9 @@ def main() -> None:
         "--max-in-flight",
         type=int,
         default=0,
-        help="Optional cap on simultaneous Gemini HTTP attempts across workers; "
-        "0 disables it. Startup protection is provided by the strict global --qps pacer.",
+        help="Steady-state ceiling on simultaneous Gemini HTTP attempts; "
+        "0 disables it. QPS is the startup ramp (citywide: 6). This flag is "
+        "the cap after the ramp (citywide: 40, same as worker count).",
     )
     parser.add_argument("--qps", type=float, default=6.0)
     parser.add_argument("--gateway-health-url", default="http://localhost:8080/health")

@@ -792,6 +792,7 @@ def synthesize_dump_manifest(
     tile_dir: str = "",
     n_tiles: int | str = "",
     mosaic_path: str = "",
+    mosaic_sha256: str = "",
     dump_gehi_command: str = "",
     dump_stdout_sha256: str = "",
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -807,8 +808,7 @@ def synthesize_dump_manifest(
     An anchor with no crop record is emitted as a `crop_failed` row — silent
     omission would make the QA denominator lie.
     """
-    mosaic_sha256 = ""
-    if mosaic_path and Path(mosaic_path).is_file():
+    if not mosaic_sha256 and mosaic_path and Path(mosaic_path).is_file():
         mosaic_sha256 = sha256_file(Path(mosaic_path))
     manifest_rows: list[dict[str, object]] = []
     sidecar_rows: list[dict[str, object]] = []

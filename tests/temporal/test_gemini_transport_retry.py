@@ -499,6 +499,71 @@ def test_limiter_caps_simultaneous_http_attempts(monkeypatch: pytest.MonkeyPatch
     assert max_active <= 2
 
 
+def test_limiter_ramps_at_qps_then_reaches_in_flight_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QPS is the ramp; max_in_flight is the later ceiling.
+
+    A worker pool equal to the ceiling must not dump every HTTP in the first
+    slice (Sub2API cannot load-balance a same-instant burst). After the ramp,
+    in-flight may climb to the ceiling — do not chop that ceiling down to QPS.
+    """
+    qps = 40
+    n_workers = 16
+    cap = 16
+    latency = 0.35
+    first_window = 0.08
+    active = 0
+    max_active = 0
+    starts: list[float] = []
+    lock = threading.Lock()
+    t0 = time.monotonic()
+
+    def fake_post(*_args: Any, **_kwargs: Any) -> FakeResponse:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+            starts.append(time.monotonic() - t0)
+        time.sleep(latency)
+        with lock:
+            active -= 1
+        return FakeResponse(200, json_data=_native_ok("ok"))
+
+    monkeypatch.setattr(gsir.requests, "post", fake_post)
+    limiter = RateLimiter(qps, max_in_flight=cap)
+    errors: list[BaseException] = []
+
+    def run_one() -> None:
+        try:
+            post_native_generate_content(
+                base_url="https://stub.example",
+                native_path="/v1beta",
+                api_key="k",
+                model="m",
+                prompt="hi",
+                image_paths=[],
+                max_tokens=None,
+                timeout=30,
+                limiter=limiter,
+            )
+        except BaseException as exc:  # pragma: no cover - assertion below reports it
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_one) for _ in range(n_workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert len(starts) == n_workers
+    early = sum(1 for t in starts if t < first_window)
+    assert early <= 6, f"startup dump: {early} HTTP in first {first_window}s"
+    assert max_active <= cap
+    assert max_active >= 10, f"ceiling chopped; max in-flight only {max_active}"
+
+
 def test_limiter_slot_released_when_before_attempt_fails() -> None:
     limiter = RateLimiter(None, max_in_flight=1)
 

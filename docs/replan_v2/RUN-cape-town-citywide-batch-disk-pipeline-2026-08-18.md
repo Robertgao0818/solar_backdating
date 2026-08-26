@@ -3,9 +3,9 @@
 | 字段 | 值 |
 |---|---|
 | 文档 ID | `RUN-cape-town-citywide-batch-disk-pipeline-2026-08-18` |
-| 版本 | **rev-6**（2026-08-18，owner 评审后修订） |
+| 版本 | **rev-6.2**（2026-08-26，D7 拓扑锁定；正文 rev-6 仍是磁盘方案母本） |
 |  supersede | Grok rev-5 草稿（`/tmp/grok-1000/grok-design-doc-ad849d97.md`，不入仓） |
-| Status | **执行中 / AWAITING OWNER E0+E6 TOKEN**（B0✓ E2✓ B1上传中 wave_01 分片就绪；见 §13 执行日志） |
+| Status | **执行中 / E0+E6 SIGNED 2026-08-26（D10）**（B0✓ E2✓ B1 BACKUP_OK+RESTORE_DRILL_OK，RELEASE 未做；A3 放量 D6；拓扑 D7+D9；见 §2.1） |
 | 上位 | [`RUN-cape-town-citywide-legE-production-plan-2026-08-12.md`](RUN-cape-town-citywide-legE-production-plan-2026-08-12.md) · [`RUN-cape-town-citywide-backdating-delivery-plan-2026-08-12.md`](RUN-cape-town-citywide-backdating-delivery-plan-2026-08-12.md) |
 | 治理 | [`OWNER_DECISIONS.md`](OWNER_DECISIONS.md)：E0/E6 **机器 token 行**（见 §Governance） |
 | 范围外 | GPU / DINOv3 student scorer / RunPod 推理 |
@@ -61,6 +61,25 @@
 | **koko** | **仅** 轻载下载 egress | 8G RAM；**同时最多 1 个 GEHI 进程**；nice 19 / ionice -c3；不存归档、不做 spill；work chips 在 MERGE_OK 后立即删 |
 | **box** | 可选下载 egress（OQ1 未填） | 填实后 +2 route，见 §9-A1 |
 | **Dropbox** | 唯一 durable archive | `dropbox:zasolar_backdating/cape_town_citywide_v1/` |
+
+### §2.1 rev-6.2 拓扑锁定（2026-08-26，[OWNER_DECISIONS D7](OWNER_DECISIONS.md)）
+
+owner 确认 **rog 过夜保持开机**。Gemini 不迁到 grok bot。
+
+| 主机 | 锁定角色 | 128G / 内存含义 |
+|---|---|---|
+| **rog**（hostname `rog`，即本文件 §2 的 home） | Sub2API 网关（已在 `0.0.0.0:8080`）+ `run_adaptive_scan.py` 打分 + ≤2 波 chip 热集 + A3 dump 主下载 + rclone→Dropbox | 250G 盘是热集宿主；B1 已 BACKUP_OK，Top-52 64G 待 release 才能把余量从 ~77G 抬回去 |
+| **koko** | 轻载 GEHI egress，最多 1 进程 | 6.6G RAM，禁止 40-worker 打分 |
+| **bot** | 编排 agent（SSH + tmux 巡检）。**不**跑网关、不存 chip、不跑 GEHI | 128G 只留仓库与日志，不再是约束 |
+| **Dropbox** | 唯一归档 | 不变 |
+
+打分脚本 `--offline-require-chip-on-disk`：chip 必须和 `run_adaptive_scan.py` 同机，即 rog。bot 上线之前，编排由 rog 本机会话承担（2026-08-26 bot tailnet offline）。
+
+A3 dump 主下载默认也在 rog：canary 后单波 TM z19 约 4 小时量级，不再需要靠 koko 分摊逐张工期。koko 仍保留为第二地址族 / 失败回退，不改轻载合同。
+
+**`launch-wave` 已于 2026-08-26 接到 A3 dump**（D5/D6/D7）：`tmux` 会话 `ct_cw_wNN_a3` 跑 `run_a3_batch_lane.py --provider '' --zoom 0`，整波 TM+Wayback、z18+z19 走同一 dump 路径，失败簇回退逐张。环境里带 `ENABLE_REGION_BATCH=true`。逐张 `run_ct05_download_lane.sh` **不再**由 `launch-wave` 启动。merge-wave 读 `$wave/a3/manifest/manifest.csv` + `$wave/a3/chips`。每簇 dump 瓦片和无损 mosaic 在切完 chip 后删除（canary 10 格 mosaic 曾占 5.1G；不删则 wave_01 会打穿热集水线）。仍 fail-closed：E0+E6 token 未签则 `launch-wave` 拒绝启动。
+
+D9（同日）：grok bot 宿主改为 **cursor**。cursor 可跑半波 A3 dump（`plan-wave-a3-split` / `split_a3_wave_grids.py`，按 candidate 数贪心）。无 token 时不要 `launch-wave`。cursor TCP 22 从 rog 不通，半波由 cursor 本机起、chip rsync 推到 rog。交接：[`HANDOFF-ct-citywide-cursor-bot-2026-08-26.md`](HANDOFF-ct-citywide-cursor-bot-2026-08-26.md)。
 
 `pipeline/hosts.json` schema 相应改为：koko 删除 `archive_root`/`spill` 角色，新增顶层：
 
@@ -222,7 +241,7 @@ ssh koko@koko-82xm 'cd $REPO && export REQUEST_INTERVAL=2.0
 
 - **qa-wave**：只读 `lanes_merged` 改写后 path（合同不变）。
 - **archive-wave**（rev-6 重写）：members = membership ∩ QA release_eligible → 单卷 `tar -C $DL_ROOT/chips`（12G ≤ 16G 上限，一波一卷）→ `sha256sum` 入 `volumes.sha256` → `rclone copyto --checksum` → `rclone check --one-way` → 删 staging 卷 → 原子写 `BACKUP_OK.json` → 状态 `staged`。**不删 home chips。**
-- **score-wave**：闸门 = E6 token + `staged` + `HOME_GEMINI_READY` + runtime lock 非 UNSET + canary preflight；`run_adaptive_scan.py` 命令行与 rev-5 §15.3 相同（分母 non-Top-52，~231k–243k HTTP；Top-52 用既有 verdict merge，KD20 不变）。
+- **score-wave**：闸门 = E6 token + `staged` + `HOME_GEMINI_READY` + runtime lock 非 UNSET + canary preflight；`run_adaptive_scan.py` 命令行与 rev-5 §15.3 相同（分母 non-Top-52，~231k–243k HTTP；Top-52 用既有 verdict merge，KD20 不变）。速率合同（2026-08-26）：`--anchor-workers 40 --qps 6 --gemini-max-in-flight 40`。QPS 6 是**爬坡**（第一秒约 6 路新开，让 Sub2API 能按请求把负载分到各号），`max_in_flight` 40 是**稳态上限**（约 6.7 秒后可以满 40 路）。不要把上限设成 6：那是把并发砍掉，不是修启动脉冲。
 - **release-wave**：`BACKUP_OK` + `SCORE_OK` 双哨兵，缺 exit 2；只删 `$DL_ROOT/chips` 本波成员。
 - **stage-wave**（例外路径）：仅当需重打 released 波，`rclone copy` 拉回 → 解包 → `staged`；同 2-wave 闸门。
 
@@ -268,12 +287,17 @@ ssh koko@koko-82xm 'cd $REPO && export REQUEST_INTERVAL=2.0
 
 ## §10 Governance tokens（rev-6：双 token 同签，R5）
 
-`OWNER_DECISIONS.md` 新带日期标题下，独立一行等号赋值（fail-closed，禁止 grep 叙述段）：
+`OWNER_DECISIONS.md` 新带日期标题下，独立一行等号赋值（fail-closed，禁止 grep 叙述段）。机器只认**行首**这两行，日期必须是 `YYYY-MM-DD`：
 
 ```text
 E0_PREFETCH_DISK_SIGNED=2026-MM-DD
 E6_SCORER_GO=2026-MM-DD
 ```
+
+2026-08-26 签字含义（磁盘方案与 A3 已就绪，影像尚未下）：
+
+- **E0** = 授权全城 outcome-blind 预取。范围 = Cape Town non-Top-52 90,348 锚 / 27 波 / run root `cape_town_citywide_backdating_v1_20260812`；预算 = Dropbox 归档 + rog 热集 ≤2 波；停止 = §5/§7 水线。**明示覆盖** CT-11「全城下载不得启动」：下载不构成 CT-11 翻盘，不得写入 accuracy headline。
+- **E6** = 授权各波 `staged` 之后用本机 Sub2API + `gemini-3.1-flash-lite` 打分（内部 release，不是对外准确度声称）。rev-6 R5 把 E6 提前到开跑时同签，不等 E3 imagery ready。尚未存在的：`PANEL_CALIBRATION_LOCK.json`（交付核验仪器）、runtime lock 模型位（`prepare-score-lock` 在 token 之后跑）。签 E6 等于接受这些在打分前补，而不是再设一道人工闸。
 
 | 开关 | 默认 | 翻转条件 |
 |---|---|---|
@@ -319,7 +343,7 @@ token 未签前的 pre-flight 全部完成；以下相对 rev-6 正文的偏差�
 | B0 | **DONE**（pre-token snapshot）：`pipeline/hosts.json` + `pipeline/waterlines.json` 已写实测值 |
 | E2 merge | **DONE**：111,801/111,801 outcomes、**0 operational failure**、2019+ candidates **6,217,288**（外推比 1.013）、55.6 dates/anchor；`merged/.done` 已写 |
 | E2 merge 实现 | **重写为流式**（`run_ct05_catalog_probe.py`）：原实现把 22.3M+ catalog 行全量物化 → OOM 杀机（30G 机器）；且 `routes_observed` 是 O(anchors×outcomes) 嵌套扫描，全城规模下不可行。新实现：outcomes 流式建索引 → catalog 行 slim TSV → 外部排序（LC_ALL=C, stable）→ 按 anchor 组流式判决；峰值 RSS ~0.5G。wrapper 的 pandas coverage 段（系统 python3，6.1GB CSV 上 segfault）替换为 `e2_merge_coverage.py`（csv 流式）。8 个既有测试全过 |
-| B1 | **上传中**（tmux `ct_cw_b1`）：3 卷 × ≤16.4 GiB（tar 含 ~1KB/文件头开销，volume 上限按 content 15.5GiB + 开销理解）；`b1_top52_dropbox_archive.sh {plan\|upload\|drill\|status}`；drill = part01 拉回 + 卷 sha256 + 200 文件抽样 `cmp` 对盘上原件（替代原 CPT2932 grid grep，anchor 目录不以 grid 前缀） |
+| B1 | **DONE 2026-08-26 08:32:42Z**：3 卷在 Dropbox；`RELEASE_OK`；删 1,208,195 张 `.tif`；koko 23G 副本已删；`/home` 77G→115G avail。chips 树残留 ~26G = provenance/deletion jsonl + 空目录，0 tif。 |
 | launch gate | **微调**：硬门 = E0+E6 token + `merged/.done` + B1 `BACKUP_OK` + `RESTORE_DRILL_OK`；`RELEASE_OK` 可尾随（lifecycle 全量 hash 需数小时，wave_01 峰值 ~24G 远小于 89G 余量）。KD7 的可恢复性含义不变 |
 | lane/TM3 协调 | **去信号化**：新增 `CT05_LANE_SKIP_TM_Z19=1` knob（lane 跑完 TM18/WB18/WB19 后等 TM3 marker 再写 `.complete`），替代 Top-52 时代的人工 SIGSTOP/SIGCONT；TM3 加 `TM3_LANES` env 与缺 CSV 跳过；两个脚本白名单加 `box_v4\|box_v6` |
 | koko 轻载落地 | lane-only（不跑 TM3），`nice -n 19 ionice -c3`，任意时刻 1 个 GEHI 进程 |

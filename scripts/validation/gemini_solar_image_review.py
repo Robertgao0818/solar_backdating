@@ -236,13 +236,15 @@ IMAGE_ORDER_RULE = "picks_order_chip_index_1based"
 class RateLimiter:
     """Thread-safe global request pacer shared across worker threads.
 
-    ``qps`` is requests-per-second across ALL workers (not per worker). When
-    ``qps`` is falsy or <= 0 the limiter is a no-op, so worker-count alone caps
-    request-start rate. ``max_in_flight`` is an independent cap on active HTTP
-    attempts; QPS pacing alone does not bound concurrency when response latency
-    is greater than one request interval. Mirrors the limiter in
-    ``scripts/temporal/score_target_sequence.py`` so the HTTP-backend scorers
-    throttle identically.
+    ``qps`` is the request-start rate across ALL workers (not per worker).
+    When ``qps`` is falsy or <= 0 the start pacer is a no-op. This is the
+    ramp: the first second admits about ``qps`` requests, not the whole
+    worker pool. Sub2API load-balances per request; a same-instant dump of
+    40 HTTP lands on too few accounts.
+
+    ``max_in_flight`` is the steady-state ceiling, not the ramp. Citywide
+    scoring uses qps 6 and max_in_flight 40: about 6 in-flight at t=1s,
+    up to 40 after ~6.7s, then stay there. 0 disables the ceiling.
     """
 
     def __init__(self, qps: float | None, max_in_flight: int | None = None) -> None:
@@ -261,15 +263,23 @@ class RateLimiter:
     def wait(self) -> None:
         if self.interval <= 0:
             return
+        delay = 0.0
         with self._lock:
             now = time.monotonic()
-            if now < self._next_at:
-                time.sleep(self._next_at - now)
-                now = time.monotonic()
-            self._next_at = now + self.interval
+            start_at = self._next_at if now < self._next_at else now
+            self._next_at = start_at + self.interval
+            delay = start_at - now
+        if delay > 0:
+            time.sleep(delay)
 
     def acquire(self) -> None:
-        """Reserve one active HTTP slot and pace its request start."""
+        """Reserve one in-flight slot, then wait for this request's start time.
+
+        Start times are assigned under the lock (1/QPS apart from request one);
+        the sleep happens outside the lock so waiters do not convoy. The
+        in-flight ceiling is taken first so extra workers queue behind the cap
+        instead of bypassing the pacer.
+        """
         if self._in_flight_slots is not None:
             self._in_flight_slots.acquire()
         try:
