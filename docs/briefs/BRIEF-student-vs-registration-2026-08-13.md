@@ -1,7 +1,8 @@
 # BRIEF — 下一步优化方向：学生模型 vs 配准+池化
 
 日期：2026-08-13 · 触发：owner 对方向不确定 + Grok 文献简报
-（`~/下载/wide_install_intervals_lit_2026-08-13.md`）
+（原文 `~/下载/wide_install_intervals_lit_2026-08-13.md`，仓库副本
+[`SRC-wide-install-intervals-lit-2026-08-13.md`](SRC-wide-install-intervals-lit-2026-08-13.md)）
 依据文档：[REVIEW-citywide-plan-split-2026-08-12](../replan_v2/REVIEW-citywide-plan-split-2026-08-12.md) ·
 [RUN-backdating-legR](../replan_v2/RUN-backdating-legR-reproducibility-plan-2026-08-12.md) ·
 [RUN-backdating-legS](../replan_v2/RUN-backdating-legS-research-program-2026-08-12.md) ·

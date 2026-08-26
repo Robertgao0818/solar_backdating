@@ -236,12 +236,54 @@ def test_build_backfill_record_shape_matches_chip_provenance_fields():
 # CLI-level: cmd_release wiring (refusal, dry-run, force)
 
 
+def _write_backup_ok(tmp_path):
+    import json as _json
+
+    payload = {
+        "schema_version": "ct_citywide_backup_ok_v1",
+        "archive_root": "dropbox:test/archive",
+        "volumes": [{"volume": "part01.tar", "gnu_sha256": "0" * 64}],
+    }
+    path = tmp_path / "BACKUP_OK.json"
+    path.write_text(_json.dumps(payload))
+    return path
+
+
+def test_cmd_release_refuses_without_backup_ok(tmp_path, capsys):
+    _write_chip(tmp_path / "anchorA" / "z19" / "anchorA_20200615_v296.tif")
+    exit_code = cmd_release(tmp_path, dry_run=False, force=True)
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "backup-ok" in captured.err.lower()
+    assert (tmp_path / "anchorA" / "z19" / "anchorA_20200615_v296.tif").exists()
+
+
+def test_cmd_release_anchor_filter_restricts_deletion(tmp_path):
+    chip_a = _write_chip(tmp_path / "anchorA" / "z19" / "anchorA_20200615_v296.tif")
+    chip_b = _write_chip(tmp_path / "anchorB" / "z19" / "anchorB_20200615_v296.tif")
+    ids = tmp_path / "ids.txt"
+    ids.write_text("anchor_id\nanchorA\n")
+
+    exit_code = cmd_release(
+        tmp_path,
+        dry_run=False,
+        force=True,
+        backup_ok=_write_backup_ok(tmp_path),
+        anchor_ids_file=ids,
+    )
+    assert exit_code == 0
+    assert not chip_a.exists()
+    assert chip_b.exists()
+
+
 def test_cmd_release_refuses_on_recent_scan_state(tmp_path, capsys):
     _write_chip(tmp_path / "anchorA" / "z19" / "anchorA_20200615_v296.tif")
     (tmp_path / "scan_states").mkdir()
     (tmp_path / "scan_states" / "a1.json").write_text("{}")
 
-    exit_code = cmd_release(tmp_path, dry_run=False, force=False)
+    exit_code = cmd_release(
+        tmp_path, dry_run=False, force=False, backup_ok=_write_backup_ok(tmp_path)
+    )
     assert exit_code != 0
     captured = capsys.readouterr()
     assert "refusing" in captured.err.lower()
@@ -254,7 +296,9 @@ def test_cmd_release_force_overrides_refusal(tmp_path):
     (tmp_path / "scan_states").mkdir()
     (tmp_path / "scan_states" / "a1.json").write_text("{}")
 
-    exit_code = cmd_release(tmp_path, dry_run=False, force=True)
+    exit_code = cmd_release(
+        tmp_path, dry_run=False, force=True, backup_ok=_write_backup_ok(tmp_path)
+    )
     assert exit_code == 0
     assert not chip.exists()
 

@@ -44,7 +44,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Sequence
+from typing import Callable, Iterable, Iterator, Mapping, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -644,51 +644,263 @@ def run_probe(
     return summary
 
 
+def _iter_jsonl(path: Path) -> Iterator[dict[str, object]]:
+    """Streaming variant of read_jsonl (citywide merge cannot hold 22M+ rows)."""
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                yield json.loads(line)
+
+
 def _latest_successful_outcomes(
     route_dirs: Sequence[Path],
 ) -> tuple[
-    dict[tuple[str, str, int, str], dict[str, object]],
-    list[dict[str, object]],
+    set[tuple[str, str, int, str]],
+    dict[str, set[str]],
 ]:
-    successes: dict[tuple[str, str, int, str], dict[str, object]] = {}
-    all_rows: list[dict[str, object]] = []
+    """Stream query outcomes; return successful query keys + anchor->route_ids.
+
+    rev-6 streaming rewrite: the previous implementation retained every
+    outcome row in a list (only used for routes_observed) which, together
+    with the catalog-row materialisation below, OOM-killed the citywide
+    merge on a 30 GiB host (22.3M+ catalog rows in routes_new alone).
+    """
+    successes: set[tuple[str, str, int, str]] = set()
+    routes_by_anchor: dict[str, set[str]] = {}
     for route_dir in route_dirs:
-        for row in read_jsonl(route_dir / "query_outcomes.jsonl"):
-            all_rows.append(row)
+        for row in _iter_jsonl(route_dir / "query_outcomes.jsonl"):
+            anchor = str(row.get("anchor_id", ""))
+            route_id = str(row.get("route_id", ""))
+            if route_id:
+                routes_by_anchor.setdefault(anchor, set()).add(route_id)
             if str(row.get("status")) not in SUCCESS_STATUSES:
                 continue
             key = (
-                str(row.get("anchor_id", "")),
+                anchor,
                 str(row.get("provider", "")),
                 int(row.get("zoom", 0)),
                 str(row.get("query_kind", "")),
             )
-            successes[key] = row
-    return successes, all_rows
+            successes.add(key)
+    return successes, routes_by_anchor
 
 
-def _dedupe_catalog_rows(
+_CATALOG_SLIM_FIELDS = (
+    "anchor_id",
+    "provider",
+    "zoom",
+    "query_kind",
+    "capture_date",
+    "version",
+    "route_id",
+    "stdout_sha256",
+    "gehi_command",
+)
+
+
+def _tsv_escape(value: object) -> str:
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("\t", "\\t")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
+
+def _tsv_unescape(value: str) -> str:
+    out: list[str] = []
+    idx = 0
+    while idx < len(value):
+        ch = value[idx]
+        if ch == "\\" and idx + 1 < len(value):
+            nxt = value[idx + 1]
+            out.append({"t": "\t", "n": "\n", "r": "\r", "\\": "\\"}.get(nxt, nxt))
+            idx += 2
+        else:
+            out.append(ch)
+            idx += 1
+    return "".join(out)
+
+
+def _stream_catalog_tsv(
     route_dirs: Sequence[Path],
-    successful: Mapping[tuple[str, str, int, str], Mapping[str, object]],
-) -> list[dict[str, object]]:
-    # Route logs are append-only and may contain a failed-route retry followed
-    # by success.  Only rows belonging to a query with a successful outcome
-    # participate.  First row wins per provider/zoom/date; the final global
-    # candidate selection below dedupes by (anchor_id, capture_date).
-    kept: dict[tuple[str, str, int, str, str], dict[str, object]] = {}
-    for route_dir in route_dirs:
-        for row in read_jsonl(route_dir / "catalog_rows.jsonl"):
-            query_key = (
-                str(row.get("anchor_id", "")),
-                str(row.get("provider", "")),
-                int(row.get("zoom", 0)),
-                str(row.get("query_kind", "")),
+    successful: set[tuple[str, str, int, str]],
+    tsv_path: Path,
+) -> int:
+    """Write slim, successful-query catalog rows to TSV in original order."""
+    written = 0
+    with tsv_path.open("w", encoding="utf-8", newline="") as out:
+        for route_dir in route_dirs:
+            for row in _iter_jsonl(route_dir / "catalog_rows.jsonl"):
+                query_key = (
+                    str(row.get("anchor_id", "")),
+                    str(row.get("provider", "")),
+                    int(row.get("zoom", 0)),
+                    str(row.get("query_kind", "")),
+                )
+                if query_key not in successful:
+                    continue
+                out.write(
+                    "\t".join(_tsv_escape(row.get(field, "")) for field in _CATALOG_SLIM_FIELDS)
+                    + "\n"
+                )
+                written += 1
+    return written
+
+
+def _external_sort_tsv(tsv_path: Path, sorted_path: Path, tmp_dir: Path) -> None:
+    """Sort by (anchor_id, capture_date); stable, so within equal keys the
+    original global file order is preserved (dedupe first-wins contract)."""
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    with sorted_path.open("wb") as out:
+        subprocess.run(
+            [
+                "sort",
+                "-t",
+                "\t",
+                "-k1,1",
+                "-k5,5",
+                "-s",
+                "-S",
+                "2G",
+                "-T",
+                str(tmp_dir),
+                str(tsv_path),
+            ],
+            check=True,
+            stdout=out,
+            env=env,
+        )
+
+
+def _iter_anchor_groups(
+    sorted_path: Path,
+) -> Iterator[tuple[str, list[dict[str, str]]]]:
+    """Yield (anchor_id, rows) groups from the sorted slim TSV."""
+    current_anchor: str | None = None
+    group: list[dict[str, str]] = []
+    with sorted_path.open("r", encoding="utf-8", newline="") as fh:
+        for line in fh:
+            cells = line.rstrip("\n").split("\t")
+            if len(cells) != len(_CATALOG_SLIM_FIELDS):
+                raise ValueError(f"malformed slim TSV row ({len(cells)} cells): {line[:120]!r}")
+            row = {
+                field: _tsv_unescape(value)
+                for field, value in zip(_CATALOG_SLIM_FIELDS, cells)
+            }
+            anchor = row["anchor_id"]
+            if current_anchor is not None and anchor != current_anchor:
+                yield current_anchor, group
+                group = []
+            current_anchor = anchor
+            group.append(row)
+    if current_anchor is not None:
+        yield current_anchor, group
+
+
+def _anchor_catalog_verdict(
+    anchor_id: str,
+    group_rows: Sequence[Mapping[str, str]],
+    successful: set[tuple[str, str, int, str]],
+    routes_by_anchor: Mapping[str, set[str]],
+    *,
+    min_date: str,
+    max_date: str,
+    census_date: str,
+    post_census_frames: int,
+) -> tuple[dict[str, object], list[dict[str, object]], bool]:
+    """Per-anchor merge logic (identical semantics to the pre-rev-6 merge)."""
+    unresolved = [
+        f"{spec.provider}:z{spec.zoom}:{spec.query_kind}"
+        for spec in REQUIRED_SPECS
+        if (anchor_id, *spec.key_suffix) not in successful
+    ]
+    # Dedupe first-wins per (provider, zoom, query_kind, capture_date);
+    # equal keys are adjacent in the stable-sorted stream, so this matches
+    # the original global first-wins contract.
+    seen: set[tuple[str, str, str, str]] = set()
+    rows: list[Mapping[str, str]] = []
+    for row in group_rows:
+        key = (
+            row["provider"],
+            row["zoom"],
+            row["query_kind"],
+            row["capture_date"],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    tm_dates = {str(row["capture_date"]) for row in rows if row["provider"] == "TM"}
+    wb_dates = {
+        str(row["capture_date"]) for row in rows if row["provider"] == "Wayback"
+    }
+    merged_dates = tm_dates | wb_dates
+    if unresolved:
+        status = "operational_failure"
+        release_eligible = 0
+    elif not merged_dates:
+        status = "no_history"
+        release_eligible = 1
+    elif not tm_dates and wb_dates:
+        status = "wayback_only"
+        release_eligible = 1
+    elif tm_dates and not wb_dates:
+        status = "tm_only"
+        release_eligible = 1
+    else:
+        status = "tm_and_wayback"
+        release_eligible = 1
+    outcome = {
+        "anchor_id": anchor_id,
+        "catalog_status": status,
+        "release_eligible": release_eligible,
+        "tm_date_count": len(tm_dates),
+        "wayback_date_count": len(wb_dates),
+        "merged_date_count": len(merged_dates),
+        "successful_query_count": len(REQUIRED_SPECS) - len(unresolved),
+        "required_query_count": len(REQUIRED_SPECS),
+        "unresolved_queries": ";".join(unresolved),
+        "routes_observed": ";".join(sorted(routes_by_anchor.get(anchor_id, ()))),
+    }
+    candidates: list[dict[str, object]] = []
+    if not unresolved:
+        cutoff = compute_cutoff(
+            merged_dates,
+            census_date,
+            max_date=max_date,
+            post_census_frames=post_census_frames,
+        )
+        rows_by_date: dict[str, list[Mapping[str, str]]] = {}
+        for row in rows:
+            date = str(row["capture_date"])[:10]
+            if min_date <= date <= cutoff:
+                rows_by_date.setdefault(date, []).append(row)
+        for date, same_date_rows in sorted(rows_by_date.items()):
+            chosen = min(same_date_rows, key=_candidate_priority)
+            candidates.append(
+                {
+                    "anchor_id": anchor_id,
+                    "capture_date": date,
+                    "version": str(chosen.get("version", "")),
+                    "provider": str(chosen["provider"]),
+                    "requested_zoom": int(chosen["zoom"]),
+                    "query_kind": str(chosen["query_kind"]),
+                    "route_id": str(chosen["route_id"]),
+                    "bbox_complete_at_catalog": int(
+                        str(chosen["query_kind"]) == "availability_complete"
+                    ),
+                    "reference_only": int(date > census_date),
+                    "census_date": census_date,
+                    "cutoff_max_date": cutoff,
+                    "catalog_stdout_sha256": str(chosen.get("stdout_sha256", "")),
+                    "gehi_command": str(chosen.get("gehi_command", "")),
+                }
             )
-            if query_key not in successful:
-                continue
-            key = (*query_key[:3], query_key[3], str(row.get("capture_date", "")))
-            kept.setdefault(key, row)
-    return list(kept.values())
+    return outcome, candidates, bool(unresolved)
 
 
 def compute_cutoff(
@@ -731,127 +943,95 @@ def merge_routes(
     validate_anchors(anchors)
     if not route_dirs:
         raise ValueError("at least one --route-dir is required")
-    successful, all_outcomes = _latest_successful_outcomes(route_dirs)
-    catalog_rows = _dedupe_catalog_rows(route_dirs, successful)
-    by_anchor: dict[str, list[dict[str, object]]] = {}
-    for row in catalog_rows:
-        by_anchor.setdefault(str(row["anchor_id"]), []).append(row)
 
+    # rev-6 streaming merge (citywide scale: 22.3M+ catalog rows in
+    # routes_new alone OOM-killed the materialising implementation on a
+    # 30 GiB host). Memory stays bounded: only the successful-key set
+    # (~anchors x 4 specs), a route-id index, and per-anchor outcomes are
+    # held; catalog rows flow through an on-disk external sort.
+    successful, routes_by_anchor = _latest_successful_outcomes(route_dirs)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = out_dir / "merge_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tsv_path = tmp_dir / "catalog_slim.tsv"
+    sorted_path = tmp_dir / "catalog_slim.sorted.tsv"
+    _stream_catalog_tsv(route_dirs, successful, tsv_path)
+    _external_sort_tsv(tsv_path, sorted_path, tmp_dir)
+    tsv_path.unlink()
+
+    outcomes_csv = out_dir / "anchor_catalog_outcomes.csv"
+    candidates_csv = out_dir / "gehi_vintage_candidates_ct05.csv"
+
+    outcomes_by_anchor: dict[str, dict[str, object]] = {}
+    unresolved_ids: set[str] = set()
+    candidate_count = 0
+    with candidates_csv.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(CANDIDATE_FIELDS))
+        writer.writeheader()
+        for anchor_id, group_rows in _iter_anchor_groups(sorted_path):
+            outcome, candidates, unresolved = _anchor_catalog_verdict(
+                anchor_id,
+                group_rows,
+                successful,
+                routes_by_anchor,
+                min_date=min_date,
+                max_date=max_date,
+                census_date=census_date,
+                post_census_frames=post_census_frames,
+            )
+            outcomes_by_anchor[anchor_id] = outcome
+            if unresolved:
+                unresolved_ids.add(anchor_id)
+            else:
+                # structural dedupe invariant: one candidate per (anchor, date)
+                dates = [str(row["capture_date"]) for row in candidates]
+                if len(dates) != len(set(dates)):
+                    raise AssertionError(
+                        "candidate dedupe invariant violated: "
+                        f"duplicate (anchor_id, capture_date) for {anchor_id}"
+                    )
+                writer.writerows(candidates)
+                candidate_count += len(candidates)
+    sorted_path.unlink()
+
+    # Anchors without any catalog rows still need outcomes (no_history or
+    # operational_failure); outcomes CSV keeps the anchors-file order.
     final_outcomes: list[dict[str, object]] = []
-    candidates: list[dict[str, object]] = []
     unresolved_anchor_ids: list[str] = []
     for anchor in anchors:
         anchor_id = str(anchor["anchor_id"])
-        unresolved = [
-            f"{spec.provider}:z{spec.zoom}:{spec.query_kind}"
-            for spec in REQUIRED_SPECS
-            if (anchor_id, *spec.key_suffix) not in successful
-        ]
-        rows = by_anchor.get(anchor_id, [])
-        tm_dates = {
-            str(row["capture_date"]) for row in rows if str(row["provider"]) == "TM"
-        }
-        wb_dates = {
-            str(row["capture_date"])
-            for row in rows
-            if str(row["provider"]) == "Wayback"
-        }
-        merged_dates = tm_dates | wb_dates
-        if unresolved:
-            status = "operational_failure"
-            release_eligible = 0
-            unresolved_anchor_ids.append(anchor_id)
-        elif not merged_dates:
-            status = "no_history"
-            release_eligible = 1
-        elif not tm_dates and wb_dates:
-            status = "wayback_only"
-            release_eligible = 1
-        elif tm_dates and not wb_dates:
-            status = "tm_only"
-            release_eligible = 1
-        else:
-            status = "tm_and_wayback"
-            release_eligible = 1
-        routes_observed = sorted(
-            {
-                str(row.get("route_id", ""))
-                for row in all_outcomes
-                if str(row.get("anchor_id", "")) == anchor_id
-            }
-        )
-        final_outcomes.append(
-            {
-                "anchor_id": anchor_id,
-                "catalog_status": status,
-                "release_eligible": release_eligible,
-                "tm_date_count": len(tm_dates),
-                "wayback_date_count": len(wb_dates),
-                "merged_date_count": len(merged_dates),
-                "successful_query_count": len(REQUIRED_SPECS) - len(unresolved),
-                "required_query_count": len(REQUIRED_SPECS),
-                "unresolved_queries": ";".join(unresolved),
-                "routes_observed": ";".join(routes_observed),
-            }
-        )
-        if unresolved:
-            continue
-        cutoff = compute_cutoff(
-            merged_dates,
-            census_date,
-            max_date=max_date,
-            post_census_frames=post_census_frames,
-        )
-        rows_by_date: dict[str, list[dict[str, object]]] = {}
-        for row in rows:
-            date = str(row["capture_date"])[:10]
-            if min_date <= date <= cutoff:
-                rows_by_date.setdefault(date, []).append(row)
-        for date, same_date_rows in sorted(rows_by_date.items()):
-            chosen = min(same_date_rows, key=_candidate_priority)
-            candidates.append(
-                {
-                    "anchor_id": anchor_id,
-                    "capture_date": date,
-                    "version": str(chosen.get("version", "")),
-                    "provider": str(chosen["provider"]),
-                    "requested_zoom": int(chosen["zoom"]),
-                    "query_kind": str(chosen["query_kind"]),
-                    "route_id": str(chosen["route_id"]),
-                    "bbox_complete_at_catalog": int(
-                        str(chosen["query_kind"]) == "availability_complete"
-                    ),
-                    "reference_only": int(date > census_date),
-                    "census_date": census_date,
-                    "cutoff_max_date": cutoff,
-                    "catalog_stdout_sha256": str(chosen.get("stdout_sha256", "")),
-                    "gehi_command": str(chosen.get("gehi_command", "")),
-                }
+        outcome = outcomes_by_anchor.get(anchor_id)
+        if outcome is None:
+            outcome, _unused, unresolved = _anchor_catalog_verdict(
+                anchor_id,
+                (),
+                successful,
+                routes_by_anchor,
+                min_date=min_date,
+                max_date=max_date,
+                census_date=census_date,
+                post_census_frames=post_census_frames,
             )
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    outcomes_csv = out_dir / "anchor_catalog_outcomes.csv"
-    candidates_csv = out_dir / "gehi_vintage_candidates_ct05.csv"
+            if unresolved:
+                unresolved_ids.add(anchor_id)
+        final_outcomes.append(outcome)
+        if anchor_id in unresolved_ids:
+            unresolved_anchor_ids.append(anchor_id)
     write_csv_rows(outcomes_csv, final_outcomes, FINAL_OUTCOME_FIELDS)
-    write_csv_rows(candidates_csv, candidates, CANDIDATE_FIELDS)
 
     retry_rows = [
-        anchor for anchor in anchors if str(anchor["anchor_id"]) in set(unresolved_anchor_ids)
+        anchor for anchor in anchors if str(anchor["anchor_id"]) in unresolved_ids
     ]
     retry_csv = out_dir / "retry_anchors.csv"
     write_csv_rows(retry_csv, retry_rows, list(anchors[0].keys()))
 
-    key_count = len(
-        {(str(row["anchor_id"]), str(row["capture_date"])) for row in candidates}
-    )
-    if key_count != len(candidates):
-        raise AssertionError("candidate dedupe invariant violated: duplicate (anchor_id, capture_date)")
     summary = {
         "schema_version": "ct05_catalog_merge_summary_v1",
         "created_utc": utc_now(),
         "anchor_count": len(anchors),
-        "candidate_count": len(candidates),
-        "candidate_key_count": key_count,
+        "candidate_count": candidate_count,
+        "candidate_key_count": candidate_count,
         "release_eligible_anchors": len(anchors) - len(unresolved_anchor_ids),
         "operational_failure_anchors": len(unresolved_anchor_ids),
         "wayback_only_anchors": sum(

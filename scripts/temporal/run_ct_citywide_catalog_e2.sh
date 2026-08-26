@@ -260,53 +260,9 @@ cmd_merge() {
     | tee "${CATALOG_ROOT}/logs/merge.json"
 
   # 2019+ slice for download planning + coverage report.
-  python3 - <<'PY'
-import json
-from pathlib import Path
-import pandas as pd
-
-run = Path.home() / "zasolar_data/geid_temporal/cape_town_citywide_backdating_v1_20260812"
-merged = run / "ct05_catalog_v1/merged"
-outcomes = pd.read_csv(merged / "anchor_catalog_outcomes.csv")
-cands = pd.read_csv(merged / "gehi_vintage_candidates_ct05.csv")
-c19 = cands[cands.capture_date.astype(str) >= "2019-01-01"].copy()
-c19_path = merged / "gehi_vintage_candidates_ct05_run3_2019plus.csv"
-c19.to_csv(c19_path, index=False, lineterminator="\n")
-
-status_counts = outcomes.catalog_status.value_counts().to_dict()
-coverage = {
-    "schema_version": "ct_citywide_catalog_coverage_v1",
-    "anchor_count": int(len(outcomes)),
-    "expected_anchor_count": 111801,
-    "every_anchor_has_outcome": bool(len(outcomes) == 111801 and outcomes.anchor_id.is_unique),
-    "catalog_status_counts": {str(k): int(v) for k, v in status_counts.items()},
-    "release_eligible_anchors": int(outcomes.release_eligible.astype(int).sum()),
-    "operational_failure_anchors": int((outcomes.catalog_status == "operational_failure").sum()),
-    "no_history_anchors": int((outcomes.catalog_status == "no_history").sum()),
-    "candidate_count_all": int(len(cands)),
-    "candidate_count_2019plus": int(len(c19)),
-    "unique_anchors_with_2019plus": int(c19.anchor_id.nunique()),
-    "extrapolated_2019plus_from_top52": 6140258,
-    "2019plus_vs_extrapolation_ratio": float(len(c19) / 6140258.0),
-    "mean_2019plus_dates_per_anchor_with_history": float(
-        len(c19) / max(c19.anchor_id.nunique(), 1)
-    ),
-}
-(merged / "catalog_coverage_report.json").write_text(
-    json.dumps(coverage, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-)
-# Also rewrite summary with 2019+ pointer
-summary = json.loads((merged / "summary.json").read_text())
-summary["candidate_count_2019plus"] = int(len(c19))
-summary["2019plus_csv"] = str(c19_path)
-summary["coverage_report"] = str(merged / "catalog_coverage_report.json")
-(merged / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
-print(json.dumps(coverage, indent=2, sort_keys=True))
-if coverage["anchor_count"] != 111801 or not coverage["every_anchor_has_outcome"]:
-    raise SystemExit("E2 exit gate failed: incomplete outcomes")
-if coverage["operational_failure_anchors"] > 0:
-    print("WARNING: operational failures remain; inspect retry_anchors.csv", flush=True)
-PY
+  # (pandas heredoc replaced 2026-08-18: system python3 segfaulted on the
+  # 13.8M-row merged CSV; e2_merge_coverage.py streams with csv module.)
+  python "${ROOT}/scripts/temporal/e2_merge_coverage.py" --run-root "${RUN_ROOT}"
   # sentinel
   date -u +"%Y-%m-%dT%H:%M:%SZ" > "${CATALOG_ROOT}/merged/.done"
   echo "merge complete: ${CATALOG_ROOT}/merged"

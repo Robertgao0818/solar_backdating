@@ -76,12 +76,49 @@ def candidate_key(row: Mapping[str, object]) -> tuple[str, str, str, str]:
     )
 
 
-def stable_download_route(row: Mapping[str, object], routes: Sequence[str]) -> str:
+def expand_route_slots(
+    routes: Sequence[str],
+    route_weights: Mapping[str, int] | None = None,
+) -> list[str]:
+    """Expand routes into hash slots; weight N = N slots (default weight 1).
+
+    Weighted assignment keeps slow/light hosts (e.g. koko limited to one
+    GEHI process) from becoming the straggler that stalls every wave.
+    """
     if not routes:
         raise ValueError("at least one route is required")
+    slots: list[str] = []
+    for route in routes:
+        weight = 1 if route_weights is None else int(route_weights.get(route, 1))
+        if weight < 1:
+            raise ValueError(f"route weight must be >= 1: {route}={weight}")
+        slots.extend([route] * weight)
+    return slots
+
+
+def stable_download_route(
+    row: Mapping[str, object],
+    routes: Sequence[str],
+    route_weights: Mapping[str, int] | None = None,
+) -> str:
+    slots = expand_route_slots(routes, route_weights)
     key = "|".join(candidate_key(row))
     digest = hashlib.sha256(key.encode("utf-8")).digest()
-    return routes[int.from_bytes(digest[:8], "big") % len(routes)]
+    return slots[int.from_bytes(digest[:8], "big") % len(slots)]
+
+
+def parse_route_weights(value: str) -> dict[str, int] | None:
+    """Parse 'home_v4=2,home_v6=2,koko_v4=1'; empty -> None (uniform)."""
+    weights: dict[str, int] = {}
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        route, sep, raw = item.partition("=")
+        if not sep:
+            raise ValueError(f"bad --route-weights entry (want route=N): {item!r}")
+        weights[route.strip()] = int(raw)
+    return weights or None
 
 
 def plan_downloads(
@@ -90,6 +127,7 @@ def plan_downloads(
     out_dir: Path,
     *,
     min_date: str = RUN3_DOWNLOAD_MIN_DATE,
+    route_weights: Mapping[str, int] | None = None,
 ) -> dict[str, object]:
     input_candidate_count = len(candidates)
     candidates = [
@@ -117,7 +155,7 @@ def plan_downloads(
         requested_zoom = int(row.get("requested_zoom", 0))
         if requested_zoom not in {19, 18}:
             raise ValueError(f"CT-05 only admits requested z19/z18, got {requested_zoom}")
-        route = stable_download_route(row, routes)
+        route = stable_download_route(row, routes, route_weights)
         shards.setdefault((route, provider, requested_zoom), []).append(row)
 
     shard_dir = out_dir / "shards"
@@ -149,6 +187,7 @@ def plan_downloads(
         "anchor_date_key_count": len(anchor_date_keys),
         "min_capture_date": min_date,
         "routes": list(routes),
+        "route_weights": dict(route_weights) if route_weights else None,
         "shards": records,
     }
     _write_json(out_dir / "download_plan.json", manifest)
@@ -374,6 +413,7 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--candidates-csv", type=Path, required=True)
     plan.add_argument("--out-dir", type=Path, required=True)
     plan.add_argument("--routes", default=",".join(DEFAULT_ROUTES))
+    plan.add_argument("--route-weights", default="", help="e.g. home_v4=2,home_v6=2,koko_v4=1; empty = uniform")
     plan.add_argument("--min-date", default=RUN3_DOWNLOAD_MIN_DATE)
 
     qa = sub.add_parser("qa")
@@ -389,11 +429,17 @@ def main() -> None:
     candidates = read_csv_rows(args.candidates_csv)
     if args.command == "plan":
         routes = tuple(value.strip() for value in args.routes.split(",") if value.strip())
+        route_weights = parse_route_weights(args.route_weights)
+        if route_weights:
+            unknown = set(route_weights) - set(routes)
+            if unknown:
+                raise SystemExit(f"--route-weights references unknown routes: {sorted(unknown)}")
         result = plan_downloads(
             candidates,
             routes,
             args.out_dir,
             min_date=args.min_date,
+            route_weights=route_weights,
         )
     else:
         result = quality_gate(

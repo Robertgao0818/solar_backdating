@@ -11,9 +11,9 @@
 
 set -euo pipefail
 
-LANE="${1:?lane required: home_v4, home_v6, koko_v4, or koko_v6}"
+LANE="${1:?lane required: home_v4, home_v6, koko_v4, koko_v6, box_v4, or box_v6}"
 case "$LANE" in
-  home_v4|home_v6|koko_v4|koko_v6) ;;
+  home_v4|home_v6|koko_v4|koko_v6|box_v4|box_v6) ;;
   *) echo "unsupported lane: $LANE" >&2; exit 2 ;;
 esac
 
@@ -89,6 +89,17 @@ log "lane start cache=${SOLAR_GEHI_TILE_CACHE_DIR:-${HOME}/zasolar_data/geid_raw
 run_shard TM 18 18
 run_shard Wayback 18 18
 run_shard Wayback 19 19,18
-run_shard TM 19 19,18
+if [[ "${CT05_LANE_SKIP_TM_Z19:-0}" == "1" ]]; then
+  # TM3 owns the TM-z19 shard (its manifests live under lanes/<route>/tm3/).
+  # Wait for the TM3 route marker instead of racing a second TM-z19 pass;
+  # this replaces the Top-52 era manual SIGSTOP/SIGCONT dance.
+  log "CT05_LANE_SKIP_TM_Z19=1: waiting for TM3 marker ${LANE}_tm_z19.done"
+  while [[ ! -f "${LANE_DIR}/${LANE}_tm_z19.done" ]]; do
+    sleep 60
+  done
+  log "TM3 marker present; skipping own TM-z19 shard"
+else
+  run_shard TM 19 19,18
+fi
 date -u +%Y-%m-%dT%H:%M:%SZ > "${LANE_DIR}/.complete"
 log "lane complete"

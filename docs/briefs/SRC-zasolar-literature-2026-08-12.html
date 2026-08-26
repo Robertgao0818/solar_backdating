@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ZAsolar / solar_backdating 前沿文献调研</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --bg2: #1a222c;
+    --bg3: #243040;
+    --card: #1e2834;
+    --text: #e8eef4;
+    --muted: #9aabbc;
+    --accent: #f0a202;
+    --accent2: #3dd6c6;
+    --zasolar: #5b9cff;
+    --backdate: #c084fc;
+    --border: rgba(255,255,255,0.08);
+    --shadow: 0 8px 30px rgba(0,0,0,0.35);
+    --radius: 14px;
+    --font: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--font);
+    background:
+      radial-gradient(1200px 600px at 10% -10%, rgba(240,162,2,0.12), transparent 55%),
+      radial-gradient(900px 500px at 90% 0%, rgba(61,214,198,0.10), transparent 50%),
+      var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+  header.hero {
+    background: linear-gradient(135deg, rgba(240,162,2,0.15), rgba(91,156,255,0.12));
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 36px 32px;
+    box-shadow: var(--shadow);
+    margin-bottom: 28px;
+  }
+  header.hero h1 {
+    margin: 0 0 10px;
+    font-size: clamp(1.6rem, 3vw, 2.2rem);
+    letter-spacing: -0.02em;
+  }
+  header.hero .sub { color: var(--muted); margin: 0 0 18px; max-width: 70ch; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 10px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .pill b { color: var(--text); font-weight: 600; }
+  nav.toc {
+    position: sticky; top: 12px; z-index: 10;
+    background: rgba(26,34,44,0.92);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 28px;
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  nav.toc a {
+    color: var(--muted);
+    font-size: 0.86rem;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: transparent;
+  }
+  nav.toc a:hover { background: var(--bg3); color: var(--text); text-decoration: none; }
+  section {
+    margin-bottom: 40px;
+  }
+  h2 {
+    font-size: 1.35rem;
+    margin: 0 0 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .num {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--accent); color: #1a1200;
+    font-size: 0.85rem; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  h3 { margin: 22px 0 10px; font-size: 1.05rem; }
+  p, li { color: #d5dee8; }
+  .muted { color: var(--muted); }
+  .grid2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 18px 16px;
+    box-shadow: var(--shadow);
+  }
+  .card h3 { margin-top: 0; }
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 6px;
+    margin-right: 6px;
+  }
+  .badge.z { background: rgba(91,156,255,0.2); color: #9ec1ff; }
+  .badge.b { background: rgba(192,132,252,0.2); color: #e0b8ff; }
+  .badge.both { background: rgba(61,214,198,0.18); color: #8ff0e5; }
+  .badge.year { background: rgba(240,162,2,0.18); color: #ffd27a; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+    background: var(--card);
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  th, td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    text-align: left;
+  }
+  th { background: var(--bg3); color: var(--accent); font-weight: 600; width: 22%; }
+  tr:last-child td { border-bottom: none; }
+  .paper {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow);
+    transition: border-color .15s, transform .15s;
+  }
+  .paper:hover { border-color: rgba(240,162,2,0.35); transform: translateY(-1px); }
+  .paper .title { font-size: 1.05rem; font-weight: 650; margin: 8px 0 6px; line-height: 1.4; }
+  .paper .authors { color: var(--muted); font-size: 0.9rem; margin-bottom: 8px; }
+  .paper .venue { font-family: var(--mono); font-size: 0.8rem; color: #b8c7d6; margin-bottom: 12px; }
+  .paper .block { margin: 10px 0; }
+  .paper .label {
+    font-size: 0.75rem; font-weight: 700; color: var(--accent);
+    letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px;
+  }
+  .callout {
+    background: linear-gradient(90deg, rgba(240,162,2,0.12), rgba(91,156,255,0.08));
+    border-left: 4px solid var(--accent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 16px 18px;
+    margin: 16px 0;
+  }
+  .callout.teal { border-left-color: var(--accent2); background: linear-gradient(90deg, rgba(61,214,198,0.12), transparent); }
+  ol.read { counter-reset: r; list-style: none; padding: 0; }
+  ol.read li {
+    counter-increment: r;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px 12px 52px;
+    margin-bottom: 8px;
+    position: relative;
+  }
+  ol.read li::before {
+    content: counter(r);
+    position: absolute; left: 14px; top: 12px;
+    width: 26px; height: 26px; border-radius: 8px;
+    background: var(--bg3); color: var(--accent2);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.85rem;
+  }
+  footer {
+    margin-top: 48px; padding-top: 20px;
+    border-top: 1px solid var(--border);
+    color: var(--muted); font-size: 0.85rem;
+  }
+  ul.clean { padding-left: 1.15rem; }
+  ul.clean li { margin-bottom: 6px; }
+  .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 0.92rem; }
+  .kv .k { color: var(--muted); }
+  @media (max-width: 640px) {
+    .kv { grid-template-columns: 1fr; }
+    th { width: auto; }
+    header.hero { padding: 24px 18px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <h1>ZAsolar / solar_backdating<br/>前沿文献调研报告</h1>
+    <p class="sub">对齐两仓方法画像的精选文献（2023–2026 优先），含本地 solar_backdating 增量修正。仅收录已交叉核实出处的论文。</p>
+    <div class="meta">
+      <span class="pill"><b>日期</b> 2026-08-12 · PT/Auckland</span>
+      <span class="pill"><b>仓库</b> <a href="https://github.com/Robertgao0818/ZAsolar">ZAsolar</a> · <a href="https://github.com/Robertgao0818/solar_backdating">solar_backdating</a></span>
+      <span class="pill"><b>本地</b> /home/gao/projects/solar_backdating</span>
+      <span class="pill"><b>篇数</b> 11 精选 + 补充对照</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <a href="#a">A 仓库画像</a>
+    <a href="#b">B 文献簇</a>
+    <a href="#c">C 精选论文</a>
+    <a href="#d">D 开放前沿</a>
+    <a href="#e">E 本地增量</a>
+    <a href="#action">行动建议</a>
+  </nav>
+
+  <section id="a">
+    <h2><span class="num">A</span> 两仓库研究画像</h2>
+    <div class="grid2">
+      <div class="card">
+        <span class="badge z">ZAsolar</span>
+        <h3>屋顶 PV 高分普查</h3>
+        <p><b>核心问题</b>：南非城市高分辨率航拍中稳定检出住宅屋顶光伏，产出可用于经济/政策分析的网格聚合装机清单。</p>
+        <p><b>方法</b>：Mask R-CNN（ResNet-50+FPN）→ SAM 2.1 精修 → <code>solar_cls</code> 压制热水器/look-alike FP。主指标为 grid 级 inventory（σ_Bw、RMSE），polygon F1 仅诊断。</p>
+        <p><b>数据</b>：Cape Town ~8 cm；Johannesburg Vexcel ~6.7 cm。CT ~11.2 万 installations；JHB FP-cut ~4.1 万 dets。</p>
+      </div>
+      <div class="card">
+        <span class="badge b">solar_backdating</span>
+        <h3>Location-conditioned 定年</h3>
+        <p><b>核心问题</b>：给定 ZAsolar footprint（锚点），从历史影像 vintage 推断出现年份/区间。</p>
+        <p><b>方法</b>：锚点缓冲 chip → present/absent/unusable → 单调断点。GEHI Time Machine 为 sole 影像源；Gemini review；v2 规划 DINOv3-L-SAT student（fidelity-gated）。</p>
+        <p><b>进度</b>：JHB 92.7% 点估计 + 2.5% 下界（~95.1% 有标签）。v2：P0–P4 优化程序已立项（2026-07-03）。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="b">
+    <h2><span class="num">B</span> 文献簇摘要</h2>
+    <div class="grid2">
+      <div class="card">
+        <span class="badge z">Cluster 1</span>
+        <h3>检测与分割 → ZAsolar</h3>
+        <ul class="clean">
+          <li>基线：DeepSolar 族、Jiang ESSD PV01/03/08</li>
+          <li>2024–26：SAM/几何 prompt（SolarSAM、PVSAM）；Mask2Former/ViT；边缘/频域（PV Segmenter）</li>
+          <li>Global South 多为试点级；<b>南非城市可复现高分 census 仍稀缺</b></li>
+          <li>PV vs 太阳能热水器专门后处理公开论文很少 → <code>solar_cls</code> 可发表点</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="badge b">Cluster 2</span>
+        <h3>定年 / 时序 → solar_backdating</h3>
+        <ul class="clean">
+          <li>最近：DeepSolar++（已知位置 + 历史 presence）</li>
+          <li>公用事业：GRW、Chen+CCDC、reverse-COLD</li>
+          <li>共同局限：多针对电站或美国屋顶</li>
+          <li>南非屋顶 + GEHI 稀疏 vintage 几乎无直接竞品</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>强基线 / 数据集</h3>
+    <table>
+      <tr><th>名称</th><td><b>DeepSolar / DeepSolar-3M</b> — 美屋顶普查与 ViT 更新 · <a href="https://web.stanford.edu/group/deepsolar/ds">站</a> · <a href="https://www.climatechange.ai/papers/iclr2025/55">ICLR’25</a></td></tr>
+      <tr><th>名称</th><td><b>PV01–03–08</b> — 多分辨率分割基准 · <a href="https://essd.copernicus.org/articles/13/5389/2021/">ESSD</a></td></tr>
+      <tr><th>名称</th><td><b>Global Renewables Watch</b> — 全球公用事业时序 · <a href="https://arxiv.org/abs/2503.14860">arXiv</a> · <a href="https://github.com/microsoft/global-renewables-watch">GitHub</a></td></tr>
+      <tr><th>名称</th><td><b>DeepSolar_timelapse</b> — DeepSolar++ 代码 · <a href="https://github.com/wangzhecheng/DeepSolar_timelapse">GitHub</a></td></tr>
+    </table>
+  </section>
+
+  <section id="c">
+    <h2><span class="num">C</span> 精选论文（11）</h2>
+
+    <article class="paper" id="c1">
+      <span class="badge b">solar_backdating</span><span class="badge year">2022</span>
+      <div class="title">DeepSolar++: Understanding residential solar adoption trajectories…</div>
+      <div class="authors">Wang, Arlt, Zanocco, Majumdar, Rajagopal</div>
+      <div class="venue">Joule · <a href="https://doi.org/10.1016/j.joule.2022.09.011">DOI</a> · <a href="https://github.com/wangzhecheng/DeepSolar_timelapse">code</a></div>
+      <div class="block"><div class="label">贡献</div>在 DeepSolar 位置上对历史序列做 presence，推断安装年；HR 参考辅助 LR 历史；结合 Bass 模型分析采纳轨迹。</div>
+      <div class="block"><div class="label">为何重要</div>与 solar_backdating 任务几乎同构。你们已有南非高分 census，正好是其前置条件。</div>
+      <div class="block"><div class="label">下一实验</div>JHB 已标子集复现「HR 参考 + 历史 chip」双分支，对比 Gemini / DINOv3 student 的 fidelity 与日期误差。</div>
+    </article>
+
+    <article class="paper" id="c2">
+      <span class="badge both">both</span><span class="badge year">2025</span>
+      <div class="title">Global Renewables Watch: A Temporal Dataset of Solar and Wind Energy…</div>
+      <div class="authors">Robinson, Ortiz, et al.</div>
+      <div class="venue">arXiv:2503.14860 · <a href="https://arxiv.org/abs/2503.14860">arXiv</a> · <a href="https://github.com/microsoft/global-renewables-watch">GitHub</a></div>
+      <div class="block"><div class="label">贡献</div>PlanetScope 季度全球公用事业 PV/风电 + 首次出现建设日期；硬负例与 FP filter。</div>
+      <div class="block"><div class="label">为何重要</div>最强「检测+建设时间」全球产品，但非屋顶——正好衬托 ZAsolar。</div>
+      <div class="block"><div class="label">下一实验</div>GRW 南非公用事业面作 Ch4 sanity，勿混入屋顶 F1。</div>
+    </article>
+
+    <article class="paper" id="c3">
+      <span class="badge z">ZAsolar</span><span class="badge year">2026</span>
+      <div class="title">PVSAM: Adapting geometric prompts to SAM for photovoltaic detection…</div>
+      <div class="authors">Yao, Zhang, Liang, Li, Liu</div>
+      <div class="venue">Applied Energy · <a href="https://doi.org/10.1016/j.apenergy.2025.127137">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>多尺度/边缘金字塔几何 prompt 适配 SAM；跨场景 F1/IoU &gt;90%。</div>
+      <div class="block"><div class="label">为何重要</div>最贴你们的 SAM 2.1 refinement 路径。</div>
+      <div class="block"><div class="label">下一实验</div>固定检测器，对比现有 SAM2.1 vs 边缘增强 prompt，主看 σ_Bw / area F1。</div>
+    </article>
+
+    <article class="paper" id="c4">
+      <span class="badge z">ZAsolar</span><span class="badge year">2024</span>
+      <div class="title">Mapping Solar Potential… Using SolarSAM</div>
+      <div class="authors">Matar, Albrecht, Kandelaki, Kotthoff, Duchon</div>
+      <div class="venue">IEEE SmartGridComm · <a href="https://doi.org/10.1109/smartgridcomm60555.2024.10738071">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>早期 SAM-for-PV；航拍→卫星会掉点。</div>
+      <div class="block"><div class="label">下一实验</div>SAM 仅作 inference refiner，禁止伪标签 hard BCE 回灌。</div>
+    </article>
+
+    <article class="paper" id="c5">
+      <span class="badge z">ZAsolar</span><span class="badge year">2025/26</span>
+      <div class="title">DeepSolar-3M / Nationwide insights… vision transformer models</div>
+      <div class="authors">Prabha, Wang, Zanocco, Flora, Rajagopal</div>
+      <div class="venue">ICLR CCAI’25 Best · Applied Energy 2026 · <a href="https://www.climatechange.ai/papers/iclr2025/55">CCAI</a> · <a href="https://doi.org/10.1016/j.apenergy.2026.127411">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>ViT 三阶段管线更新美屋顶至约 295 万系统；截面普查非历史反推。</div>
+      <div class="block"><div class="label">下一实验</div>类型头显式含 solar-thermal-lookalike。</div>
+    </article>
+
+    <article class="paper" id="c6">
+      <span class="badge z">ZAsolar</span><span class="badge year">2024</span>
+      <div class="title">Generalized deep learning model… Mask2Former…</div>
+      <div class="authors">García, Aparcedo, Nayak, Ahmed, Shah, Li</div>
+      <div class="venue">Solar Energy · <a href="https://doi.org/10.1016/j.solener.2024.112539">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>Mask2Former 多分辨率分割，报告 IoU &gt;95%（语义设定）。</div>
+      <div class="block"><div class="label">下一实验</div>同一 JHB CBD25 只比 Tier-1 聚合指标，禁止与论文 chip IoU 横比。</div>
+    </article>
+
+    <article class="paper" id="c7">
+      <span class="badge z">ZAsolar</span><span class="badge year">2025</span>
+      <div class="title">PV Segmenter: A frequency-guided edge-aware network…</div>
+      <div class="authors">Wang, Shao, Hou, Cai</div>
+      <div class="venue">Applied Energy · <a href="https://doi.org/10.1016/j.apenergy.2025.126137">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>频域边缘 + hybrid loss，专攻分布式小尺度边界。</div>
+      <div class="block"><div class="label">下一实验</div>仅对 mask head 加 edge 项，单杠杆 ablate σ_Bw。</div>
+    </article>
+
+    <article class="paper" id="c8">
+      <span class="badge b">solar_backdating</span><span class="badge year">2025</span>
+      <div class="title">Back in time: … mapping solar installations</div>
+      <div class="authors">Cullerton, Zhu, Qiu, Rittenhouse, Suh</div>
+      <div class="venue">Science of Remote Sensing · <a href="https://doi.org/10.1016/j.srs.2025.100322">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>U-Net 定位 + Landsat 反向 COLD 定年（大型场，误差约 0.125 年）。</div>
+      <div class="block"><div class="label">下一实验</div>GEHI 稀疏序列输出 interval + ambiguous，而非强行单点年。</div>
+    </article>
+
+    <article class="paper" id="c9">
+      <span class="badge both">both</span><span class="badge year">2024</span>
+      <div class="title">Uncovering the rapid expansion of PV power plants in China…</div>
+      <div class="authors">Chen, Zhou, Ge, Dong</div>
+      <div class="venue">RSE · <a href="https://doi.org/10.1016/j.rse.2024.114100">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>TransUNet + CCDC；空间与日期精度分报。</div>
+      <div class="block"><div class="label">下一实验</div>独立日期验证表，勿与 census F1 混报。</div>
+    </article>
+
+    <article class="paper" id="c10">
+      <span class="badge z">ZAsolar</span><span class="badge year">2018</span>
+      <div class="title">DeepSolar: A Machine Learning Framework… Solar Deployment Database…</div>
+      <div class="authors">Yu, Wang, Majumdar, Rajagopal</div>
+      <div class="venue">Joule · <a href="https://doi.org/10.1016/j.joule.2018.11.021">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>全国屋顶普查原点。</div>
+      <div class="block"><div class="label">下一实验</div>相关工作表加 “evaluation unit” 列。</div>
+    </article>
+
+    <article class="paper" id="c11">
+      <span class="badge z">ZAsolar</span><span class="badge year">2021</span>
+      <div class="title">Multi-resolution dataset for photovoltaic panel segmentation…</div>
+      <div class="authors">Jiang et al.</div>
+      <div class="venue">ESSD · <a href="https://doi.org/10.5194/essd-13-5389-2021">DOI</a></div>
+      <div class="block"><div class="label">贡献</div>PV01/03/08；跨分辨率必须微调。</div>
+      <div class="block"><div class="label">下一实验</div>PV01 warm-start 后再 CT/JHB 微调。</div>
+    </article>
+
+    <div class="callout teal">
+      <b>补充对照</b>：DeepSolar for Germany (Mayer 2020)；WRI Kenya YOLO 试点；Pereira et al. 2024（仓库已对照）。
+    </div>
+  </section>
+
+  <section id="d">
+    <h2><span class="num">D</span> 开放前沿与阅读顺序</h2>
+    <div class="grid2">
+      <div class="card"><b>1.</b> 屋顶 × Global South 可发布 census</div>
+      <div class="card"><b>2.</b> SAM/SAM2：精修器 vs 监督源</div>
+      <div class="card"><b>3.</b> 评估单位：chip F1 → grid inventory</div>
+      <div class="card"><b>4.</b> Location-conditioned 定年 + 稀疏商业历史影像</div>
+      <div class="card"><b>5.</b> PV vs 太阳能热水器抑制（solar_cls）</div>
+      <div class="card"><b>+</b> 推理加速：高召回 tile rejector cascade（你提到的方向）</div>
+    </div>
+    <h3>建议先读</h3>
+    <ol class="read">
+      <li><b>DeepSolar++</b>（定年方法锚）</li>
+      <li><b>PVSAM</b>（SAM 几何 prompt）</li>
+      <li><b>DeepSolar-3M</b>（屋顶普查产品）</li>
+      <li><b>Global Renewables Watch</b>（时序竞品，非屋顶）</li>
+      <li><b>Back in time / reverse-COLD</b></li>
+      <li>Mask2Former PV → PV Segmenter → Chen RSE → DeepSolar 2018 → Jiang ESSD</li>
+    </ol>
+  </section>
+
+  <section id="e">
+    <h2><span class="num">E</span> 本地仓库增量</h2>
+    <p class="muted">读取自 <code>/home/gao/projects/solar_backdating</code> README（2026-07-03 status）。v2 PRD / TRACKER 因本机权限中断尚未全文读完。</p>
+    <table>
+      <tr><th>项目</th><th style="width:auto">初版（GitHub）</th><th style="width:auto">本地更新</th></tr>
+      <tr><th>影像源</th><td>GEHI Time Machine</td><td><b>sole</b> provider；z=19 主、z=18 兜底</td></tr>
+      <tr><th>Scorer</th><td>Gemini；规划 DINOv2/LightGBM</td><td><b>DINOv3-L-SAT student</b>，fidelity to Gemini 门控</td></tr>
+      <tr><th>程序</th><td>插件 + adaptive scan</td><td>+ v2 五层（P0–P4）；强调 reproducibility</td></tr>
+      <tr><th>布局</th><td>scripts/temporal</td><td>+ <code>src/solar_backdating/</code> estimator seam</td></tr>
+    </table>
+    <div class="callout">
+      <b>叙事修正</b>：写成 DeepSolar++ 的 <b>GEHI-only + seed-from-ZAsolar + provenance store + DINOv3-L-SAT student</b> 变体，而不是 DINOv2/LightGBM。
+    </div>
+  </section>
+
+  <section id="action">
+    <h2><span class="num">→</span> 行动建议</h2>
+    <div class="card">
+      <ul class="clean">
+        <li><b>ZAsolar</b>：南非高分屋顶 census + inventory-first + SAM2 精修 + 热水器 FP 链；下一步可探索 <b>高召回前置小模型</b> 加速 R-CNN（软拒识，盯小安装子集）。</li>
+        <li><b>solar_backdating</b>：DeepSolar++ 的 GEHI/南非变体；Gemini teacher vs DINOv3 student 只报 fidelity + claim-gate 日期误差。</li>
+        <li><b>联合实验</b>：(i) PVSAM prompt vs SAM2.1；(ii) presence scorer 蒸馏；(iii) tile rejector cascade 的 recall–speed Pareto。</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    仅含已核实链接的论文。投稿前请再对出版社页面核对 DOI / 卷期页码。<br/>
+    生成于 Grok Bot · 前沿文献搜索总结 · 2026-08-12
+  </footer>
+</div>
+</body>
+</html>

@@ -6,6 +6,45 @@ Source PRD: [`../install_date_optimization_v2_prd.md`](../install_date_optimizat
 Cape Town run-specific plan: [`RUN-cape-town-backdating-plan-2026-07-24.md`](RUN-cape-town-backdating-plan-2026-07-24.md) ·
 execution tracker: [`RUN-cape-town-backdating-tracker-2026-07-24.md`](RUN-cape-town-backdating-tracker-2026-07-24.md)
 
+Cape Town citywide disk pipeline (rev-6, 2026-08-18, awaiting E0+E6 tokens):
+[`RUN-cape-town-citywide-batch-disk-pipeline-2026-08-18.md`](RUN-cape-town-citywide-batch-disk-pipeline-2026-08-18.md)
+— Dropbox 主归档 · koko 轻载 · 单相位 · 下载加速计划（§9）
+
+A3 region-batch pilot (2026-08-18): **MIXED** on the preregistered
+`download` arm —
+[`RUN-a3-region-batch-pilot-2026-08-18.md`](RUN-a3-region-batch-pilot-2026-08-18.md) —
+but **GO on the `dump` arm**, same day:
+[`RUN-a3-region-batch-dump-arm-2026-08-18.md`](RUN-a3-region-batch-dump-arm-2026-08-18.md).
+The dump+lossless-stitch arm is now in the library with offline tests
+(`gehi_region_batch.py` + driver stages `batch_dump`/`compare_dump`/`report_dump`);
+both CPT2713 and CPT3584 pass all 7 prereg bars (median MAE 1.93, 24/24 ≤5,
+QA 24/24, invocations 2 vs 24). New gotcha encoded in the stitcher: GEHI .jgw
+C/F are tile CORNERS, not ESRI-convention pixel centers (half-pixel trap).
+Handoff (2026-08-19):
+[`HANDOFF-a3-region-batch-2026-08-19.md`](HANDOFF-a3-region-batch-2026-08-19.md)
+§7 steps 1–2 done. **Owner accepted the ~2 DN dump chips as the scoring truth
+source on 2026-08-19 ([OWNER_DECISIONS D4](OWNER_DECISIONS.md))** — truth-source
+equivalence only, not a production switch. Follow-through same day
+([`RUN-a3-fullcell-coldcell-probe-2026-08-19.md`](RUN-a3-fullcell-coldcell-probe-2026-08-19.md)):
+full-cell union probe (341 anchors / 1.1 km) reports **57 complete dates**;
+cold non-Top-52 cell (CPT1953, 2025-10-30) re-passes all 7 dump-arm bars
+(median MAE 2.78) with cold wall-clock **17.2× ≈ cache-hot 17.8×** — the tax is
+process+interval, not bytes; dump→per-anchor manifest synthesis passes the
+production `quality_gate` unchanged (24/24 pilot, 12/12 cold). Handoff §8 open
+items all closed. **Owner then signed the production path on 2026-08-19
+([OWNER_DECISIONS D5](OWNER_DECISIONS.md))**: dump arm replaces ALL per-anchor
+downloads, plus a full-cell pilot and a 10-grid canary before scale-out.
+Executed same day:
+[`RUN-a3-batch-lane-canary-2026-08-19.md`](RUN-a3-batch-lane-canary-2026-08-19.md)
+— production lane `run_a3_batch_lane.py` (fail-closed >10 grids without
+`ENABLE_REGION_BATCH=true`); full-cell pilot 1 call / 341 anchors, QA 341/341;
+10-grid canary 14,796 chips, QA 14,795/14,796 (99.99%), no 403; canary caught
+GEHI dump SILENTLY SKIPPING vintage-uncovered tiles (99 holes in non-member
+rectangle areas) — fixed with hole-tolerant stitch + surgical crop-level
+fallback, steady-state ≈ 296 calls vs 14,796 sequential (~50×). **Remaining
+gate: owner releases `ENABLE_REGION_BATCH=true` after reading the canary
+report.**
+
 **Goal:** reproducible-and-bounded-accurate install dates via five layered
 phases — deterministic decoder (P0), provenance + verdict store (P1), external
 accuracy channel (P2), corrected student distillation (P3, governed by the

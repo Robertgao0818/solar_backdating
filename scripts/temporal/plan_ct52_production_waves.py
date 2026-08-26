@@ -159,9 +159,17 @@ def main() -> None:
     parser.add_argument("--roster-csv", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--canary-grid", action="append", dest="canary_grids")
+    parser.add_argument(
+        "--no-canary",
+        action="store_true",
+        help="exclude no grids (citywide non-Top-52 waves keep every grid)",
+    )
     parser.add_argument("--max-anchors", type=int, default=3500)
     args = parser.parse_args()
-    canary = tuple(args.canary_grids) if args.canary_grids else DEFAULT_CANARY_GRIDS
+    if args.no_canary:
+        canary: tuple[str, ...] = ()
+    else:
+        canary = tuple(args.canary_grids) if args.canary_grids else DEFAULT_CANARY_GRIDS
     print(json.dumps(plan(args.anchors_csv, args.roster_csv, args.output_dir, canary_grids=canary, max_anchors=args.max_anchors), indent=2, sort_keys=True))
 
 

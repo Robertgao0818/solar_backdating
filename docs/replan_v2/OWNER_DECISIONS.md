@@ -49,3 +49,45 @@ H3（类不平衡重加权）视为 H1 实现内允许的组成部分而非独�
 如实声明。判定合格线 0.7542 / 0.7337 / 0.80 **不动**。
 
 **消耗**：本决议用掉校准 gate 的唯一修正名额；r4_v2 再败即触发 D2。
+
+## D4 — A3 dump 臂 chip 接受为打分真源 · 2026-08-19
+
+**决议**：接受 A3 `dump` 臂（GEHI 原生瓦片 + 无损拼接 + pad + 切开
++ per-chip JPEG q=95）产出的 chip 作为**打分真源**——即「与逐张
+`download` 差 ~2 DN（两格中位 1.93 DN，24/24 ≤5）、QA 全过」的
+批量切开 chip 可用于 PresenceScorer / Gemini 打分，与逐张下载 chip
+等效。A3 的机制判定随之从「dump 臂 GO，待 owner 认」转为
+**owner 已认**。
+
+**范围限定**：本决议只签**真源等效性**，不是生产开关——
+`ENABLE_REGION_BATCH` **仍 false**，生产路径（manifest 合成进
+per-anchor 行、全城 wave plan 接线）须 owner 单独签；Leg-E 的
+E0/E6 token 状态不受本决议影响。档案级像素复现场景（非打分）
+仍以逐张 `download` 为真源（HANDOFF §4 发现 7）。
+
+**依据**：owner 于 2026-08-19 会话确认；数字真源
+[RUN-a3-region-batch-dump-arm-2026-08-18](RUN-a3-region-batch-dump-arm-2026-08-18.md)
+§3（预注册 7 条 bar 全过，含 `download` 臂没过的「90% chip
+MAE≤5」）+ `~/zasolar_data/geid_temporal/a3_region_batch_pilot_20260818/report/dump_summary.json`。
+
+## D5 — A3 dump 臂签为生产路径（替换全部逐张 + 整格 pilot + 10 格 canary） · 2026-08-19
+
+**决议**：owner 对 A3 生产路径的三条指令——
+
+1. **替换所有的**：dump 臂（并窗 dump → 无损拼 → 切开 → manifest 合成）
+   签为全城下载的**唯一生产路径**，替换逐张 `download`；逐张路径仅保留为
+   簇失败时的 fallback 与档案级像素真源。
+2. **整格 pilot**：加一个整格真实下载 pilot（~341 锚 / ~270 瓦一簇），
+   验证生产尺度下 dump 的墙钟 / 403 行为 / 拼接切开 QA。
+3. **先跑 10 grid 然后再放量**：canary 10 格端到端跑通出报告，
+   owner 看过报告点头后才放量。
+
+**范围限定**：canary 限 TM z19（占 wave_01 候选 82%）；Wayback/z18 走同
+一代码路径后续接入。**放量授权不在本决议内**——`ENABLE_REGION_BATCH=true`
+（全城放量）需 owner 在 canary 报告后明确放行；Leg-E 的 E0/E6 token 节奏
+独立于本决议。簇失败语义：失败簇成员回退逐张下载，失败类如实进 QA，
+永不转为 absence 观测。
+
+**依据**：owner 于 2026-08-19 会话确认（接续 D4 的「继续推进」）；
+机制真源 [RUN-a3-fullcell-coldcell-probe-2026-08-19](RUN-a3-fullcell-coldcell-probe-2026-08-19.md)
+（整格 availability 57 日期、冷格 17.2×、manifest 过生产 QA）。

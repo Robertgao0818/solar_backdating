@@ -338,10 +338,76 @@ def execute_release(plan: ReleasePlan, *, dry_run: bool) -> ReleaseResult:
     return result
 
 
-def cmd_release(run_dir: Path, *, dry_run: bool, force: bool) -> int:
+def _validate_backup_ok(backup_ok: Path) -> dict[str, object] | None:
+    """Parse a BACKUP_OK contract; return payload or None when invalid."""
+    try:
+        payload = json.loads(backup_ok.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not str(payload.get("schema_version", "")).startswith("ct_citywide_backup_ok"):
+        return None
+    if not payload.get("volumes"):
+        return None
+    return payload
+
+
+def cmd_release(
+    run_dir: Path,
+    *,
+    dry_run: bool,
+    force: bool,
+    backup_ok: Path | None = None,
+    anchor_ids_file: Path | None = None,
+) -> int:
     if not run_dir.exists():
         print(f"[chip_lifecycle] run-dir not found: {run_dir}", file=sys.stderr)
         return 1
+    if not dry_run:
+        # BACKUP_OK interlock (rev-6 KD6): chips may only be deleted against a
+        # verified durable archive. Bare `chip_lifecycle.py release` without
+        # --backup-ok is refused; --dry-run stays open for planning.
+        if backup_ok is None:
+            print(
+                "[chip_lifecycle] refusing non-dry-run release without --backup-ok "
+                "(use the pipeline b1/release-wave wrappers)",
+                file=sys.stderr,
+            )
+            return 2
+        payload = _validate_backup_ok(backup_ok)
+        if payload is None:
+            print(
+                f"[chip_lifecycle] refusing: invalid BACKUP_OK contract: {backup_ok}",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            f"[chip_lifecycle] backup_ok verified: {payload.get('archive_root')} "
+            f"({len(payload.get('volumes', []))} volume(s))"
+        )
+    anchor_filter: set[str] | None = None
+    if anchor_ids_file is not None:
+        anchor_filter = set()
+        with anchor_ids_file.open("r", encoding="utf-8") as fh:
+            first = True
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                if first and (line.startswith("anchor_id") or "," in line):
+                    # tolerate CSV with header / extra columns: first field wins
+                    first = False
+                    if line.split(",", 1)[0] == "anchor_id":
+                        continue
+                    anchor_filter.add(line.split(",", 1)[0])
+                    continue
+                first = False
+                anchor_filter.add(line.split(",", 1)[0])
+        if not anchor_filter:
+            print(
+                f"[chip_lifecycle] refusing: empty anchor set: {anchor_ids_file}",
+                file=sys.stderr,
+            )
+            return 2
     offending = check_refusal_window(run_dir, force=force)
     if offending is not None:
         print(
@@ -353,6 +419,20 @@ def cmd_release(run_dir: Path, *, dry_run: bool, force: bool) -> int:
         return 1
 
     plan = plan_release(run_dir)
+    if anchor_filter is not None:
+        kept = [
+            entry
+            for entry in plan.to_delete
+            if entry.path.relative_to(run_dir).parts
+            and entry.path.relative_to(run_dir).parts[0] in anchor_filter
+        ]
+        dropped = len(plan.to_delete) - len(kept)
+        plan.to_delete = kept
+        plan.to_backfill = [entry for entry in plan.to_backfill if entry in kept]
+        print(
+            f"[chip_lifecycle] anchor filter {anchor_ids_file}: "
+            f"{len(kept)} chip(s) in scope, {dropped} skipped"
+        )
     print(plan.describe())
     if dry_run:
         print("[chip_lifecycle] --dry-run: no files modified or deleted.")
@@ -379,13 +459,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Bypass the 30-minute active-scan refusal window (see check_refusal_window).",
     )
+    release.add_argument(
+        "--backup-ok",
+        type=Path,
+        default=None,
+        help="BACKUP_OK.json contract; REQUIRED for non-dry-run release (rev-6 KD6).",
+    )
+    release.add_argument(
+        "--anchor-ids-file",
+        type=Path,
+        default=None,
+        help="Optional newline/CSV anchor_id list; restrict release to these anchors.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.command == "release":
-        raise SystemExit(cmd_release(args.run_dir, dry_run=args.dry_run, force=args.force))
+        raise SystemExit(
+            cmd_release(
+                args.run_dir,
+                dry_run=args.dry_run,
+                force=args.force,
+                backup_ok=args.backup_ok,
+                anchor_ids_file=args.anchor_ids_file,
+            )
+        )
 
 
 if __name__ == "__main__":

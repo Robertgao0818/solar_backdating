@@ -7,7 +7,7 @@ ROUTE="${1:?route required}"
 RUN_ROOT="${2:-${HOME}/zasolar_data/geid_temporal/cape_town_top52_backdating_v1_20260724/ct05_download_v1}"
 PARENT_PID="${3:-}"
 case "$ROUTE" in
-  home_v4|home_v6|koko_v4|koko_v6) ;;
+  home_v4|home_v6|koko_v4|koko_v6|box_v4|box_v6) ;;
   *) echo "unsupported route: $ROUTE" >&2; exit 2 ;;
 esac
 
@@ -46,6 +46,10 @@ run_lane() {
     log "skip completed lane=$lane_id"
     return
   fi
+  if [[ ! -s "$candidates" ]]; then
+    log "skip lane=$lane_id (no candidates file: $candidates)"
+    return
+  fi
   "$PYTHON_BIN" "$REPO_ROOT/scripts/temporal/gehi_download.py" \
     --anchors-csv "$ANCHORS_CSV" \
     --candidates-csv "$candidates" \
@@ -64,9 +68,10 @@ run_lane() {
   log "done lane=$lane_id"
 }
 
-log "start lanes=3 request_interval=${REQUEST_INTERVAL}s"
+TM3_LANES="${TM3_LANES:-3}"
+log "start lanes=${TM3_LANES} request_interval=${REQUEST_INTERVAL}s"
 pids=()
-for index in 1 2 3; do
+for index in $(seq 1 "$TM3_LANES"); do
   run_lane "$index" >"$OUT_DIR/lane$(printf '%02d' "$index").log" 2>&1 &
   pids+=("$!")
 done

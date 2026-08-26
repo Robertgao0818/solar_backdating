@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>solar_backdating：替代 Gemini 的文献简报</title>
+<style>
+:root{--bg:#0f1419;--card:#1e2834;--bg3:#243040;--text:#e8eef4;--muted:#9aabbc;--accent:#f0a202;--teal:#3dd6c6;--border:rgba(255,255,255,.08);--purple:#c084fc;--blue:#5b9cff;--font:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+*{box-sizing:border-box}body{margin:0;font-family:var(--font);background:radial-gradient(1000px 500px at 15% -10%,rgba(192,132,252,.14),transparent 50%),radial-gradient(800px 400px at 90% 0,rgba(240,162,2,.1),transparent 45%),var(--bg);color:var(--text);line-height:1.65}
+a{color:var(--teal);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:1000px;margin:0 auto;padding:32px 20px 72px}
+.hero{background:linear-gradient(135deg,rgba(192,132,252,.16),rgba(240,162,2,.1));border:1px solid var(--border);border-radius:20px;padding:32px;margin-bottom:24px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+h1{margin:0 0 10px;font-size:clamp(1.45rem,3vw,2rem)}.sub{color:var(--muted);margin:0 0 14px;max-width:72ch}
+.pill{display:inline-flex;gap:6px;background:#1a222c;border:1px solid var(--border);border-radius:999px;padding:5px 11px;font-size:.85rem;color:var(--muted);margin:3px}.pill b{color:var(--text)}
+nav{position:sticky;top:10px;z-index:5;display:flex;flex-wrap:wrap;gap:8px;background:rgba(26,34,44,.92);backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:24px}
+nav a{color:var(--muted);font-size:.85rem;padding:5px 10px;border-radius:8px}nav a:hover{background:var(--bg3);color:var(--text);text-decoration:none}
+h2{font-size:1.25rem;margin:28px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:12px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.badge{display:inline-block;font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:6px;margin-right:6px}
+.b-hot{background:rgba(240,162,2,.2);color:#ffd27a}.b-empty{background:rgba(240,80,80,.18);color:#ffb4b4}.b-dino{background:rgba(91,156,255,.2);color:#9ec1ff}.b-vlm{background:rgba(192,132,252,.2);color:#e0b8ff}
+.paper .t{font-weight:650;margin:6px 0}.paper .m{color:var(--muted);font-size:.9rem;margin-bottom:8px}
+.label{font-size:.72rem;font-weight:700;color:var(--accent);letter-spacing:.05em;text-transform:uppercase;margin-top:8px}
+.callout{border-left:4px solid var(--accent);background:linear-gradient(90deg,rgba(240,162,2,.12),transparent);padding:14px 16px;border-radius:0 12px 12px 0;margin:14px 0}
+.callout.teal{border-left-color:var(--teal);background:linear-gradient(90deg,rgba(61,214,198,.12),transparent)}
+ol{padding-left:1.2rem}li{margin:6px 0;color:#d5dee8}table{width:100%;border-collapse:collapse;font-size:.92rem;background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}th,td{padding:10px 12px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}th{background:var(--bg3);color:var(--accent);width:28%}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <h1>solar_backdating：替代 Gemini 的文献简报</h1>
+  <p class="sub">聚焦「已知屋顶 footprint → 历史 vintage presence → 安装年」，生产去 Gemini / 自托管 DINOv3 student 的相近工作。DeepSolar-3M 级普查已成熟时，真正空白在这条蒸馏线上。</p>
+  <span class="pill"><b>日期</b> 2026-08-12</span>
+  <span class="pill"><b>篇数</b> 10 核实条目</span>
+  <span class="pill"><b>结论</b> Gemini→DINOv3 presence 发表系统基本为空</span>
+</header>
+<nav>
+  <a href="#takeaway">结论</a>
+  <a href="#papers">论文</a>
+  <a href="#read">先读</a>
+  <a href="#gap">空白</a>
+  <a href="#playbook">可执行借法</a>
+</nav>
+
+<section id="takeaway">
+<h2>核心结论</h2>
+<div class="grid">
+  <div class="card"><span class="badge b-hot">最近邻</span><p>屋顶自托管定年公开金标准仍是 <b>DeepSolar++</b>；2023–2026 新作多在 utility-scale（GRW / COLD / CCDC），作对照即可。</p></div>
+  <div class="card"><span class="badge b-empty">空白</span><p><b>Gemini 对历史 chip 打 present/absent → DINOv3 student 替换生产 scorer</b> 的完整发表系统未找到。旁路有：Gemini RS caption 教师、航天 VLM 置信度蒸馏、AeroLite。</p></div>
+  <div class="card"><span class="badge b-dino">可借</span><p><b>DINOv3 + ChangeDINO</b> 直接支撑冻结骨干双塔；蒸馏门控抄航天论文的 confidence filter + 迭代 relabel；输入条件化抄 DeepSolar++ 的 HR 参考图。</p></div>
+</div>
+</section>
+
+<section id="papers">
+<h2>核实论文 / 系统</h2>
+
+<article class="card paper">
+<span class="badge b-hot">必读 · 自托管定年</span>
+<div class="t">1. DeepSolar++ (Wang et al., 2022, Joule)</div>
+<div class="m"><a href="https://doi.org/10.1016/j.joule.2022.09.011">DOI</a> · <a href="https://github.com/wangzhecheng/DeepSolar_timelapse">code</a></div>
+<p>已知位置 + 历史序列 presence；HR 参考条件化的 pseudo-Siamese CNN；约 85.9% 安装年正确率。与你们任务同构，且不依赖托管 VLM——消融基线第一选择。</p>
+<div class="label">借法</div><p>双塔喂「历史 chip ∥ 最新含 PV 参考」；显式 unusable；再做单调断点。</p>
+</article>
+
+<article class="card paper">
+<span class="badge b-dino">骨干</span>
+<div class="t">5–6. DINOv3 (2025) + ChangeDINO (2025)</div>
+<div class="m"><a href="https://arxiv.org/abs/2508.10104">DINOv3</a> · <a href="https://arxiv.org/abs/2511.16322">ChangeDINO</a> · <a href="https://github.com/chingheng0808/ChangeDINO">code</a></div>
+<p>DINOv3 含卫星变体与蒸馏族；ChangeDINO 用冻结 DINOv3 做建筑变化检测。把「建筑变化」换成「屋顶 PV 出现」即可原型化，推理侧可完全去掉 Gemini。</p>
+<div class="label">借法</div><p>冻结 DINOv3-SAT + 小头；参考帧 vs 历史帧 Siamese；面积/置信阈值对齐稳定 present。</p>
+</article>
+
+<article class="card paper">
+<span class="badge b-vlm">蒸馏配方</span>
+<div class="t">8. Annotation-Free Spacecraft Detection… VLM Distillation (Hicsonmez et al., 2026)</div>
+<div class="m"><a href="https://arxiv.org/abs/2602.04699">arXiv</a></div>
+<p>VLM 伪标 → 置信度清洗 → 蒸馏轻量学生 → 迭代 relabel。领域是航天器，但是最贴近你们「无独立 GT + fidelity-gated」的配方。</p>
+<div class="label">借法</div><p>只训高置信 Gemini 子集；TTA 稳健伪标；报告相对教师一致率，而非硬编独立日期 accuracy。</p>
+</article>
+
+<article class="card paper">
+<span class="badge b-vlm">Gemini 教师先例</span>
+<div class="t">7. A Recipe for Improving RS VLM Zero Shot… (Barzilai et al., 2025, Google)</div>
+<div class="m"><a href="https://arxiv.org/abs/2503.08722">arXiv</a></div>
+<p>用 Gemini 1.5 Pro 大规模生成 RS caption 伪监督再训 VLM，并探索蒸馏到定位。证明 Gemini→RS 伪监督可行，但还不是 PV presence/安装年。</p>
+</article>
+
+<article class="card paper">
+<span class="badge">对照 · utility</span>
+<div class="t">2–4. Global Renewables Watch (2025) · Back in time / reverse-COLD (2025) · Chen et al. China CCDC (2024)</div>
+<div class="m"><a href="https://arxiv.org/abs/2503.14860">GRW</a> · <a href="https://doi.org/10.1016/j.srs.2025.100322">COLD</a> · <a href="https://doi.org/10.1016/j.rse.2024.114100">RSE</a></div>
+<p>业界主流场站定年完全自托管（分割 + 首次出现 / 光谱突变），不用 GPT/Gemini。分辨率与目标尺寸不覆盖屋顶——Related Work 里写清尺度对照即可。</p>
+</article>
+
+<article class="card paper">
+<span class="badge">动机论据</span>
+<div class="t">9. AeroLite (2025) · 10. SatMAE / Scale-MAE / DOFA / Prithvi</div>
+<div class="m"><a href="https://arxiv.org/abs/2504.09528">AeroLite</a> · Scale-MAE 尤其贴 GSD 漂移</div>
+<p>AeroLite：API 打标 → 自托管小模型（成本/可部署）。基础模型簇提供无 VLM 骨干选项；屋顶亚米级优先 DINOv3-SAT / Scale-MAE。</p>
+</article>
+</section>
+
+<section id="read">
+<h2>最值得读</h2>
+<ol>
+  <li><b>DeepSolar++</b> — 屋顶定年金标准 / 消融对照</li>
+  <li><b>ChangeDINO + DINOv3</b> — student 原型骨架</li>
+  <li><b>航天 VLM 蒸馏 (2026)</b> — fidelity / 迭代蒸馏配方</li>
+  <li><b>Barzilai Gemini-RS</b> — Gemini 当 RS 教师的先例</li>
+  <li><b>Global Renewables Watch</b> — 自托管首次出现工程范本（对照）</li>
+</ol>
+</section>
+
+<section id="gap">
+<h2>Niche 是否为空？</h2>
+<div class="callout">
+<b>基本为空——这本身有发表价值。</b> 已有 DeepSolar++（自托管屋顶定年）和 VLM→student（航天/caption），缺的是「已知屋顶多边形 + 历史 chip + Gemini 教师 → DINOv3 presence 学生 → 去掉托管 API」的可复现管线。Related Work 可诚实写：任务继承 DeepSolar++，蒸馏借鉴航天/RS-VLM 伪监督，骨干用 DINOv3-SAT，动机是成本 / 可复现 / API 版本漂移。
+</div>
+<table>
+<tr><th>已有</th><td>DeepSolar++；Gemini RS caption；航天 VLM 蒸馏；utility 首次出现</td></tr>
+<tr><th>仍缺</th><td>Gemini 作生产级 rooftop presence scorer 的发表系统；Gemini→DINOv3 安装年蒸馏专论；GEHI 稀疏 vintage 的 location-conditioned 配方</td></tr>
+</table>
+</section>
+
+<section id="playbook">
+<h2>可执行借法</h2>
+<div class="card">
+<ol>
+<li><b>教师数据</b>：Gemini 继续打 present/absent/unusable，只留高置信 / 多视角一致样本。</li>
+<li><b>学生输入</b>：历史 chip ∥ 最新确认含 PV 参考 ∥ 可选 polygon mask。</li>
+<li><b>骨干</b>：冻结 DINOv3-SAT（或 ChangeDINO 双塔）+ 小分类头；备选 Scale-MAE。</li>
+<li><b>时间推断</b>：概率序列 → 单调断点；稳定 present 用面积/置信阈值。</li>
+<li><b>评估</b>：相对 Gemini 一致率、高置信人工抽检、与 DeepSolar++ 伪 Siamese 的成本–误差 Pareto——无独立 GT 时不要硬报「日期 accuracy」。</li>
+</ol>
+</div>
+<div class="callout teal">相对 DeepSolar-3M：他们把 ViT 普查做厚；你们可以把叙事收成「成熟 census 上游 + 可复现自托管 backdating」，把 Gemini 明确降级为 Phase-0 教师而非生产依赖。</div>
+</section>
+
+<footer>仅含已核实 DOI/arXiv 条目。完整 Markdown 见同目录 solar_backdating_gemini_alternatives_2026-08-12.md</footer>
+</div>
+</body>
+</html>
