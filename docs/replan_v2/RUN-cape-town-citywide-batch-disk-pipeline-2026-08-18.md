@@ -353,6 +353,7 @@ token 未签前的 pre-flight 全部完成；以下相对 rev-6 正文的偏差�
 | PR3 | **DONE**：`chip_lifecycle release` 非 dry-run 必须 `--backup-ok`；`--anchor-ids-file` 子集删除。**2026-08-27 hotfix**：`entry in kept` 对 list 做 O(n²) 扫描，wave_03 空转 ~25 min 后仍删完 154,577 张（`RELEASE_OK` 11:45:15Z）；改为 path-set 过滤，`describe()` 只预览 20 条 backfill |
 | box（A1） | tailnet 上发现 **rog-1**（100.111.51.77，离线）与新机 **bot**（100.86.6.50，在线但 SSH 未授权常见用户）。等 owner 给 bot 的 SSH 用户/授权后填槽 + 403 smoke |
 | 下载吞吐实测基准 | wave_01：128,718 candidates；home 单 route ≈1 chip/s、koko 轻载 ≈0.5 chip/s → **~14–15h/波**（与 S0 日历一致） |
+| Wayback dump CRS | **FIXED 2026-08-28**：Wayback `.jgw` 是 EPSG:3857 米。wave_03 上 99.9% Wayback 切图失败、逐张回退（TM 0 失败）。stitch 按单位推断 CRS，crop 先投影。wave_04 不热切。见 [`DATA-a3-wayback-dump-crs-2026-08-28.md`](DATA-a3-wayback-dump-crs-2026-08-28.md) |
 
 **token 到位后的首个动作序列**：`b1 drill` → `launch-wave 1`（home×2+TM3、koko_v4）→ `b1 --release`（lifecycle 全量 hash，tmux 数小时）→ 波流水线双缓冲启动。
 

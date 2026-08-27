@@ -76,8 +76,8 @@ wave_01 TM z19 全量：110,154 候选 → **2,774 个簇任务 ≈ 2,774 次调
 
 ## §6 Open Questions
 
-- [ ] **owner 放量放行**（唯一闸门）
-- [ ] Wayback / z18 候选接入放量范围（同路径，未在 canary 范围）
+- [x] **owner 放量放行**（D6，2026-08-26）
+- [x] Wayback / z18 候选接入放量范围（同路径；**2026-08-28 CRS 修复**：Wayback `.jgw` 是 EPSG:3857 米，不是度。生产 wave_03 上 99.9% Wayback 切图失败并逐张回退。见 [`DATA-a3-wayback-dump-crs-2026-08-28.md`](DATA-a3-wayback-dump-crs-2026-08-28.md)）
 - [ ] 放量时的 lane 接线：route 分片（home_v4/home_v6/koko_v4）如何与簇任务正交——候选里 route_id 已失去意义（调用数降 ~50×，koko 瓶颈大幅缓解）
 - [ ] 99 洞全部落在非成员区是 7 个任务的样本；放量中若出现成员窗口碰洞，手术级 fallback 会如实记录其频率（sidecar `sequential_fallback:*`）
 

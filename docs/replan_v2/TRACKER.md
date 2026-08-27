@@ -72,6 +72,14 @@ spread load across accounts). 40 is the later ceiling, not a chop: do
 not set `max_in_flight` equal to QPS. RateLimiter now assigns start
 times under a lock and sleeps outside it, so 40 waiters cannot share
 t=0.
+**Wayback dump CRS 2026-08-28:** production A3 crop treated Wayback
+`.jgw` metres as degrees (wave_03 `a3_rog_v4`: TM 0/51310 crop-fail,
+Wayback 6667/6672). Stitch now infers EPSG:4326 vs EPSG:3857 from
+world-file units; crop projects the WGS84 bbox into the mosaic CRS.
+Offline tests replay the exact production window
+`[-6849987:-6849986,-13535630:-13535629]` → `[1526:1925, 4034:4415]`.
+Do not restart wave_04; the next wave process picks this up. Write-up:
+[`DATA-a3-wayback-dump-crs-2026-08-28.md`](DATA-a3-wayback-dump-crs-2026-08-28.md).
 
 **Goal:** reproducible-and-bounded-accurate install dates via five layered
 phases — deterministic decoder (P0), provenance + verdict store (P1), external

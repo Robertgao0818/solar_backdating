@@ -17,12 +17,15 @@ from scripts.temporal.gehi_region_batch import (
     crop_chip_from_mosaic,
     dump_region_tiles,
     existing_chip_path,
+    geographic_bbox_in_crs,
+    infer_world_crs,
     parse_world_file,
     region_anchor,
     scan_dump_tiles,
     select_centroid_cluster,
     stitch_dump_tiles,
     union_bbox,
+    WorldFile,
 )
 
 
@@ -199,6 +202,8 @@ def _write_dump_tile(
     color: tuple[int, int, int],
     pixel: float = DUMP_PX,
     tile_px: int = DUMP_TILE,
+    origin_x: float = DUMP_X0,
+    origin_y: float = DUMP_Y0,
 ) -> Path:
     """Write one flat-color JPEG tile + .jgw. Flat colors survive JPEG
     (quality=100) byte-exactly, so stitch assertions can use exact equality.
@@ -207,8 +212,8 @@ def _write_dump_tile(
     from PIL import Image
 
     tile_dir.mkdir(parents=True, exist_ok=True)
-    corner_x = DUMP_X0 + grid_col * tile_px * pixel
-    corner_y = DUMP_Y0 - grid_row_north_up * tile_px * pixel
+    corner_x = origin_x + grid_col * tile_px * pixel
+    corner_y = origin_y - grid_row_north_up * tile_px * pixel
     jpg = tile_dir / f"z={zoom}-Col={col}-Row={row}.jpg"
     img = Image.new("RGB", (tile_px, tile_px), color)
     img.save(jpg, format="JPEG", quality=100, subsampling=0)
@@ -264,10 +269,11 @@ def test_stitch_dump_tiles_places_by_coordinates(tmp_path: Path) -> None:
     assert info["n_tiles"] == 4
     assert info["n_cols"] == 2 and info["n_rows"] == 2
     assert info["filename_grid_mismatches"] == 0
+    assert info["crs"] == "EPSG:4326"
     with rasterio.open(out) as src:
         assert src.width == 16 and src.height == 16
         assert src.count == 3
-        assert src.crs is not None and src.crs.to_string() == "EPSG:4326"
+        assert src.crs is not None and src.crs.to_epsg() == 4326
         assert src.transform.c == pytest.approx(DUMP_X0)
         assert src.transform.f == pytest.approx(DUMP_Y0)
         assert src.transform.a == pytest.approx(DUMP_PX)
@@ -394,6 +400,178 @@ def test_stitch_then_crop_roundtrip_exact(tmp_path: Path) -> None:
     _assert_crop_quadrant_color(data, slice(0, 4), slice(4, 8), (50, 20, 99))
     _assert_crop_quadrant_color(data, slice(4, 8), slice(0, 4), (10, 60, 99))
     _assert_crop_quadrant_color(data, slice(4, 8), slice(4, 8), (50, 60, 99))
+
+
+# ---------------------------------------------------------------------------
+# Wayback dump CRS (EPSG:3857 metres). Production 2026-08-27: stitching
+# stamped EPSG:4326, crop windows landed at pixel -6.8e6, 99.9% of Wayback
+# members fell back to sequential download. TM (degrees) is unchanged.
+# Numbers below are CPT1854_20190115_wayback_z19 from wave_03 a3_rog_v4.
+# ---------------------------------------------------------------------------
+
+WB_PX = 0.29858214173896974
+WB_X0 = 2045302.0028547463
+WB_Y0 = -4041531.433550409
+WB_WIDTH_PX = 4608
+WB_PROD_ANCHOR = {
+    "anchor_id": "ct_full_inventory_2026_06_21_merged_t00005751",
+    "chip_lon_min": 18.377355860709688,
+    "chip_lat_min": -34.10455216978507,
+    "chip_lon_max": 18.37842228549175,
+    "chip_lat_max": -34.10370948635995,
+}
+
+
+def test_infer_world_crs_degrees_vs_metres() -> None:
+    tm = WorldFile(2.682209014892578e-6, 0.0, 0.0, -2.682209014892578e-6, 18.373260498046875, -34.094696044921875)
+    wb = WorldFile(WB_PX, 0.0, 0.0, -WB_PX, WB_X0, WB_Y0)
+    assert infer_world_crs(tm) == "EPSG:4326"
+    assert infer_world_crs(wb) == "EPSG:3857"
+
+
+def test_stitch_rejects_mixed_crs(tmp_path: Path) -> None:
+    tile_dir = tmp_path / "tiles"
+    # Same pixel size so the CRS check fires, not the pixel-size check:
+    # degrees at Cape Town vs metres at the Wayback origin.
+    _write_dump_tile(
+        tile_dir, zoom=19, col=0, row=1,
+        grid_col=0, grid_row_north_up=0, color=(10, 20, 30),
+        pixel=DUMP_PX, origin_x=DUMP_X0, origin_y=DUMP_Y0,
+    )
+    _write_dump_tile(
+        tile_dir, zoom=19, col=1, row=1,
+        grid_col=1, grid_row_north_up=0, color=(40, 50, 60),
+        pixel=DUMP_PX, origin_x=WB_X0, origin_y=WB_Y0,
+    )
+    with pytest.raises(ValueError, match="mixed dump CRS"):
+        stitch_dump_tiles(tile_dir, tmp_path / "mosaic.tif", zoom=19)
+
+
+def test_stitch_rejects_forced_4326_on_metre_tiles(tmp_path: Path) -> None:
+    tile_dir = tmp_path / "tiles"
+    _write_dump_tile(
+        tile_dir, zoom=19, col=0, row=0,
+        grid_col=0, grid_row_north_up=0, color=(10, 20, 30),
+        pixel=WB_PX, origin_x=WB_X0, origin_y=WB_Y0,
+    )
+    with pytest.raises(ValueError, match="does not match world-file units"):
+        stitch_dump_tiles(tile_dir, tmp_path / "mosaic.tif", zoom=19, crs="EPSG:4326")
+
+
+def test_production_wayback_bbox_projects_inside_mosaic() -> None:
+    """Replay the wave_03 fail: lon/lat bbox vs metre mosaic.
+
+    Treating lon/lat as metres reproduces the exact production window
+    `[-6849987:-6849986,-13535630:-13535629]`. Projecting to EPSG:3857
+    lands inside the 4608 px canvas.
+    """
+    from rasterio.transform import from_origin
+    from rasterio.windows import from_bounds as window_from_bounds
+
+    mosaic_south = WB_Y0 - WB_WIDTH_PX * WB_PX
+    mosaic_east = WB_X0 + WB_WIDTH_PX * WB_PX
+    bbox = BBox(
+        WB_PROD_ANCHOR["chip_lon_min"],
+        WB_PROD_ANCHOR["chip_lat_min"],
+        WB_PROD_ANCHOR["chip_lon_max"],
+        WB_PROD_ANCHOR["chip_lat_max"],
+    )
+    left, bottom, right, top = geographic_bbox_in_crs(bbox, "EPSG:3857")
+    assert WB_X0 < left < right < mosaic_east
+    assert mosaic_south < bottom < top < WB_Y0
+
+    affine = from_origin(WB_X0, WB_Y0, WB_PX, WB_PX)
+    import math
+
+    win = window_from_bounds(left, bottom, right, top, affine)
+    col_off = int(math.floor(win.col_off))
+    row_off = int(math.floor(win.row_off))
+    col_end = int(math.ceil(win.col_off + win.width))
+    row_end = int(math.ceil(win.row_off + win.height))
+    assert 0 <= col_off < col_end <= WB_WIDTH_PX
+    assert 0 <= row_off < row_end <= WB_WIDTH_PX
+    assert (col_off, col_end, row_off, row_end) == (1526, 1925, 4034, 4415)
+
+    bug = window_from_bounds(
+        bbox.lon_min, bbox.lat_min, bbox.lon_max, bbox.lat_max, affine
+    )
+    bug_window = (
+        int(math.floor(bug.col_off)),
+        int(math.ceil(bug.col_off + bug.width)),
+        int(math.floor(bug.row_off)),
+        int(math.ceil(bug.row_off + bug.height)),
+    )
+    assert bug_window == (-6849987, -6849986, -13535630, -13535629)
+
+
+def test_stitch_then_crop_wayback_epsg3857(tmp_path: Path) -> None:
+    """2x2 metre tiles auto-detect EPSG:3857; lon/lat anchors still crop."""
+    from rasterio.warp import transform as transform_xy
+
+    tile_dir = tmp_path / "tiles"
+    colors = {
+        (0, 0): (10, 20, 30),
+        (1, 0): (40, 50, 60),
+        (0, 1): (70, 80, 90),
+        (1, 1): (100, 110, 120),
+    }
+    for (grid_col, grid_row), color in colors.items():
+        _write_dump_tile(
+            tile_dir,
+            zoom=19,
+            col=grid_col,
+            row=1 - grid_row,
+            grid_col=grid_col,
+            grid_row_north_up=grid_row,
+            color=color,
+            pixel=WB_PX,
+            origin_x=WB_X0,
+            origin_y=WB_Y0,
+        )
+    mosaic = tmp_path / "mosaic.tif"
+    info = stitch_dump_tiles(tile_dir, mosaic, zoom=19)
+    assert info["crs"] == "EPSG:3857"
+    with rasterio.open(mosaic) as src:
+        assert src.crs is not None and src.crs.to_epsg() == 3857
+        assert src.transform.c == pytest.approx(WB_X0)
+        assert src.transform.a == pytest.approx(WB_PX)
+
+    # Inner 8x8 px window (cols/rows 4..12), expressed as lon/lat via the
+    # four 3857 corners so crop has to project back.
+    x_min = WB_X0 + 4 * WB_PX
+    x_max = WB_X0 + 12 * WB_PX
+    y_max = WB_Y0 - 4 * WB_PX
+    y_min = WB_Y0 - 12 * WB_PX
+    lons, lats = transform_xy(
+        "EPSG:3857",
+        "EPSG:4326",
+        [x_min, x_max, x_min, x_max],
+        [y_min, y_min, y_max, y_max],
+    )
+    anchor = {
+        "anchor_id": "inner",
+        "chip_lon_min": min(lons),
+        "chip_lat_min": min(lats),
+        "chip_lon_max": max(lons),
+        "chip_lat_max": max(lats),
+    }
+    crop_path = tmp_path / "crop.tif"
+    result = crop_chip_from_mosaic(mosaic, anchor, crop_path, recompress=False)
+    assert int(result["width"]) >= 8
+    assert int(result["height"]) >= 8
+    with rasterio.open(crop_path) as src:
+        assert src.crs is not None and src.crs.to_epsg() == 3857
+        data = src.read()
+    # 25/75 samples stay inside each quadrant even if the lon/lat envelope
+    # grows the window by 1 px (odd width would put a midpoint on the seam).
+    h, w = int(result["height"]), int(result["width"])
+    q = ((h // 4, w // 4), (h // 4, 3 * w // 4), (3 * h // 4, w // 4), (3 * h // 4, 3 * w // 4))
+    expected = ((10, 20, 30), (40, 50, 60), (70, 80, 90), (100, 110, 120))
+    for (r, c), color in zip(q, expected, strict=True):
+        pixel = data[:, r, c].astype("int16")
+        assert int(np.abs(pixel - np.asarray(color, dtype="int16")).max()) <= 2, (
+            f"pixel ({r},{c})={tuple(int(v) for v in pixel)} want {color}"
+        )
 
 
 def _poison_runner():

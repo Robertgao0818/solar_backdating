@@ -215,14 +215,17 @@ def crop_chip_from_mosaic(
 ) -> dict[str, object]:
     """Window-crop `mosaic_path` to the anchor chip bbox and write `out_path`.
 
-    The crop uses the mosaic pixel grid (no resample). A requested bbox that
-    falls outside the mosaic is a hard failure — that is the union-completeness
-    signal the A3 pilot is measuring. When the mosaic was stitched with
-    `allow_holes` (canary finding 2026-08-19: GEHI dump silently skips
-    vintage-uncovered tiles in non-member rectangle areas), `hole_cells` +
-    `hole_tile_px` are the zero-filled tile cells in mosaic pixel space; a
-    crop window touching any hole cell is rejected, so hole pixels can never
-    leak into a chip — affected members fall back to sequential download.
+    The crop uses the mosaic pixel grid (no resample). Anchor bboxes are
+    always WGS84 lon/lat; `geographic_bbox_in_crs` projects them into the
+    mosaic CRS before `window_from_bounds` (TM mosaics are EPSG:4326, Wayback
+    mosaics are EPSG:3857). A requested bbox that falls outside the mosaic is
+    a hard failure — that is the union-completeness signal the A3 pilot is
+    measuring. When the mosaic was stitched with `allow_holes` (canary finding
+    2026-08-19: GEHI dump silently skips vintage-uncovered tiles in non-member
+    rectangle areas), `hole_cells` + `hole_tile_px` are the zero-filled tile
+    cells in mosaic pixel space; a crop window touching any hole cell is
+    rejected, so hole pixels can never leak into a chip — affected members
+    fall back to sequential download.
     """
     import rasterio
     from rasterio.windows import from_bounds as window_from_bounds
@@ -232,9 +235,8 @@ def crop_chip_from_mosaic(
     with rasterio.open(mosaic_path) as src:
         if src.crs is None:
             raise ValueError(f"mosaic has no CRS: {mosaic_path}")
-        window = window_from_bounds(
-            bbox.lon_min, bbox.lat_min, bbox.lon_max, bbox.lat_max, src.transform
-        )
+        left, bottom, right, top = geographic_bbox_in_crs(bbox, src.crs)
+        window = window_from_bounds(left, bottom, right, top, src.transform)
         # Inclusive cover of the requested bbox: floor the origin, ceil the end.
         col_off = int(math.floor(window.col_off))
         row_off = int(math.floor(window.row_off))
@@ -392,7 +394,9 @@ DUMP_TILE_RE = re.compile(r"^z=(?P<zoom>\d+)-Col=(?P<col>\d+)-Row=(?P<row>\d+)\.
 class WorldFile:
     """Parsed .jgw world file (6-line ESRI form) as written by GEHI `dump`.
 
-    Values are in CRS units (degrees for GEHI's default EPSG:4326 dump).
+    Values are in CRS units. TM dumps are EPSG:4326 degrees; Wayback dumps are
+    EPSG:3857 metres (Cape Town ~2.05e6, -4.04e6, ~0.30 m/px at z19). Infer
+    with `infer_world_crs` — do not stamp EPSG:4326 onto a metre world file.
     WARNING, off-spec GEHI behavior (verified 2026-08-18): the ESRI world-file
     convention puts the CENTER of the upper-left pixel in C/F, but GEHI 0.5.1
     writes the upper-left CORNER there. Proof: CPT2713 dump C=18.480377197265625
@@ -424,6 +428,61 @@ def parse_world_file(path: Path) -> WorldFile:
             f"pixel_w={world.pixel_w} pixel_h={world.pixel_h} (want w>0, h<0)"
         )
     return world
+
+
+# Geographic pixel size at z18/z19 is ~1e-6–3e-6 deg. Wayback z19 metres are
+# ~0.30 m/px. 0.01 splits those two families with orders of magnitude to spare.
+_GEOGRAPHIC_PIXEL_MAX = 0.01
+
+
+def infer_world_crs(world: WorldFile) -> str:
+    """Guess the CRS of a GEHI dump world file from its units.
+
+    TM `dump` writes EPSG:4326 degrees. Wayback `dump` writes EPSG:3857
+    metres. Stamping 4326 onto a metre mosaic is the 2026-08-27 production
+    bug: crop windows landed at pixel -6.8e6 and every Wayback chip fell
+    back to sequential download.
+    """
+    if (
+        abs(world.corner_x) <= 180.0
+        and abs(world.corner_y) <= 90.0
+        and abs(world.pixel_w) < _GEOGRAPHIC_PIXEL_MAX
+        and abs(world.pixel_h) < _GEOGRAPHIC_PIXEL_MAX
+    ):
+        return "EPSG:4326"
+    if abs(world.corner_x) > 180.0 or abs(world.pixel_w) >= _GEOGRAPHIC_PIXEL_MAX:
+        return "EPSG:3857"
+    raise ValueError(
+        "cannot infer dump CRS from world file "
+        f"(corner=({world.corner_x}, {world.corner_y}), "
+        f"pixel_w={world.pixel_w}, pixel_h={world.pixel_h})"
+    )
+
+
+def geographic_bbox_in_crs(
+    bbox: BBox, crs: object
+) -> tuple[float, float, float, float]:
+    """Project a WGS84 lon/lat chip envelope into `crs`.
+
+    Returns `(left, bottom, right, top)` in native CRS units. Geographic
+    mosaics (TM, EPSG:4326) pass through. Projected mosaics (Wayback,
+    EPSG:3857) transform the four corners and take the axis-aligned
+    envelope — a 96 m chip at 34S warps by millimetres, well under one
+    z19 pixel. Cropping stays on the mosaic pixel grid (no resample).
+    """
+    from rasterio.crs import CRS
+    from rasterio.warp import transform as transform_xy
+
+    dst = crs if isinstance(crs, CRS) else CRS.from_user_input(crs)
+    if dst.is_geographic:
+        return bbox.lon_min, bbox.lat_min, bbox.lon_max, bbox.lat_max
+    xs, ys = transform_xy(
+        CRS.from_epsg(4326),
+        dst,
+        [bbox.lon_min, bbox.lon_max, bbox.lon_min, bbox.lon_max],
+        [bbox.lat_min, bbox.lat_min, bbox.lat_max, bbox.lat_max],
+    )
+    return (min(xs), min(ys), max(xs), max(ys))
 
 
 @dataclass(frozen=True)
@@ -477,7 +536,7 @@ def stitch_dump_tiles(
     out_path: Path,
     *,
     zoom: int | None = None,
-    crs: str = "EPSG:4326",
+    crs: str | None = None,
     allow_holes: bool = False,
 ) -> dict[str, object]:
     """Losslessly stitch a GEHI dump folder into one uncompressed GeoTIFF.
@@ -485,12 +544,14 @@ def stitch_dump_tiles(
     Tiles are placed by their world-file coordinates, never by filename order
     (GEHI 0.5.1 names {r} counting SOUTH-up; trusting that convention silently
     flips the mosaic if it ever changes). Pixels are copied verbatim — no
-    resample, no re-encode. By default the grid must be complete: a missing
-    tile means a hole in the analysis canvas, so this raises instead of
-    zero-filling. With `allow_holes=True` the holes are zero-filled and
-    returned as `holes` (+ `hole_tile_px`) in the info dict — callers MUST
-    reject crop windows intersecting them (crop_chip_from_mosaic does, given
-    the cells); hole pixels must never reach a chip silently.
+    resample, no re-encode. CRS is inferred from world-file units when `crs`
+    is None (TM = EPSG:4326 degrees, Wayback = EPSG:3857 metres). By default
+    the grid must be complete: a missing tile means a hole in the analysis
+    canvas, so this raises instead of zero-filling. With `allow_holes=True`
+    the holes are zero-filled and returned as `holes` (+ `hole_tile_px`) in
+    the info dict — callers MUST reject crop windows intersecting them
+    (crop_chip_from_mosaic does, given the cells); hole pixels must never
+    reach a chip silently.
     """
     import rasterio
     from affine import Affine
@@ -500,6 +561,7 @@ def stitch_dump_tiles(
     if not tiles:
         raise ValueError(f"no dump tiles found in {tile_dir}")
     ref = tiles[0]
+    inferred_crs = infer_world_crs(ref.world)
     for tile in tiles[1:]:
         if tile.width != ref.width or tile.height != ref.height:
             raise ValueError(
@@ -511,6 +573,19 @@ def stitch_dump_tiles(
             and math.isclose(tile.world.pixel_h, ref.world.pixel_h, rel_tol=1e-9, abs_tol=1e-15)
         ):
             raise ValueError(f"mixed pixel sizes in {tile_dir}: {tile.path.name}")
+        tile_crs = infer_world_crs(tile.world)
+        if tile_crs != inferred_crs:
+            raise ValueError(
+                f"mixed dump CRS in {tile_dir}: {tile.path.name} is {tile_crs}, "
+                f"expected {inferred_crs}"
+            )
+    if crs is None:
+        crs = inferred_crs
+    elif crs != inferred_crs:
+        raise ValueError(
+            f"requested mosaic CRS {crs} does not match world-file units "
+            f"{inferred_crs} in {tile_dir}"
+        )
     tile_w, tile_h = ref.width, ref.height
     px_w, px_h = ref.world.pixel_w, ref.world.pixel_h
     step_x = px_w * tile_w
@@ -588,6 +663,7 @@ def stitch_dump_tiles(
         "tile_h_px": tile_h,
         "width_px": n_cols * tile_w,
         "height_px": n_rows * tile_h,
+        "crs": crs,
         "pixel_w_deg": px_w,
         "pixel_h_deg": px_h,
         "lon_min": transform.c,
