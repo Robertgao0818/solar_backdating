@@ -191,7 +191,12 @@ Discipline:
    deletion exactly as `docs/resolution_provenance.md` requires.
 
 `--dry-run` prints the plan (`ReleasePlan.describe()`: chip count, total MB,
-backfill count) and touches nothing on disk.
+backfill count, plus a 20-line backfill preview) and touches nothing on disk.
+
+`--anchor-ids-file` (citywide PR3) restricts deletion to named anchor
+directories. Filter membership is a path set; do not restore
+`entry in kept` on a list — that is O(n²) and pegged one core for ~25 min
+on wave_03 (~1.5e5 chips) before any hash/delete.
 
 ## Testing
 

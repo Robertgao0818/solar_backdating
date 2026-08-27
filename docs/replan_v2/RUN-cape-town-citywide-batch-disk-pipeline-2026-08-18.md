@@ -350,7 +350,7 @@ token 未签前的 pre-flight 全部完成；以下相对 rev-6 正文的偏差�
 | A2 | **DONE**：roster 由 remaining anchors 派生（source_grid 排序去重）；`plan_ct52_production_waves.py --no-canary` 新增；**27 波 × 3500**（grid 聚簇，A4 顺带落地）；schema `ct_citywide_download_wave_plan_v2` |
 | A3 预备 | **DONE**：`--route-weights` 已实现（稳定 slot 展开，home:koko=2:2:1，±5% 断言）；`filter_wave_candidates.py`；**wave_01 分片就绪**：128,718 candidates（home_v4/v6 各 ~40% + TM3 3-lane 计划，koko_v4 ~20%），域外断言通过 |
 | 编排器 | `run_ct_citywide_disk_pipeline.sh`：gate / plan-waves / plan-wave-shards / launch-wave / merge-wave（2-wave+水线闸门、rsync `--remove-source-files`、path 改写、membership 审计）/ qa-wave（≥99% admit 门）/ archive-wave（rclone 单卷 + BACKUP_OK）/ prepare-score-lock / score-wave（staged-only）/ release-wave（BACKUP_OK+SCORE_OK 双哨兵 + `--anchor-ids-file` 子集删除） |
-| PR3 | **DONE**：`chip_lifecycle release` 非 dry-run 必须 `--backup-ok`；`--anchor-ids-file` 子集删除；测试更新 23 过 |
+| PR3 | **DONE**：`chip_lifecycle release` 非 dry-run 必须 `--backup-ok`；`--anchor-ids-file` 子集删除。**2026-08-27 hotfix**：`entry in kept` 对 list 做 O(n²) 扫描，wave_03 空转 ~25 min 后仍删完 154,577 张（`RELEASE_OK` 11:45:15Z）；改为 path-set 过滤，`describe()` 只预览 20 条 backfill |
 | box（A1） | tailnet 上发现 **rog-1**（100.111.51.77，离线）与新机 **bot**（100.86.6.50，在线但 SSH 未授权常见用户）。等 owner 给 bot 的 SSH 用户/授权后填槽 + 403 smoke |
 | 下载吞吐实测基准 | wave_01：128,718 candidates；home 单 route ≈1 chip/s、koko 轻载 ≈0.5 chip/s → **~14–15h/波**（与 S0 日历一致） |
 

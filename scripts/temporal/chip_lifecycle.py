@@ -91,15 +91,19 @@ class ReleasePlan:
     def total_size_bytes(self) -> int:
         return sum(entry.size_bytes for entry in self.to_delete)
 
-    def describe(self) -> str:
+    def describe(self, *, backfill_preview: int = 20) -> str:
         lines = [
             f"release plan for {self.run_dir}:",
             f"  chips to delete:   {len(self.to_delete)} ({self.total_size_bytes / 1e6:.2f} MB)",
             f"  need backfill:     {len(self.to_backfill)}",
             f"  sidecars touched:  {len(self.sidecars_touched)}",
         ]
-        for entry in self.to_backfill:
+        preview = self.to_backfill[:backfill_preview]
+        for entry in preview:
             lines.append(f"    backfill: {entry.path} -> {entry.sidecar}")
+        remaining = len(self.to_backfill) - len(preview)
+        if remaining > 0:
+            lines.append(f"    ... and {remaining} more backfill(s)")
         return "\n".join(lines)
 
 
@@ -281,6 +285,29 @@ def plan_release(run_dir: Path) -> ReleasePlan:
     return plan
 
 
+def apply_anchor_filter(
+    plan: ReleasePlan, run_dir: Path, anchor_filter: set[str]
+) -> int:
+    """Keep chips whose first path component under `run_dir` is in `anchor_filter`.
+
+    That component is the per-anchor directory written by `gehi_download`.
+    Membership uses a path set — `entry in kept` on a list is O(n²) and
+    pegged a core for ~25 min on a citywide wave (~1e5 chips).
+
+    Returns the number of chips dropped.
+    """
+    kept: list[ChipEntry] = []
+    for entry in plan.to_delete:
+        parts = entry.path.relative_to(run_dir).parts
+        if parts and parts[0] in anchor_filter:
+            kept.append(entry)
+    dropped = len(plan.to_delete) - len(kept)
+    kept_paths = {entry.path for entry in kept}
+    plan.to_delete = kept
+    plan.to_backfill = [entry for entry in plan.to_backfill if entry.path in kept_paths]
+    return dropped
+
+
 def execute_release(plan: ReleasePlan, *, dry_run: bool) -> ReleaseResult:
     """Backfill missing provenance, write deletion manifests, then delete chips.
 
@@ -420,18 +447,10 @@ def cmd_release(
 
     plan = plan_release(run_dir)
     if anchor_filter is not None:
-        kept = [
-            entry
-            for entry in plan.to_delete
-            if entry.path.relative_to(run_dir).parts
-            and entry.path.relative_to(run_dir).parts[0] in anchor_filter
-        ]
-        dropped = len(plan.to_delete) - len(kept)
-        plan.to_delete = kept
-        plan.to_backfill = [entry for entry in plan.to_backfill if entry in kept]
+        dropped = apply_anchor_filter(plan, run_dir, anchor_filter)
         print(
             f"[chip_lifecycle] anchor filter {anchor_ids_file}: "
-            f"{len(kept)} chip(s) in scope, {dropped} skipped"
+            f"{len(plan.to_delete)} chip(s) in scope, {dropped} skipped"
         )
     print(plan.describe())
     if dry_run:

@@ -58,6 +58,13 @@ koko 23G copy gone; `/home` 77G→115G avail). Leftover ~26G under the
 old chips tree is provenance/deletion jsonl + empty dirs, **0 tif**.
 **E0+E6 signed D10.** Rog half-wave A3 is already running (`tmux
 ct_cw_w01_a3_rog`).
+**wave_03 release 2026-08-27:** `chip_lifecycle.py release` finished
+(`RELEASE_OK` 2026-08-27T11:45:15Z; 154,577 `.tif` deleted + hashed
+into one backfill sidecar). The `--anchor-ids-file` filter used
+`entry in kept` on a **list** (O(n²) ChipEntry compares); that pegged
+one P-core ~25 min before any hash/delete. Fixed: path-set membership
+in `apply_anchor_filter`; `describe()` now previews 20 backfill lines
+instead of dumping every path (the wave_03 log grew to 54 MB).
 **Scoring rate contract 2026-08-26:** citywide `score-wave` is
 `--anchor-workers 40 --qps 6 --gemini-max-in-flight 40`. QPS 6 is the
 startup ramp (about 6 new HTTP in the first second, so Sub2API can

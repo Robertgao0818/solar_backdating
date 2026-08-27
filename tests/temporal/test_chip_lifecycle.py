@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from scripts.temporal.chip_lifecycle import (
+    apply_anchor_filter,
     build_backfill_record,
     check_refusal_window,
     cmd_release,
@@ -274,6 +275,28 @@ def test_cmd_release_anchor_filter_restricts_deletion(tmp_path):
     assert exit_code == 0
     assert not chip_a.exists()
     assert chip_b.exists()
+
+
+def test_apply_anchor_filter_drops_out_of_scope_backfills(tmp_path):
+    chip_a = _write_chip(tmp_path / "anchorA" / "z19" / "anchorA_20200615_v296.tif")
+    _write_chip(tmp_path / "anchorB" / "z19" / "anchorB_20200615_v296.tif")
+    chip_c = _write_chip(tmp_path / "anchorC" / "z19" / "anchorC_20200615_v296.tif")
+    plan = plan_release(tmp_path)
+    assert len(plan.to_delete) == 3
+    assert len(plan.to_backfill) == 3
+
+    dropped = apply_anchor_filter(plan, tmp_path, {"anchorA", "anchorC"})
+    assert dropped == 1
+    assert {entry.path for entry in plan.to_delete} == {chip_a, chip_c}
+    assert {entry.path for entry in plan.to_backfill} == {chip_a, chip_c}
+
+
+def test_describe_caps_backfill_listing(tmp_path):
+    for i in range(25):
+        _write_chip(tmp_path / f"a{i:02d}" / "z19" / f"a{i:02d}_20200101_v1.tif")
+    text = plan_release(tmp_path).describe()
+    assert text.count("    backfill:") == 20
+    assert "and 5 more backfill" in text
 
 
 def test_cmd_release_refuses_on_recent_scan_state(tmp_path, capsys):

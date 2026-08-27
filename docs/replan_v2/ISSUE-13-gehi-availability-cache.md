@@ -42,6 +42,8 @@ constraints.
 - [x] Staged-and-delete chip lifecycle documented; content hashes retained
       after deletion — `scripts/temporal/chip_lifecycle.py` `release` command;
       `docs/gehi_catalog_cache.md` "Chip lifecycle"; `tests/temporal/test_chip_lifecycle.py`.
+      2026-08-27: `--anchor-ids-file` filter is a path set (`apply_anchor_filter`);
+      list membership (`entry in kept`) was O(n²) on citywide waves.
 - [x] Timeout/failure of a live refresh degrades gracefully (uses last-good
       cache with a warning, does not hang the run) —
       `test_get_or_fetch_stale_served_on_live_failure` /
