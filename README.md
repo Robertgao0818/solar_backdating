@@ -46,6 +46,12 @@ Gemini review calls are bounded: default date batches are at most 5 images, and
 multi-target matrix review is capped at 4 targets / 24 date-target cells before
 splitting.
 
+**Aerial gate chip review policy (owner decision, 2026-10-02).** Do not
+use Gemini Pro for this review. Default: `gemini-3.8-flash`; allowed
+alternative: `gemini-flash-3.5-lite`. Pro outputs are retired history,
+not current review evidence. The reviewer rejects Pro requests and Pro
+responses. See [the run record](docs/replan_v2/RUN-aerial-gate-tail-gemini-review-2026-10-02.md).
+
 **Scorer backbone (v2 program Phase 3).** A frozen, self-hosted DINOv3-L-SAT
 distilled from Gemini's own per-vintage labels replaces the hosted Gemini
 presence scorer — motivated by reproducibility / no version-drift, gated on
