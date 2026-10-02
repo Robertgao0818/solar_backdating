@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>各市图层 metadata：航测 / 卫星 · 2026-09-06</title>
+<style>
+:root{
+  --bg:#0f1419; --card:#1e2834; --bg3:#243040; --text:#e8eef4; --muted:#9aabbc;
+  --accent:#f0a202; --teal:#3dd6c6; --border:rgba(255,255,255,.08);
+  --purple:#c084fc; --blue:#5b9cff; --red:#ff8686; --green:#5fe08a;
+  --font:"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font);background:
+  radial-gradient(1000px 500px at 12% -10%,rgba(61,214,198,.12),transparent 50%),
+  radial-gradient(800px 400px at 92% 0,rgba(240,162,2,.10),transparent 45%),
+  var(--bg);color:var(--text);line-height:1.65;font-size:16px}
+a{color:var(--teal);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:1120px;margin:0 auto;padding:32px 20px 80px}
+.hero{background:linear-gradient(135deg,rgba(61,214,198,.14),rgba(240,162,2,.10));
+  border:1px solid var(--border);border-radius:20px;padding:32px;margin-bottom:24px;
+  box-shadow:0 8px 30px rgba(0,0,0,.35)}
+h1{margin:0 0 10px;font-size:clamp(1.4rem,3vw,2rem)}
+.sub{color:var(--muted);margin:0 0 14px;max-width:78ch}
+.pill{display:inline-flex;gap:6px;background:#1a222c;border:1px solid var(--border);
+  border-radius:999px;padding:5px 11px;font-size:.85rem;color:var(--muted);margin:3px}
+.pill b{color:var(--text)}
+nav{position:sticky;top:10px;z-index:5;display:flex;flex-wrap:wrap;gap:8px;
+  background:rgba(26,34,44,.92);backdrop-filter:blur(10px);border:1px solid var(--border);
+  border-radius:12px;padding:10px 12px;margin-bottom:24px}
+nav a{color:var(--muted);font-size:.85rem;padding:5px 10px;border-radius:8px}
+nav a:hover{background:var(--bg3);color:var(--text);text-decoration:none}
+h2{font-size:1.25rem;margin:28px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+h3{font-size:1.05rem;margin:20px 0 10px;color:#d5dee8}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:16px 18px;margin-bottom:12px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.badge{display:inline-block;font-size:.72rem;font-weight:700;padding:3px 8px;
+  border-radius:6px;margin-right:6px;vertical-align:middle}
+.b-air{background:rgba(61,214,198,.18);color:#7ff0e4}
+.b-sat{background:rgba(91,156,255,.2);color:#9ec1ff}
+.b-hot{background:rgba(240,162,2,.2);color:#ffd27a}
+.b-trap{background:rgba(240,80,80,.18);color:#ffb4b4}
+.b-ok{background:rgba(95,224,138,.16);color:#9af0b8}
+.b-thin{background:rgba(192,132,252,.2);color:#e0b8ff}
+.callout{border-left:4px solid var(--accent);background:linear-gradient(90deg,rgba(240,162,2,.12),transparent);
+  padding:14px 16px;border-radius:0 12px 12px 0;margin:14px 0}
+.callout.teal{border-left-color:var(--teal);background:linear-gradient(90deg,rgba(61,214,198,.12),transparent)}
+.callout.red{border-left-color:var(--red);background:linear-gradient(90deg,rgba(255,134,134,.12),transparent)}
+.scroll{overflow-x:auto;margin:0 0 16px;border:1px solid var(--border);border-radius:12px}
+table{width:100%;border-collapse:collapse;font-size:.88rem;background:var(--card);min-width:720px}
+th,td{padding:9px 11px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
+th{background:var(--bg3);color:var(--accent);font-size:.75rem;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.yrs{display:flex;flex-wrap:wrap;gap:4px}
+.yr{display:inline-block;background:#1a222c;border:1px solid var(--border);border-radius:6px;
+  padding:1px 7px;font-size:.78rem;font-variant-numeric:tabular-nums}
+.yr.gap{opacity:.35;border-style:dashed}
+.muted{color:var(--muted)}
+.files a{display:inline-block;margin:4px 10px 4px 0}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem}
+code{font-size:.86em;background:#1a222c;padding:1px 6px;border-radius:5px}
+.why{margin:.4rem 0 0;color:#d5dee8;font-size:.92rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <h1>各市可用图层 metadata：航测一套、卫星一套</h1>
+  <p class="sub">合作者要的是「每个市现在能拿到什么图层」，再决定有没有别的办法建
+  install-date panel（安装日面板：每个屋顶在每个观测时点上有板 / 无板）。
+  这是目录 + 决策简报，不是精度声明，也不是换生产管线。</p>
+  <span class="pill"><b>日期</b> 2026-09-06</span>
+  <span class="pill"><b>航测 CSV</b> 110 层 / 10 城</span>
+  <span class="pill"><b>卫星 CSV</b> 7 层（CT + JHB，H3-7）</span>
+  <span class="pill"><b>推荐</b> 先做开普敦 100 锚 × 三层检测器探针</span>
+</header>
+
+<nav>
+  <a href="#two-sets">两套怎么分</a>
+  <a href="#cities">城市总表</a>
+  <a href="#traps">陷阱</a>
+  <a href="#aerial">航测</a>
+  <a href="#vexcel">Vexcel</a>
+  <a href="#sat">卫星</a>
+  <a href="#recommend">推荐</a>
+  <a href="#files">文件</a>
+</nav>
+
+<section id="two-sets">
+<h2>两套，不是三套</h2>
+<div class="grid">
+  <div class="card">
+    <span class="badge b-air">航测</span>
+    <p><b>市政真日期正射 + Vexcel 商业正射 + CD:NGI 国家航片。</b>
+    一层对应一次（或一季）真飞行。GSD（ground sample distance，地面采样距离：一个像素对应地面几米）
+    市政 5–15 cm，Vexcel ~6.2–6.7 cm，NGI 25–50 cm。</p>
+    <p class="why">能建的是<b>年精度 panel</b>：每个屋顶 × 每个飞行年 = 有 / 无 / 不可用。
+    建不成「这片板是哪一天装的」。</p>
+  </div>
+  <div class="card">
+    <span class="badge b-sat">卫星</span>
+    <p><b>Google Earth Historical Imagery（GEHI，历史谷歌地球）的 TM 提供方，
+    加上 Esri Wayback（Wayback：Esri 世界影像的历史快照）。</b>
+    这是现在 Gemini 在打的那条时间轴。名义 GSD：z19 ≈ 25 cm，z18 ≈ 50 cm。
+    z20 ≈ 12 cm 全城还没有编目。</p>
+    <p class="why">开普敦每个普查屋顶在 z19 上中位已经有 <b>107</b> 个完整芯片日期（2009–2025）。
+    密度够日精度叙事，清晰度不够小阵。</p>
+  </div>
+  <div class="card">
+    <span class="badge b-hot">Vexcel 放哪</span>
+    <p>Vexcel 是飞机拍的城市正射，所以进<b>航测</b>这套，不当卫星。
+    它在这个学术账号上<b>每个城市只有一个季节</b>。开普敦五个 collection 名字是
+    2024 年 3–4 月的五块空间瓦，不是五年。</p>
+    <p class="why">忽略这一点，会把 6.2 cm 的「现在」误当成时间维，
+    或者把 8 月那份七城目录读成「开普敦没有 Vexcel」。</p>
+  </div>
+</div>
+<div class="callout teal">
+  <b>机器可读的对应文件。</b> 航测：
+  <a href="_muni_catalog/aerial_city_summary.csv"><code>aerial_city_summary.csv</code></a>
+  （一城一行）+
+  <a href="_muni_catalog/aerial_layers.csv"><code>aerial_layers.csv</code></a>
+  （一层一行，110 条）。卫星：
+  <a href="_muni_catalog/satellite_layers.csv"><code>satellite_layers.csv</code></a>
+  （城市 × 提供方 × 缩放）+ 既有的 H3-7 / 年份直方图。下面表格是同一份数的简报版。
+</div>
+</section>
+
+<section id="cities">
+<h2>城市总表（航测能不能建年 panel）</h2>
+<p class="muted">「可用年」只计 <code>usable_as_panel_year=yes</code> 的市政真日期层。
+Vexcel 一律不进可用年——它没有第二年。</p>
+<div class="scroll">
+<table>
+<thead>
+<tr>
+  <th>市</th>
+  <th>市政真日期栈</th>
+  <th>可用年</th>
+  <th>GSD</th>
+  <th>Vexcel / 城区</th>
+  <th>年 panel？</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><b>开普敦</b></td>
+  <td>近逐年</td>
+  <td class="num"><b>12</b><div class="yrs" style="margin-top:6px">
+    <span class="yr">2012</span><span class="yr">2013</span><span class="yr gap">14</span>
+    <span class="yr">15</span><span class="yr">16</span><span class="yr">17</span>
+    <span class="yr">18</span><span class="yr">19</span><span class="yr">20</span>
+    <span class="yr">21</span><span class="yr">22</span><span class="yr gap">23</span>
+    <span class="yr gap">24</span><span class="yr">25</span><span class="yr">26</span>
+  </div></td>
+  <td class="num">8 cm → <b>5 cm</b></td>
+  <td class="num">93% 城区面积<br><span class="muted">367/603 metro H3-7</span></td>
+  <td><span class="badge b-ok">最强</span> 普查层就是 2025Jan 5 cm</td>
+</tr>
+<tr>
+  <td><b>约翰内斯堡</b></td>
+  <td>约三年一拍</td>
+  <td class="num"><b>5</b><div class="yrs" style="margin-top:6px">
+    <span class="yr">2009</span><span class="yr">2012</span><span class="yr">2015</span>
+    <span class="yr">2019</span><span class="yr">2023</span>
+  </div></td>
+  <td class="num">15 cm</td>
+  <td class="num"><b>27%</b> 城区面积<br><span class="muted">74/350 metro；Sandton/Soweto 404</span></td>
+  <td><span class="badge b-ok">强</span> 管线已拉 2015/19/23</td>
+</tr>
+<tr>
+  <td><b>eThekwini</b></td>
+  <td>2016 起近逐年</td>
+  <td class="num"><b>5</b><div class="yrs" style="margin-top:6px">
+    <span class="yr">2016</span><span class="yr gap">17</span><span class="yr">18</span>
+    <span class="yr">19</span><span class="yr">20</span><span class="yr gap">21</span>
+    <span class="yr">22</span>
+  </div></td>
+  <td class="num">9–10 cm</td>
+  <td class="num">79% 城区面积</td>
+  <td><span class="badge b-ok">强</span> 84.7 万屋顶可做芯片种子；还没有 ZAsolar 普查</td>
+</tr>
+<tr>
+  <td>纳尔逊曼德拉湾</td>
+  <td>经 resource-proxy</td>
+  <td class="num"><b>8</b> · 1997, 04, 09, 11, 13, <b>17, 18, 22</b></td>
+  <td class="num">25 → 10 → <b>5 cm</b></td>
+  <td class="num">100% 城区面积</td>
+  <td>可用；35.6 万 2017 LiDAR 屋顶。直连 REST 是 404</td>
+</tr>
+<tr>
+  <td>Ekurhuleni</td>
+  <td>稀疏</td>
+  <td class="num"><b>3</b> · 2013, 2018, 2020</td>
+  <td class="num">10 cm</td>
+  <td class="num">7%（约翰内斯堡溢出）</td>
+  <td>要先做新普查。2026 图层名是陷阱</td>
+</tr>
+<tr>
+  <td>茨瓦内</td>
+  <td>两期</td>
+  <td class="num"><b>2</b> · 2018, 2023</td>
+  <td class="num">10 cm</td>
+  <td class="num">48% 城区面积</td>
+  <td>2024/25 服务在，但图幅 ID 与 2023 相同，未证明是新飞行</td>
+</tr>
+<tr>
+  <td>Buffalo / Mangaung / Msunduzi</td>
+  <td>无公开 ImageServer</td>
+  <td class="num">0</td>
+  <td class="num">—</td>
+  <td class="num">城区 67% / 72% / 94%</td>
+  <td>只剩 Vexcel 单期 + NGI/GEHI</td>
+</tr>
+<tr>
+  <td>全国 NGI</td>
+  <td>按图幅有年</td>
+  <td class="num">3–5 年一循环</td>
+  <td class="num">50 cm → 25 cm</td>
+  <td class="num">—</td>
+  <td><span class="badge b-trap">不救命</span> 和 GEHI z19 同一档，看不到小阵</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p class="why"><b>这张表说什么。</b> 真能另建年 panel 的是开普敦、约翰内斯堡、eThekwini，
+加上一条经代理能拉的纳尔逊曼德拉湾。
+<b>为什么要紧。</b> 合作者问的「有没有别的公开影像当时间维」——有，而且比 GEHI 更清。
+<b>忽略会怎样。</b> 会把 NGI 25 cm 或 Vexcel 单期当成「又一个真年」，时间维掺进和现在同类的模糊观测。</p>
+</section>
+
+<section id="traps">
+<h2>名字是年、内容不是那年</h2>
+<div class="callout red">
+  这些层<b>已经编进 CSV</b>（<code>usable_as_panel_year=trap</code>），不要当 panel 年用。
+  忽略它们会把混拼或国家镶嵌写进「市政飞行年」，精度故事写不干净。
+</div>
+<div class="scroll">
+<table>
+<thead><tr><th>市</th><th>图层名</th><th>陷阱</th><th>实际是什么</th></tr></thead>
+<tbody>
+<tr><td>开普敦</td><td><code>Aerial Imagery 2023Jan</code></td><td>名字 2023</td><td>NGI 2022，25 cm，不是市政 8 cm</td></tr>
+<tr><td>开普敦</td><td><code>Aerial Imagery 2014_NGI</code></td><td>混年</td><td>2014+2016+2022 NGI 重采样到 25 cm</td></tr>
+<tr><td>开普敦</td><td><code>Aerial Imagery 2024</code></td><td>覆盖</td><td>只有约 30% 市域，不能当全城年</td></tr>
+<tr><td>开普敦 Vexcel</td><td>五个 <code>za-wc-*-2024</code></td><td>五个名字</td><td>同一季（2024-03-18 … 04-12）的五块空间瓦</td></tr>
+<tr><td>约翰内斯堡</td><td><code>CoJ_Aerial</code></td><td>镶嵌</td><td>2000–2019 多年，字段才是 <code>Imagery_Year</code></td></tr>
+<tr><td>约翰内斯堡</td><td><code>SatelliteImagery/2025_2026</code></td><td>卫星</td><td>假设 Maxar Vivid 30 cm 混拼，不是航飞</td></tr>
+<tr><td>eThekwini</td><td><code>AerialPhotography20212022</code></td><td>年份区间</td><td>不是一次飞行；太阳能地图的底图</td></tr>
+<tr><td>eThekwini</td><td><code>AerialPhotography2023</code></td><td>西半边</td><td>xmax 砍在 −13 km，Durban CBD 在东边</td></tr>
+<tr><td>Ekurhuleni</td><td><code>Orthophoto_2026</code></td><td>名字 2026</td><td>查看器：NGI 23/24 + SANSA + 2019/20，没有 2026 市政飞行</td></tr>
+<tr><td>茨瓦内</td><td><code>Aerial_2024</code> / <code>Aerial_2025</code></td><td>未证明</td><td>图幅 ID 与 2023 相同，芯片对不上之前不要当新年</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="aerial">
+<h2>航测：市政真日期层在干什么</h2>
+<p><b>GSD</b> 下面来自服务描述或 REST <code>pixelSizeX</code>（2026-09-06 探过元数据，<b>没有</b>下瓦片）。
+CRS（coordinate reference system，坐标参考系）不要混：开普敦 Lo19，约翰内斯堡 2000–2019 是 Lo29、2023 是 Web Mercator。</p>
+
+<h3>开普敦 — 近逐年 8 cm / 5 cm</h3>
+<div class="card">
+  入口 <code>cityimg.capetown.gov.za</code> ERDAS MapServer / WMS，免登录。
+  许可原文是 non-commercial unrestricted。
+  普查正在用的就是 <b>2025Jan 5 cm</b>。2012–2022 的 8 cm 几乎每年都在，2014 和 2023 被 NGI 名字占了。
+  2012 东边截断，但仍算可用年。
+</div>
+
+<h3>约翰内斯堡 — 15 cm，三年一拍</h3>
+<div class="card">
+  <code>ags.joburg.org.za</code> 的 <code>AerialPhotography/&lt;year&gt;</code>。
+  2009 起 15 cm：2009 / 2012 / 2015 / 2019 / 2023。更早 2000/03/06 是 20–25 cm，只能当「保证没有板」的基线。
+  ISSUE-08 已经会拉 2015/19/23；扩到 2009/2012 是零新代码。
+</div>
+
+<h3>eThekwini — 10 cm 近逐年，TLS 证书不受信任</h3>
+<div class="card">
+  <code>gis.durban.gov.za</code> 要关证书校验才能读 REST。
+  10 cm 可用年：2016、2018、2019、2020、2022。没有公开 2017，没有全市 2024。
+  摄影测量建筑物 <b>846,698</b> 个，<code>SYear</code> ∈ {2016, 2018, 2019}——那是<b>房子</b>的航摄年，不是光伏安装年，但能当芯片种子。
+</div>
+
+<h3>其余</h3>
+<div class="grid">
+  <div class="card"><b>NMB / Gqeberha</b><p>公共查看器只挂 2018 和 2022；代理后面的 ImageServer 有完整年列，2017 起 5 cm。直连 hostname 在外网不解析。</p></div>
+  <div class="card"><b>Ekurhuleni</b><p>10 cm 只有 2013 / 2018 / 2019–20。之后是 NGI 25 cm。不在当前普查网格里。</p></div>
+  <div class="card"><b>茨瓦内</b><p>活的是 <code>e-gis001.tshwane.gov.za</code>，不是 <code>gis.tshwane.gov.za</code>（503 / TLS 失败）。2018 + 2023 两期 10 cm。六年空洞正好罩住限电光伏潮。</p></div>
+</div>
+</section>
+
+<section id="vexcel">
+<h2>Vexcel：现在的清晰快照，不是时间轴</h2>
+<p>H3-7（Uber 六边形网格第 7 级，开普敦大约每格 4.9 km²）覆盖率：格的 ≥1% 面积落在足迹里才算。
+分母用全市，Mangaung / Tshwane 会看起来像 4–12%，因为市域含大片腹地。
+对照 GHSL 2020 Urban Centre（联合国城市化程度的「城区」：连续 1 km 格、≥1,500 人/km²、合计 ≥50,000 人）才跟屋顶光伏的对象对齐。</p>
+<div class="scroll">
+<table>
+<thead>
+<tr><th>市</th><th>collection</th><th>拍摄窗</th><th>GSD</th><th>metro H3-7</th><th>Vexcel / 城区面积</th></tr>
+</thead>
+<tbody>
+<tr><td><b>开普敦</b></td><td>五块 <code>za-wc-*-2024</code></td><td>2024-03-18 … 04-12</td><td class="num">6.2 cm</td><td class="num"><b>367 / 603</b> (60.9%)</td><td class="num"><b>93%</b></td></tr>
+<tr><td>约翰内斯堡</td><td><code>za-gp-johannesburg-2024</code></td><td>2024-02-17 … 04-19</td><td class="num">6.7 cm</td><td class="num">74 / 350 (21.1%)</td><td class="num"><b>27%</b></td></tr>
+<tr><td>eThekwini</td><td><code>za-kzn-durban-2026</code></td><td>2025-12-17 … 2026-01-06</td><td class="num">6.5 cm</td><td class="num">166 / 532 (31.2%)</td><td class="num">79%</td></tr>
+<tr><td>NMB</td><td><code>za-ec-portelizabeth-2026</code></td><td>2026-01-11 … 01-21</td><td class="num">6.2 cm</td><td class="num">179 / 443 (40.4%)</td><td class="num">100%</td></tr>
+<tr><td>Msunduzi</td><td><code>za-kzn-pietermaritzburg-2025</code></td><td>2025-12-16</td><td class="num">6.5 cm</td><td class="num">62 / 178 (34.8%)</td><td class="num">94%</td></tr>
+<tr><td>茨瓦内</td><td><code>za-gp-pretoria-2026</code></td><td>2026-02-05 … 02-08</td><td class="num">6.7 cm</td><td class="num">147 / 1,228 (12%)</td><td class="num">48%</td></tr>
+<tr><td>Buffalo City</td><td><code>za-ec-eastlondon-2026</code></td><td>2026-01-07 … 01-08</td><td class="num">6.3 cm</td><td class="num">60 / 622 (9.6%)</td><td class="num">67%</td></tr>
+<tr><td>Mangaung</td><td><code>za-fs-bloemfontein-2026</code></td><td>2026-01-18</td><td class="num">6.5 cm</td><td class="num">84 / 1,978 (4.2%)</td><td class="num">72%</td></tr>
+<tr><td>Ekurhuleni</td><td>约翰内斯堡溢出，无本城 collection</td><td>同 JHB 2024</td><td class="num">6.7 cm</td><td class="num">23 / 400 (5.8%)</td><td class="num">7%</td></tr>
+</tbody>
+</table>
+</div>
+<p class="why"><b>这张表说什么。</b> 开普敦、NMB、Msunduzi、eThekwini、Mangaung、Buffalo：Vexcel 是<b>城区形状</b>的产品。
+约翰内斯堡和 Ekurhuleni：Vexcel 是<b>CBD 形状</b>的产品，而 CoJ 本身已经 68% 是城区。
+<b>为什么要紧。</b> 分母用市域会把 Mangaung 丢掉、又把约翰内斯堡和 Mangaung 当成同类。
+<b>忽略会怎样。</b> 会跳过已经盖住开普敦 73% 普查 H3-7 的 6.2 cm 2024 层，或计划一条这个 token 没有的 Vexcel 时间序列。</p>
+</section>
+
+<section id="sat">
+<h2>卫星：已经编目的 GEHI 时间轴</h2>
+<p>方法是<b>复用现有 catalog，不打新的 GEHI</b>。粒度 H3-7。
+开普敦 381 个格 = 2026-09-02 描述包里有普查多边形的格；约翰内斯堡 83 个格 = 与 Vexcel
+<code>za-gp-johannesburg-2024</code> 覆盖文件相同的计数。</p>
+<div class="scroll">
+<table>
+<thead>
+<tr><th>城</th><th>提供方</th><th>zoom</th><th>GSD</th><th>H3-7</th><th>中位日期/锚</th><th>跨度</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td>开普敦</td><td>Google Earth TM</td><td class="num"><b>19</b></td><td class="num">0.25 m</td>
+  <td class="num"><b>381 / 381</b></td><td class="num"><b>107</b></td>
+  <td>2009-02-12 … 2025-12-30</td>
+  <td><span class="badge b-ok">生产默认</span> bbox-complete，每年都密</td>
+</tr>
+<tr>
+  <td>开普敦</td><td>Google Earth TM</td><td class="num">18</td><td class="num">0.50 m</td>
+  <td class="num">321 / 381</td><td class="num">1</td>
+  <td>同左</td>
+  <td>全图回退</td>
+</tr>
+<tr>
+  <td>开普敦</td><td>Esri Wayback</td><td class="num"><b>19</b></td><td class="num">0.25 m</td>
+  <td class="num"><b>381 / 381</b></td><td class="num"><b>9</b></td>
+  <td>2012-04-20 … 2025-10-12</td>
+  <td><span class="badge b-thin">薄补充</span> 2018/2020/2021 几乎空</td>
+</tr>
+<tr>
+  <td>开普敦</td><td>Esri Wayback</td><td class="num">18</td><td class="num">0.50 m</td>
+  <td class="num">271 / 381</td><td class="num">1</td>
+  <td>同左</td>
+  <td>稀有回退</td>
+</tr>
+<tr>
+  <td>约翰内斯堡</td><td>Google Earth TM</td><td class="num">未存</td><td class="num">假设 0.25 m</td>
+  <td class="num">83</td><td class="num">16</td>
+  <td><b>2019-01-30 … 2025-05-30</b></td>
+  <td>普查窗口，<b>不是</b> 2009–2018 全历史</td>
+</tr>
+<tr>
+  <td>约翰内斯堡</td><td>Esri Wayback</td><td class="num">19</td><td class="num">0.25 m</td>
+  <td class="num">83</td><td class="num">14</td>
+  <td>2012-03-03 … 2026-02-02</td>
+  <td>sqlite info；单位是 15,859 个芯片组，不是 41,393 个 target</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h3>开普敦 z19 按年（日期行数）</h3>
+<p class="muted">Google Earth 2009–2025 每年都密。Wayback 不是第二条 100 日栈：它是偶尔在 2022–2025 补洞的薄传感器。</p>
+<div class="scroll">
+<table>
+<thead>
+<tr><th>年</th><th>TM z19</th><th>Wayback z19</th><th>年</th><th>TM z19</th><th>Wayback z19</th></tr>
+</thead>
+<tbody>
+<tr><td>2009</td><td class="num">124,950</td><td class="num">0</td><td>2018</td><td class="num">1,141,317</td><td class="num">455</td></tr>
+<tr><td>2010</td><td class="num">114,485</td><td class="num">0</td><td>2019</td><td class="num">1,302,341</td><td class="num">111,564</td></tr>
+<tr><td>2011</td><td class="num">222,802</td><td class="num">0</td><td>2020</td><td class="num">1,315,176</td><td class="num">12</td></tr>
+<tr><td>2012</td><td class="num">321,469</td><td class="num">19,908</td><td>2021</td><td class="num">1,088,126</td><td class="num">7</td></tr>
+<tr><td>2013</td><td class="num">433,813</td><td class="num">61,579</td><td>2022</td><td class="num">1,419,572</td><td class="num">173,767</td></tr>
+<tr><td>2014</td><td class="num">1,061,438</td><td class="num">0</td><td>2023</td><td class="num">118,838</td><td class="num">101,733</td></tr>
+<tr><td>2015</td><td class="num">1,229,667</td><td class="num">102,755</td><td>2024</td><td class="num">209,571</td><td class="num">59,088</td></tr>
+<tr><td>2016</td><td class="num">1,235,146</td><td class="num">113,566</td><td>2025</td><td class="num">178,307</td><td class="num">108,922</td></tr>
+<tr><td>2017</td><td class="num">1,285,596</td><td class="num">116,824</td><td></td><td></td><td></td></tr>
+</tbody>
+</table>
+</div>
+<p class="why"><b>这张表说什么。</b> 卫星年 panel 在 H3-7 上已经能从现有 catalog 拼出来；加 z20 只改部分日期的清晰度（25 cm → 12 cm），不加新的年份。
+<b>为什么要紧。</b> 市政 8 cm 仍然比两条卫星都清。
+<b>忽略会怎样。</b> 会（a）为「分辨率」新开一轮全城 z20 编目，或（b）把 Wayback 当成 TM 的密同伴。</p>
+<p>其他都市没有 GEHI catalog 滚到 H3-7。快探是：每个 H3-7 质心一次 <code>info</code> × {TM, Wayback} × {z19, z18}。那是每城几百次活调用，不是这次复用。</p>
+</section>
+
+<section id="recommend">
+<h2>推荐（还没签字）</h2>
+<div class="callout">
+  <b>是否授权 V2：</b>用 CT-11 的 100 个锚，拉 CoCT 2018 / 2022 / 2025 三层，
+  普查检测器打分，不打 Gemini，不回切全城表？
+</div>
+<div class="grid">
+  <div class="card"><span class="badge b-thin">V1 已付</span><p>今天这套目录。合作者能看到哪几个市有真日期层、哪一年、多少厘米、哪个名字是陷阱。</p></div>
+  <div class="card"><span class="badge b-hot">V2 推荐</span><p>100 锚 × 三张公开 WMS，现成 Mask R-CNN，下午级。回答的是「市政 8–15 cm + 普查检测器能不能给出稳定的<b>安装年</b>」，不是日。</p></div>
+  <div class="card"><span class="badge b-trap">V3 不直接上</span><p>全城 × 12 年是一次新的 Leg-E。磁盘和 ToS（CoCT 写的是 non-commercial）都还没过门。</p></div>
+</div>
+<p>当前 Gemini 精度：CT-11 100 锚重复状态一致 68%；recovery 精确区间 37.5%。
+最大风险假设：普查检测器在 2018 年 8 cm 上对小阵仍然大量 low-margin——如果成立，年 panel 会偏商用屋顶。</p>
+<p>止损（可判定的）：2025Jan 已知有板锚 high-margin present &lt; 0.90；导出被拒 / ToS 卡住；2018 与 2022 的 high-margin 比特 &lt; 50 锚；再发现「名字是年、内容是 NGI 混拼」且 2018/2022 也是。</p>
+<p class="muted">完整决策备忘录：<a href="BRIEF-municipal-true-date-panel-2026-09-06.md">BRIEF-municipal-true-date-panel-2026-09-06.md</a></p>
+</section>
+
+<section id="files">
+<h2>文件对照</h2>
+<div class="card files">
+  <p><span class="badge b-air">航测 CSV</span>
+    <a href="_muni_catalog/aerial_city_summary.csv">aerial_city_summary.csv</a>
+    <a href="_muni_catalog/aerial_layers.csv">aerial_layers.csv</a>
+    <a href="_muni_catalog/vexcel_muni_city_summary.csv">vexcel_muni_city_summary.csv</a>
+    <a href="_muni_catalog/vexcel_muni_collections.csv">vexcel_muni_collections.csv</a>
+    <a href="_muni_catalog/vexcel_vs_urban_area.csv">vexcel_vs_urban_area.csv</a>
+  </p>
+  <p><span class="badge b-sat">卫星 CSV</span>
+    <a href="_muni_catalog/satellite_layers.csv">satellite_layers.csv</a>
+    <a href="_muni_catalog/satellite_city_provider_zoom_summary.csv">satellite_city_provider_zoom_summary.csv</a>
+    <a href="_muni_catalog/satellite_year_histogram.csv">satellite_year_histogram.csv</a>
+    <a href="_muni_catalog/satellite_h3_r7_provider_zoom.csv">satellite_h3_r7_provider_zoom.csv</a>
+  </p>
+  <p><span class="badge b-hot">长文 SRC</span>
+    <a href="SRC-municipal-layers-2026-09-06.md">市政航测</a>
+    <a href="SRC-vexcel-layers-h3r7-2026-09-06.md">Vexcel H3-7</a>
+    <a href="SRC-satellite-layers-h3r7-2026-09-06.md">卫星 H3-7</a>
+    · 分层笔记 <a href="_muni_catalog/">_muni_catalog/</a>
+  </p>
+  <p class="muted" style="margin:8px 0 0">
+    <code>usable_as_panel_year</code>：<code>yes</code> 真日期、屋顶 GSD、覆盖够全市；
+    <code>secondary</code> 更粗或覆盖残缺但仍是真飞行；
+    <code>trap</code> 名字撒谎或混拼；
+    <code>duplicate</code> 同一飞行的另一份服务；
+    <code>unproven</code> 服务在、飞行未证伪；
+    <code>no</code> 斜片 / 补丁 / 遗产 / 卫星混拼。
+    再生：<code>python3 docs/briefs/_muni_catalog/build_catalog_csvs.py</code>
+  </p>
+</div>
+</section>
+
+<footer>
+  探元数据日期 2026-09-06。卫星半边复用全城 catalog，没有新打 GEHI。
+  Vexcel 用 LSE 学术 token 活探 API v2。芯片不可再分发。
+  Markdown 真源与本 HTML 并列；数字以 CSV 为准。
+</footer>
+</div>
+</body>
+</html>

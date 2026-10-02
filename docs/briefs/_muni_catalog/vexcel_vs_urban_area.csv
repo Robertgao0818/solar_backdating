@@ -1,0 +1,10 @@
+municipality,municipality_name,matched_polygon,area_km2_municipality,area_km2_urban_centre,area_km2_urban_domain,urban_centre_share_of_muni,urban_domain_share_of_muni,area_km2_vexcel_in_muni,area_km2_vexcel_in_urban_centre,area_km2_vexcel_in_urban_domain,vexcel_of_muni,vexcel_of_urban_centre,vexcel_of_urban_domain,n_h3_muni,n_h3_urban_centre,n_h3_urban_domain,n_h3_vexcel_muni,n_h3_vexcel_urban_centre,n_h3_vexcel_urban_domain,h3_vexcel_of_muni,h3_vexcel_of_urban_centre,h3_vexcel_of_urban_domain
+cape_town,City of Cape Town,City of Cape Town,2445.7,768.4,924.9,0.3142,0.3782,1447.7,716.7,836.5,0.5919,0.9327,0.9044,603,217,289,366,197,252,0.607,0.9078,0.872
+johannesburg,City of Johannesburg,City of Johannesburg,1644.9,1118.6,1226.2,0.6801,0.7454,305.4,297.2,299.5,0.1856,0.2656,0.2442,350,264,292,73,72,73,0.2086,0.2727,0.25
+tshwane,City of Tshwane,City of Tshwane,6297.8,951.4,1179.1,0.1511,0.1872,718.3,461.1,530.5,0.1141,0.4847,0.4499,1228,242,310,147,108,128,0.1197,0.4463,0.4129
+ekurhuleni,City of Ekurhuleni,Ekurhuleni,1975.4,789.0,1077.5,0.3994,0.5455,58.5,58.5,58.5,0.0296,0.0741,0.0542,400,195,262,23,23,23,0.0575,0.1179,0.0878
+ethekwini,eThekwini,eThekwini,2555.9,839.9,1311.4,0.3286,0.5131,734.6,664.7,700.8,0.2874,0.7915,0.5344,532,209,364,166,156,163,0.312,0.7464,0.4478
+nelson_mandela_bay,Nelson Mandela Bay,Nelson Mandela Bay,1957.2,294.0,373.0,0.1502,0.1906,746.9,294.0,372.9,0.3816,1.0,0.9997,443,98,125,179,98,125,0.4041,1.0,1.0
+buffalo_city,Buffalo City,Buffalo City,2750.3,114.4,357.5,0.0416,0.13,232.4,77.0,133.7,0.0845,0.6731,0.3739,622,40,138,59,28,46,0.0949,0.7,0.3333
+mangaung,Mangaung,Mangaung,9886.3,200.3,295.0,0.0203,0.0298,358.8,143.5,166.5,0.0363,0.7164,0.5644,1978,59,92,84,38,45,0.0425,0.6441,0.4891
+msunduzi,Msunduzi,The Msunduzi,751.1,154.4,351.8,0.2056,0.4684,248.7,145.0,190.0,0.3312,0.9393,0.54,178,45,108,62,42,53,0.3483,0.9333,0.4907

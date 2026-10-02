@@ -1,0 +1,238 @@
+municipality,municipality_name,provider,year,n_cells_with_year,n_date_rows
+cape_town,City of Cape Town,TM,2009,367,410
+cape_town,City of Cape Town,TM,2010,288,349
+cape_town,City of Cape Town,TM,2011,362,751
+cape_town,City of Cape Town,TM,2012,306,871
+cape_town,City of Cape Town,TM,2013,367,1203
+cape_town,City of Cape Town,TM,2014,367,3383
+cape_town,City of Cape Town,TM,2015,367,4021
+cape_town,City of Cape Town,TM,2016,367,3784
+cape_town,City of Cape Town,TM,2017,367,4023
+cape_town,City of Cape Town,TM,2018,367,3794
+cape_town,City of Cape Town,TM,2019,367,4104
+cape_town,City of Cape Town,TM,2020,367,4239
+cape_town,City of Cape Town,TM,2021,367,3221
+cape_town,City of Cape Town,TM,2022,367,4421
+cape_town,City of Cape Town,TM,2023,327,353
+cape_town,City of Cape Town,TM,2024,363,619
+cape_town,City of Cape Town,TM,2025,356,559
+cape_town,City of Cape Town,TM,2026,305,612
+cape_town,City of Cape Town,Wayback,2012,31,31
+cape_town,City of Cape Town,Wayback,2013,138,138
+cape_town,City of Cape Town,Wayback,2015,267,287
+cape_town,City of Cape Town,Wayback,2016,305,343
+cape_town,City of Cape Town,Wayback,2017,334,336
+cape_town,City of Cape Town,Wayback,2018,34,34
+cape_town,City of Cape Town,Wayback,2019,366,366
+cape_town,City of Cape Town,Wayback,2020,1,1
+cape_town,City of Cape Town,Wayback,2021,2,2
+cape_town,City of Cape Town,Wayback,2022,367,555
+cape_town,City of Cape Town,Wayback,2023,321,360
+cape_town,City of Cape Town,Wayback,2024,185,185
+cape_town,City of Cape Town,Wayback,2025,305,305
+johannesburg,City of Johannesburg,TM,2009,74,300
+johannesburg,City of Johannesburg,TM,2010,74,546
+johannesburg,City of Johannesburg,TM,2011,74,354
+johannesburg,City of Johannesburg,TM,2012,74,618
+johannesburg,City of Johannesburg,TM,2013,74,724
+johannesburg,City of Johannesburg,TM,2014,74,715
+johannesburg,City of Johannesburg,TM,2015,74,817
+johannesburg,City of Johannesburg,TM,2016,74,546
+johannesburg,City of Johannesburg,TM,2017,74,635
+johannesburg,City of Johannesburg,TM,2018,74,370
+johannesburg,City of Johannesburg,TM,2019,74,395
+johannesburg,City of Johannesburg,TM,2020,74,318
+johannesburg,City of Johannesburg,TM,2021,74,383
+johannesburg,City of Johannesburg,TM,2022,74,196
+johannesburg,City of Johannesburg,TM,2023,32,32
+johannesburg,City of Johannesburg,TM,2024,74,100
+johannesburg,City of Johannesburg,TM,2025,74,177
+johannesburg,City of Johannesburg,TM,2026,57,136
+johannesburg,City of Johannesburg,Wayback,2012,64,64
+johannesburg,City of Johannesburg,Wayback,2015,74,97
+johannesburg,City of Johannesburg,Wayback,2016,54,54
+johannesburg,City of Johannesburg,Wayback,2017,74,74
+johannesburg,City of Johannesburg,Wayback,2018,74,74
+johannesburg,City of Johannesburg,Wayback,2019,74,74
+johannesburg,City of Johannesburg,Wayback,2020,74,74
+johannesburg,City of Johannesburg,Wayback,2021,74,74
+johannesburg,City of Johannesburg,Wayback,2022,74,74
+johannesburg,City of Johannesburg,Wayback,2023,74,116
+johannesburg,City of Johannesburg,Wayback,2024,31,31
+johannesburg,City of Johannesburg,Wayback,2025,74,129
+johannesburg,City of Johannesburg,Wayback,2026,19,19
+ethekwini,eThekwini,TM,2009,44,62
+ethekwini,eThekwini,TM,2010,165,330
+ethekwini,eThekwini,TM,2011,159,273
+ethekwini,eThekwini,TM,2012,157,325
+ethekwini,eThekwini,TM,2013,166,631
+ethekwini,eThekwini,TM,2014,166,1575
+ethekwini,eThekwini,TM,2015,166,1822
+ethekwini,eThekwini,TM,2016,166,2007
+ethekwini,eThekwini,TM,2017,166,1652
+ethekwini,eThekwini,TM,2018,166,1596
+ethekwini,eThekwini,TM,2019,166,1210
+ethekwini,eThekwini,TM,2020,166,725
+ethekwini,eThekwini,TM,2021,166,796
+ethekwini,eThekwini,TM,2022,166,1370
+ethekwini,eThekwini,TM,2023,139,143
+ethekwini,eThekwini,TM,2024,152,158
+ethekwini,eThekwini,TM,2025,166,339
+ethekwini,eThekwini,Wayback,2012,140,140
+ethekwini,eThekwini,Wayback,2015,144,152
+ethekwini,eThekwini,Wayback,2016,154,154
+ethekwini,eThekwini,Wayback,2017,162,165
+ethekwini,eThekwini,Wayback,2018,77,88
+ethekwini,eThekwini,Wayback,2019,95,95
+ethekwini,eThekwini,Wayback,2020,166,314
+ethekwini,eThekwini,Wayback,2021,166,166
+ethekwini,eThekwini,Wayback,2023,166,166
+ethekwini,eThekwini,Wayback,2024,166,170
+ethekwini,eThekwini,Wayback,2025,163,168
+ethekwini,eThekwini,Wayback,2026,156,156
+ekurhuleni,City of Ekurhuleni,TM,2009,23,87
+ekurhuleni,City of Ekurhuleni,TM,2010,23,206
+ekurhuleni,City of Ekurhuleni,TM,2011,23,158
+ekurhuleni,City of Ekurhuleni,TM,2012,23,268
+ekurhuleni,City of Ekurhuleni,TM,2013,23,255
+ekurhuleni,City of Ekurhuleni,TM,2014,23,256
+ekurhuleni,City of Ekurhuleni,TM,2015,23,283
+ekurhuleni,City of Ekurhuleni,TM,2016,23,247
+ekurhuleni,City of Ekurhuleni,TM,2017,23,230
+ekurhuleni,City of Ekurhuleni,TM,2018,23,94
+ekurhuleni,City of Ekurhuleni,TM,2019,23,183
+ekurhuleni,City of Ekurhuleni,TM,2020,23,155
+ekurhuleni,City of Ekurhuleni,TM,2021,23,161
+ekurhuleni,City of Ekurhuleni,TM,2022,23,47
+ekurhuleni,City of Ekurhuleni,TM,2023,4,4
+ekurhuleni,City of Ekurhuleni,TM,2024,23,36
+ekurhuleni,City of Ekurhuleni,TM,2025,23,62
+ekurhuleni,City of Ekurhuleni,TM,2026,21,35
+ekurhuleni,City of Ekurhuleni,Wayback,2012,22,22
+ekurhuleni,City of Ekurhuleni,Wayback,2015,23,24
+ekurhuleni,City of Ekurhuleni,Wayback,2016,23,23
+ekurhuleni,City of Ekurhuleni,Wayback,2017,23,23
+ekurhuleni,City of Ekurhuleni,Wayback,2018,23,23
+ekurhuleni,City of Ekurhuleni,Wayback,2019,23,23
+ekurhuleni,City of Ekurhuleni,Wayback,2020,23,23
+ekurhuleni,City of Ekurhuleni,Wayback,2021,23,23
+ekurhuleni,City of Ekurhuleni,Wayback,2022,23,23
+ekurhuleni,City of Ekurhuleni,Wayback,2023,23,46
+ekurhuleni,City of Ekurhuleni,Wayback,2025,23,46
+tshwane,City of Tshwane,TM,2005,1,1
+tshwane,City of Tshwane,TM,2009,117,218
+tshwane,City of Tshwane,TM,2010,108,127
+tshwane,City of Tshwane,TM,2011,147,515
+tshwane,City of Tshwane,TM,2012,145,243
+tshwane,City of Tshwane,TM,2013,147,540
+tshwane,City of Tshwane,TM,2014,106,214
+tshwane,City of Tshwane,TM,2015,147,959
+tshwane,City of Tshwane,TM,2016,147,352
+tshwane,City of Tshwane,TM,2017,147,476
+tshwane,City of Tshwane,TM,2018,147,892
+tshwane,City of Tshwane,TM,2019,147,388
+tshwane,City of Tshwane,TM,2020,131,635
+tshwane,City of Tshwane,TM,2021,147,317
+tshwane,City of Tshwane,TM,2022,147,316
+tshwane,City of Tshwane,TM,2023,107,141
+tshwane,City of Tshwane,TM,2024,147,156
+tshwane,City of Tshwane,TM,2025,147,281
+tshwane,City of Tshwane,TM,2026,135,251
+tshwane,City of Tshwane,Wayback,2012,86,86
+tshwane,City of Tshwane,Wayback,2015,11,11
+tshwane,City of Tshwane,Wayback,2016,147,147
+tshwane,City of Tshwane,Wayback,2017,147,147
+tshwane,City of Tshwane,Wayback,2018,147,294
+tshwane,City of Tshwane,Wayback,2021,147,147
+tshwane,City of Tshwane,Wayback,2022,146,146
+tshwane,City of Tshwane,Wayback,2023,147,148
+tshwane,City of Tshwane,Wayback,2025,141,266
+tshwane,City of Tshwane,Wayback,2026,16,16
+nelson_mandela_bay,Nelson Mandela Bay,TM,2004,1,1
+nelson_mandela_bay,Nelson Mandela Bay,TM,2009,145,145
+nelson_mandela_bay,Nelson Mandela Bay,TM,2010,136,181
+nelson_mandela_bay,Nelson Mandela Bay,TM,2011,115,291
+nelson_mandela_bay,Nelson Mandela Bay,TM,2012,56,56
+nelson_mandela_bay,Nelson Mandela Bay,TM,2013,179,701
+nelson_mandela_bay,Nelson Mandela Bay,TM,2014,179,1150
+nelson_mandela_bay,Nelson Mandela Bay,TM,2015,179,1482
+nelson_mandela_bay,Nelson Mandela Bay,TM,2016,179,861
+nelson_mandela_bay,Nelson Mandela Bay,TM,2017,179,839
+nelson_mandela_bay,Nelson Mandela Bay,TM,2018,179,2656
+nelson_mandela_bay,Nelson Mandela Bay,TM,2019,179,2406
+nelson_mandela_bay,Nelson Mandela Bay,TM,2020,179,2641
+nelson_mandela_bay,Nelson Mandela Bay,TM,2021,179,896
+nelson_mandela_bay,Nelson Mandela Bay,TM,2022,179,2730
+nelson_mandela_bay,Nelson Mandela Bay,TM,2023,149,238
+nelson_mandela_bay,Nelson Mandela Bay,TM,2024,177,197
+nelson_mandela_bay,Nelson Mandela Bay,TM,2025,177,266
+nelson_mandela_bay,Nelson Mandela Bay,TM,2026,38,38
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2012,56,56
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2015,12,12
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2016,167,167
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2017,179,343
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2018,152,154
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2020,179,200
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2022,179,179
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2023,179,180
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2024,177,177
+nelson_mandela_bay,Nelson Mandela Bay,Wayback,2025,167,323
+buffalo_city,Buffalo City,TM,2009,15,15
+buffalo_city,Buffalo City,TM,2011,18,18
+buffalo_city,Buffalo City,TM,2012,57,105
+buffalo_city,Buffalo City,TM,2013,60,172
+buffalo_city,Buffalo City,TM,2014,60,264
+buffalo_city,Buffalo City,TM,2015,60,677
+buffalo_city,Buffalo City,TM,2016,60,564
+buffalo_city,Buffalo City,TM,2017,60,683
+buffalo_city,Buffalo City,TM,2018,60,546
+buffalo_city,Buffalo City,TM,2019,60,1011
+buffalo_city,Buffalo City,TM,2020,60,927
+buffalo_city,Buffalo City,TM,2021,60,316
+buffalo_city,Buffalo City,TM,2022,60,502
+buffalo_city,Buffalo City,TM,2023,60,62
+buffalo_city,Buffalo City,TM,2024,60,64
+buffalo_city,Buffalo City,TM,2025,60,137
+buffalo_city,Buffalo City,TM,2026,28,28
+buffalo_city,Buffalo City,Wayback,2017,55,55
+buffalo_city,Buffalo City,Wayback,2020,2,2
+buffalo_city,Buffalo City,Wayback,2025,56,56
+mangaung,Mangaung,TM,2009,67,89
+mangaung,Mangaung,TM,2010,75,135
+mangaung,Mangaung,TM,2011,28,28
+mangaung,Mangaung,TM,2012,84,169
+mangaung,Mangaung,TM,2013,84,303
+mangaung,Mangaung,TM,2014,84,201
+mangaung,Mangaung,TM,2015,84,751
+mangaung,Mangaung,TM,2016,84,352
+mangaung,Mangaung,TM,2017,84,571
+mangaung,Mangaung,TM,2018,84,408
+mangaung,Mangaung,TM,2019,84,178
+mangaung,Mangaung,TM,2020,84,286
+mangaung,Mangaung,TM,2021,84,156
+mangaung,Mangaung,TM,2022,84,375
+mangaung,Mangaung,TM,2023,67,75
+mangaung,Mangaung,TM,2024,84,91
+mangaung,Mangaung,TM,2025,84,84
+mangaung,Mangaung,Wayback,2012,36,36
+mangaung,Mangaung,Wayback,2015,3,3
+mangaung,Mangaung,Wayback,2019,84,84
+msunduzi,Msunduzi,TM,2010,62,104
+msunduzi,Msunduzi,TM,2011,34,34
+msunduzi,Msunduzi,TM,2012,32,35
+msunduzi,Msunduzi,TM,2013,62,198
+msunduzi,Msunduzi,TM,2014,62,305
+msunduzi,Msunduzi,TM,2015,62,339
+msunduzi,Msunduzi,TM,2016,62,305
+msunduzi,Msunduzi,TM,2017,62,325
+msunduzi,Msunduzi,TM,2018,62,250
+msunduzi,Msunduzi,TM,2019,62,136
+msunduzi,Msunduzi,TM,2020,62,180
+msunduzi,Msunduzi,TM,2021,62,136
+msunduzi,Msunduzi,TM,2022,62,247
+msunduzi,Msunduzi,TM,2023,39,39
+msunduzi,Msunduzi,TM,2024,62,64
+msunduzi,Msunduzi,TM,2025,62,98
+msunduzi,Msunduzi,Wayback,2012,43,43
+msunduzi,Msunduzi,Wayback,2015,7,7
+msunduzi,Msunduzi,Wayback,2020,61,61

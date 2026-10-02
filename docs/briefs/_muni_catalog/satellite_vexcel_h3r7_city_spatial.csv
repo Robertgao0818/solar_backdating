@@ -1,0 +1,10 @@
+municipality,municipality_name,n_urban_centre,n_urban_domain,n_vexcel,n_urban_centre_gap,frac_uc_with_vexcel,n_probed,n_tm_2023,frac_vexcel_with_tm_2023,median_tm_dates,n_tm_dense,n_tm_usable,n_tm_thin
+cape_town,Cape Town,217,289,367,20,0.9078,367,327,0.891,113.0,313,54,0
+johannesburg,Johannesburg,264,292,74,191,0.2765,74,32,0.4324,90.0,37,37,0
+ethekwini,eThekwini,209,364,166,53,0.7464,166,139,0.8373,89.5,83,76,7
+ekurhuleni,Ekurhuleni,195,262,23,172,0.1179,23,4,0.1739,129.0,20,3,0
+tshwane,Tshwane,242,310,147,134,0.4463,147,107,0.7279,49.0,0,71,76
+nelson_mandela_bay,NMB,98,125,179,0,1.0,179,149,0.8324,91.0,92,87,0
+buffalo_city,Buffalo,40,138,60,12,0.7,60,60,1.0,107.0,38,22,0
+mangaung,Mangaung,59,92,84,21,0.6441,84,67,0.7976,51.0,0,54,30
+msunduzi,Msunduzi,45,108,62,3,0.9333,62,39,0.629,45.0,0,3,59

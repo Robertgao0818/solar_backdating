@@ -1,0 +1,10 @@
+municipality,municipality_name,admin_class,n_h3_r7_municipality,n_h3_r7_in_muni,coverage_rate_h3,area_km2_municipality,area_km2_vexcel_in_muni,coverage_rate_area,n_sat_h3_r7,n_sat_h3_r7_with_vexcel,collections
+cape_town,City of Cape Town,metro,603,367,0.6086,2445.7,1447.7,0.5919,381.0,278.0,za-wc-avondale-2024|za-wc-bellville-2024|za-wc-capetown-2024|za-wc-rondebosch-2024|za-wc-tablemountain-2024
+johannesburg,City of Johannesburg,metro,350,74,0.2114,1644.9,305.4,0.1856,83.0,74.0,za-gp-johannesburg-2024
+tshwane,City of Tshwane,metro,1228,147,0.1197,6297.8,718.3,0.1141,,,za-gp-pretoria-2026
+ekurhuleni,City of Ekurhuleni,metro,400,23,0.0575,1975.4,58.5,0.0296,,,za-gp-johannesburg-2024
+ethekwini,eThekwini,metro,532,166,0.312,2555.9,734.6,0.2874,,,za-kzn-durban-2026
+nelson_mandela_bay,Nelson Mandela Bay,metro,443,179,0.4041,1957.2,746.9,0.3816,,,za-ec-portelizabeth-2026
+buffalo_city,Buffalo City,metro,622,60,0.0965,2750.3,232.4,0.0845,,,za-ec-eastlondon-2026
+mangaung,Mangaung,metro,1978,84,0.0425,9886.3,358.8,0.0363,,,za-fs-bloemfontein-2026
+msunduzi,Msunduzi,local,178,62,0.3483,751.1,248.7,0.3312,,,za-kzn-pietermaritzburg-2025
