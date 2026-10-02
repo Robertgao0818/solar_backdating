@@ -2,7 +2,7 @@
 
 `solar_backdating` runs as a local plugin of the
 [ZAsolar](https://github.com/Robertgao0818/ZAsolar) main repo. It shares
-the main repo's virtualenv and imports a small surface of main-repo modules
+the system interpreter (`/usr/bin/python3`, packages in `~/.local`) and imports a small surface of main-repo modules
 at runtime via `PYTHONPATH`. This document is the contract.
 
 ## Runtime resolution order

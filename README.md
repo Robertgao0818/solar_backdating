@@ -81,12 +81,12 @@ python scripts/temporal/score_target_sequence.py \
 
 This repo is a local plugin of the main ZAsolar repo. It does not have its
 own virtualenv. It does not pip-install a copy of `core/`. At runtime it
-shares ZAsolar's `.venv` and resolves shared modules (`core.region_registry`,
+uses the system interpreter (`/usr/bin/python3`, packages in `~/.local`) and resolves shared modules (`core.region_registry`,
 `core.annotation_loader`, `core.grid_utils`) via `PYTHONPATH`.
 
 ```bash
 # From this repo's root
-source scripts/activate_env.sh        # shares ZAsolar's .venv + PYTHONPATH
+source scripts/activate_env.sh        # system Python + PYTHONPATH
 python scripts/temporal/score_anchor_presence.py --help
 ```
 

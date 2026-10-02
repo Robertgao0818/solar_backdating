@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# activate_env.sh — shared-venv plugin activator for solar_backdating.
+# activate_env.sh — plugin activator for solar_backdating.
 #
-# Sources main repo (ZAsolar) venv, then prepends this repo's paths to
-# PYTHONPATH so in-repo `scripts.temporal.*` shadows any older copy in
+# Uses the system interpreter (packages in ~/.local), then prepends this
+# repo's paths to PYTHONPATH so in-repo `scripts.temporal.*` shadows any older copy in
 # main repo. Resolves repo root from BASH_SOURCE, not $(pwd), so it works
 # from any cwd.
 #
@@ -31,14 +31,8 @@ if [[ ! -d "$ZASOLAR_ROOT" ]]; then
   return 1
 fi
 
-if [[ ! -x "$ZASOLAR_ROOT/.venv/bin/python" ]]; then
-  echo "[solar_backdating] ZAsolar venv not found at $ZASOLAR_ROOT/.venv" >&2
-  echo "[solar_backdating] Run: cd $ZASOLAR_ROOT && ./scripts/bootstrap_env.sh" >&2
-  return 1
-fi
-
-# Source main repo activator (handles VIRTUAL_ENV, PATH, XDG_*, etc.)
-# But its PYTHONPATH only puts ZASOLAR_ROOT first; we override below.
+# Source main repo activator (system Python, user-site packages, XDG_*).
+# Its PYTHONPATH only puts ZASOLAR_ROOT first; we override below.
 source "$ZASOLAR_ROOT/scripts/activate_env.sh" >/dev/null
 
 # Enforce subrepo-first PYTHONPATH order:

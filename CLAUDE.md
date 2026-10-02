@@ -12,7 +12,7 @@ prototype lives at `/home/gao/projects/_archive/geid_bbox_legacy_2026-05-05/`
 
 ## Plugin contract
 
-- Shares ZAsolar's `.venv`. No own venv.
+- Uses the system interpreter `/usr/bin/python3`. Packages live in `~/.local` (the user site), not a project virtualenv.
 - Imports `core.*` and `configs/datasets/regions.yaml` from main repo via
   PYTHONPATH (set by `scripts/activate_env.sh`).
 - Subrepo root precedes `$ZASOLAR_ROOT` on `PYTHONPATH`. Main repo's
@@ -22,7 +22,7 @@ prototype lives at `/home/gao/projects/_archive/geid_bbox_legacy_2026-05-05/`
 ## Quick start
 
 ```bash
-source scripts/activate_env.sh           # shared venv + PYTHONPATH
+source scripts/activate_env.sh           # system Python + PYTHONPATH
 ./scripts/link_data_dirs.sh              # one-time symlink to ~/zasolar_data/
 pytest tests/                            # smoke gate (tests/temporal/ + tests/estimator/)
 python scripts/temporal/score_anchor_presence.py --help
@@ -67,7 +67,7 @@ python scripts/temporal/score_anchor_presence.py --help
 
 ## Environment
 
-- Same Python venv as main repo (`ZAsolar/.venv`)
+- Same system Python as the main repo (`/usr/bin/python3`, packages in `~/.local`)
 - CUDA GPU only required if running full presence scoring on long stacks;
   Phase-0 anchor-presence scoring is mostly CPU + I/O bound
 - `ZASOLAR_ROOT` env var overrides default path to main repo

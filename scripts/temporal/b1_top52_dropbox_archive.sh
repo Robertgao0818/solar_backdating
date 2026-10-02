@@ -182,7 +182,7 @@ cmd_release() {
   [[ -f "${STAGING}/BACKUP_OK.json" ]] || { echo "BACKUP_OK missing" >&2; exit 2; }
   [[ -f "${STAGING}/RESTORE_DRILL_OK.json" ]] || { echo "RESTORE_DRILL_OK missing" >&2; exit 2; }
   [[ -f "${STAGING}/RELEASE_OK.json" ]] && { echo "already released"; exit 0; }
-  local py="/home/gao/projects/ZAsolar/.venv/bin/python"
+  local py="${PYTHON:-python3}"
   echo "[release] starting $(date -u +%Y-%m-%dT%H:%M:%SZ); expect hours (1.2M file hash backfill)"
   "${py}" /home/gao/projects/solar_backdating/scripts/temporal/chip_lifecycle.py release \
     --run-dir "${CHIPS}" \

@@ -25,7 +25,7 @@ repo is archived under
 
 This repo expects the ZAsolar main repo to live at
 `/home/gao/projects/ZAsolar/` (override with `ZASOLAR_ROOT` env var). It
-does not have its own venv; it shares main repo's `.venv` and reads
+does not have its own virtualenv; it uses the system interpreter (`/usr/bin/python3`, packages in `~/.local`) and reads
 `core.region_registry`, `core.annotation_loader`, `core.grid_utils`,
 `configs/datasets/regions.yaml` via `PYTHONPATH`. See
 [`SHARED_FROM_ZASOLAR.md`](SHARED_FROM_ZASOLAR.md) for the full dependency
