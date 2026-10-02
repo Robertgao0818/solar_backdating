@@ -23,11 +23,12 @@ CLI:
 
 Design notes:
 
-- Only `*.tif` chip files are ever deleted. Review PNGs, `*.jsonl` sidecars,
-  scan-state JSON, and everything else under `--run-dir` are left alone —
-  PNGs are cheap, human-legible review artifacts (worth keeping for audit),
-  while `.tif` chips are the actual disk hogs (10s-100s of KB each, times
-  millions of anchor/date/zoom combinations).
+- Deletes `*.tif` chip files (the disk hogs) and any companion `*.tfw`
+  world-file next to a deleted tif. Review `*.png`s are NOT deleted here —
+  the pipeline `release-wave` / `cleanup_after_gates` call
+  `rm_hotset_pngs.py` for membership-scoped PNG cleanup after RELEASE_OK
+  (user 2026-08-29: do not keep pngs for audit). `*.jsonl` sidecars and
+  scan-state JSON stay for provenance.
 - A chip missing a provenance record (pre-ISSUE-18 downloads, or a chip whose
   provenance line was lost) gets **backfilled** — hashed and appended as a
   provenance record — *before* deletion, never deleted un-hashed.
@@ -361,6 +362,10 @@ def execute_release(plan: ReleasePlan, *, dry_run: bool) -> ReleaseResult:
     for entry in plan.to_delete:
         entry.path.unlink(missing_ok=True)
         result.deleted.append(entry.path)
+        # Companion world-file (same stem); never invent paths outside the tif dir.
+        tfw = entry.path.with_suffix(".tfw")
+        if tfw.is_file():
+            tfw.unlink(missing_ok=True)
 
     return result
 

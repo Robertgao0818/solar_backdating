@@ -23,7 +23,7 @@ TOP52="${HOME}/zasolar_data/geid_temporal/cape_town_top52_backdating_v1_20260724
 DL_ROOT="${CITYWIDE}/ct05_download_v1"
 PIPELINE_DIR="${CITYWIDE}/pipeline"
 TOP52_STAGING="${TOP52}/ct05_download_v1/archive_staging"
-PY="${ZASOLAR_ROOT:-/home/gao/projects/ZAsolar}/.venv/bin/python"
+PY="${PYTHON:-python3}"
 
 KOKO_SSH="koko@koko-82xm"
 KOKO_CITYWIDE="/home/koko/zasolar_data/geid_temporal/cape_town_citywide_backdating_v1_20260812"
@@ -392,7 +392,7 @@ cmd_prepare_score_lock() {
     --outcomes-csv "${CITYWIDE}/ct05_catalog_v1/merged/anchor_catalog_outcomes.csv" \
     --chip-root "${DL_ROOT}/chips" \
     --expected-anchor-count 90348 \
-    --workers 40 --qps 6 --max-in-flight 40 \
+    --workers 40 --qps 6 --max-in-flight 0 \
     --projected-logical-calls 240000
 }
 
@@ -421,7 +421,7 @@ cmd_score_wave() {
       --merged-wayback-chips-dir "${DL_ROOT}/chips" \
       --audit-dir "${score_root}/primary/audit" \
       --provider Merged --scorer gemini \
-      --anchor-workers 40 --qps 6 --gemini-max-in-flight 40 \
+      --anchor-workers 40 --qps 6 \
       --round1-model gemini-3.1-flash-lite \
       --round2-model gemini-3.1-flash-lite \
       --troubleshooting-model "" \
@@ -445,11 +445,37 @@ cmd_release_wave() {
   local meta; meta="$(wave_meta "${n}")"
   [[ -f "${meta}/BACKUP_OK.json" ]] || die "BACKUP_OK missing (refuse release)"
   [[ -f "${meta}/SCORE_OK.json" ]] || die "SCORE_OK missing (refuse release of unscored wave)"
+  # Idempotent: ad-hoc lane releases used to stamp RELEASE_OK without
+  # deleting shared-hotset tifs (HOTSET_BLOCKED / merge-fail leak). Always
+  # membership-delete this wave's .tif AND .png from $DL_ROOT/chips.
+  if [[ -f "${meta}/RELEASE_OK.json" ]]; then
+    log "wave_${nn} already RELEASE_OK; idempotent shared-hotset tif+png re-release"
+  fi
+  if [[ -f "${meta}/HOTSET_BLOCKED.json" ]]; then
+    log "wave_${nn} HOTSET_BLOCKED present; still releasing shared-hotset tifs by membership"
+  fi
   "${PY}" "${REPO_ROOT}/scripts/temporal/chip_lifecycle.py" release \
     --run-dir "${DL_ROOT}/chips" \
     --anchor-ids-file "${DL_ROOT}/plan/waves/wave_${nn}/wave_${nn}_all.csv" \
     --backup-ok "${meta}/BACKUP_OK.json"
   date -u +"%Y-%m-%dT%H:%M:%SZ" > "${meta}/RELEASE_OK.json"
+  # User 2026-08-29: also membership-delete review pngs (no longer keep for audit).
+  # chip_lifecycle.py deletes tif(+companion tfw); helper covers png (+orphan tfw),
+  # refuses unreleased wave_13, and requires RELEASE_OK+BACKUP_OK.
+  local png_helper=""
+  if [[ -f "${REPO_ROOT}/scripts/temporal/rm_hotset_pngs.py" ]]; then
+    png_helper="${REPO_ROOT}/scripts/temporal/rm_hotset_pngs.py"
+  elif [[ -f "${PIPELINE_DIR}/watch/rm_hotset_pngs.py" ]]; then
+    png_helper="${PIPELINE_DIR}/watch/rm_hotset_pngs.py"
+  fi
+  if [[ -n "${png_helper}" ]]; then
+    "${PY}" "${png_helper}" --hotset "${DL_ROOT}/chips" \
+      --anchor-ids-file "${DL_ROOT}/plan/waves/wave_${nn}/wave_${nn}_all.csv" \
+      --release-ok "${meta}/RELEASE_OK.json" \
+      --backup-ok "${meta}/BACKUP_OK.json"
+  else
+    log "WARN wave_${nn}: rm_hotset_pngs.py missing; hotset pngs not deleted"
+  fi
   log "RELEASE_OK wave_${nn}; df: $(df -h /home | tail -1)"
 }
 

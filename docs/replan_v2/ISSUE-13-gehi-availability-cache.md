@@ -44,6 +44,8 @@ constraints.
       `docs/gehi_catalog_cache.md` "Chip lifecycle"; `tests/temporal/test_chip_lifecycle.py`.
       2026-08-27: `--anchor-ids-file` filter is a path set (`apply_anchor_filter`);
       list membership (`entry in kept`) was O(n²) on citywide waves.
+      2026-09-01: the uncommitted working tree reintroduced `entry in kept`
+      (wave_22 CPU-spin, wchar=0); path-set restored.
 - [x] Timeout/failure of a live refresh degrades gracefully (uses last-good
       cache with a warning, does not hang the run) —
       `test_get_or_fetch_stale_served_on_live_failure` /
