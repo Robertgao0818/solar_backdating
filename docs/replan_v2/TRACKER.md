@@ -6,6 +6,39 @@ Source PRD: [`../install_date_optimization_v2_prd.md`](../install_date_optimizat
 Cape Town run-specific plan: [`RUN-cape-town-backdating-plan-2026-07-24.md`](RUN-cape-town-backdating-plan-2026-07-24.md) ·
 execution tracker: [`RUN-cape-town-backdating-tracker-2026-07-24.md`](RUN-cape-town-backdating-tracker-2026-07-24.md)
 
+**Aerial pre-detector gate review (2026-10-02, cross-project diagnostic):**
+Owner confirmed Cape Town-only scope; paired DINOv2/YOLO30 scores
+cover 26 grids (53,508 chips). No large global adjacent-score gap. Exploratory gaps
+within 4,282 reference-positive chips select DINO 64 / YOLO 301,
+union 302, plus 18 controls. **Owner retired Pro on 2026-10-02: do not
+use it for fresh reviews or current conclusions.** Its old 320 labels
+are historical only. Reviewer default is now `gemini-3.8-flash`, with
+`gemini-flash-3.5-lite` the only allowed alternative; requests and
+responses using Pro are rejected. Same-image Flash recheck completed
+all 320; all successful responses report `gemini-3.8-flash`. Low-tail
+302: 76 present / 225 absent / 1 uncertain; DINO tail: 3 / 61 / 0;
+YOLO tail: 75 / 225 / 1. One output-truncated six-image batch was
+retried with a larger output budget; 53 successful batches reused.
+Current gallery and CSV now show Flash; Pro snapshots are retired.
+Two model-policy tests and result-page type checking pass.
+These remain auxiliary model judgments, not human truth or permission
+to raise thresholds; 137/302 reference overlaps are <1 m². Reference labels,
+model weights, inventory, and production thresholds remain unchanged.
+Data: `~/zasolar_data/geid_temporal/aerial_gate_tail_review_20261002/`.
+Run: [`RUN-aerial-gate-tail-gemini-review-2026-10-02.md`](RUN-aerial-gate-tail-gemini-review-2026-10-02.md).
+
+Delivery review package (2026-09-27): Cape Town / Johannesburg chips beside
+the frozen install-date status. Evening redraw drops Cape Town `cohort=top52`
+and draws 2 roofs from each `scan_status` × area band (`<20`, `20–100`,
+`≥100` m²): 30 + 37 roofs, 571 images, 0 gaps. Archive sha256
+`cacb571876efe6c86931d1c725cdd3abcfa19f93aef43d6532c2a3b94ccca63f`
+(198,997,275 bytes). Builder
+`scripts/temporal/build_delivery_review_package.py`. Package (not in git):
+`~/zasolar_data/geid_temporal/delivery_review_package_20260927/`. Dropbox copy
+replaced the morning archive in
+`~/Dropbox/RA_Solar/Gao/backdating/delivery_review_2026-09-27/`.
+Note: [`RUN-delivery-review-package-2026-09-27.md`](RUN-delivery-review-package-2026-09-27.md).
+
 Cape Town citywide disk pipeline (rev-6.2, 2026-08-26, D7+D9 topology,
 E0+E6 signed D10):
 [`RUN-cape-town-citywide-batch-disk-pipeline-2026-08-18.md`](RUN-cape-town-citywide-batch-disk-pipeline-2026-08-18.md)
@@ -65,6 +98,15 @@ into one backfill sidecar). The `--anchor-ids-file` filter used
 one P-core ~25 min before any hash/delete. Fixed: path-set membership
 in `apply_anchor_filter`; `describe()` now previews 20 backfill lines
 instead of dumping every path (the wave_03 log grew to 54 MB).
+**wave_22 release 2026-09-01:** same O(n²) list membership came back in
+the uncommitted working tree (`plan.to_backfill = [e for e in
+to_backfill if e in kept]`), so `release-wave 22` CPU-spun with
+`wchar=0` after reading ~2.5G (hotset still 37G, no `RELEASE_OK`).
+Restored `apply_anchor_filter` path-set + `describe()` preview 20;
+kept the later `.tfw` companion unlink. Snapshot:
+`pipeline/watch/w22-release-review/`. Re-run `release-wave 22` against
+the restored file; do not kill a process that has already started
+hash/unlink.
 **Scoring rate contract 2026-08-26:** citywide `score-wave` is
 `--anchor-workers 40 --qps 6 --gemini-max-in-flight 40`. QPS 6 is the
 startup ramp (about 6 new HTTP in the first second, so Sub2API can
@@ -80,6 +122,145 @@ Offline tests replay the exact production window
 `[-6849987:-6849986,-13535630:-13535629]` → `[1526:1925, 4034:4415]`.
 Do not restart wave_04; the next wave process picks this up. Write-up:
 [`DATA-a3-wayback-dump-crs-2026-08-28.md`](DATA-a3-wayback-dump-crs-2026-08-28.md).
+**Disk cleanup 2026-08-28:** deleted
+`~/zasolar_data/geid_temporal/a3_canary_20260819` (6.5G, canary
+complete) and `ct05_catalog_v1/routes_new` plus the four E2 lane
+`*.tar.gz` transfer blobs. Did **not** delete `ct05_catalog_v1/merged/`
+(8.3G, live offline TM catalog + `.done`) or `plan/` (anchors roster).
+`/home` 207G→201G used, 36G→43G avail. Remaining pressure is unreleased
+A3 lane copies on waves 01–04, not leftover wave backup tars.
+
+**Literature intake 2026-09-01:** owner-facing problem packet —
+[`../briefs/BRIEF-open-problems-lit-intake-2026-09-01.md`](../briefs/BRIEF-open-problems-lit-intake-2026-09-01.md).
+**Return same day** (A–G verified, 14 papers with mechanism-diff vs §4
+kills): [`../briefs/SRC-open-problems-lit-2026-09-01.md`](../briefs/SRC-open-problems-lit-2026-09-01.md).
+No assembly of sparse-GEHI + unusable-exit + contrast-conditional small-array
+scoring + independent date GT exists; stop a third literature round. Decision memo:
+[`../briefs/BRIEF-lit-intake-next-plan-2026-09-01.md`](../briefs/BRIEF-lit-intake-next-plan-2026-09-01.md)
+— recommend V2: run S2 EIG replay **in parallel with** r4_v2 (zero GPU /
+quota); small-array policy is **conditional usable** (chip usable ∧
+panel–roof colour separable ∧ no same-scale distractor), **not** a
+blanket `<15 m²` layer-kill and **not** a citywide recut; D2 LoRA if
+triggered spends on abstention by default, pairing only vs a
+param-matched frame-wise LoRA control. **Owner leaning 2026-09-02:**
+refuse the area-layer abstain; prove/kill the colour-blob rule with
+stratified human 3-state labels. Sign-off on S2-parallel and the
+conditional-usable wording is still open.
+
+**Citywide Gemini decode + descriptive stats 2026-09-02:** 27-wave
+scoring is complete (`SCORE_OK`+`RELEASE_OK`+rescue all 27;
+90,348/90,348 terminal). Decode used Lite primary + 3.6-high rescue of
+ambiguous + CPT3622 Lite rescore. Same-day alignment recovered the
+Top-52 row-level deliverable from Dropbox
+(`ct_top52_install_dated_20260803_lite_v2.csv`) and joined it 1:1 onto
+the citywide 111,801-anchor set (disjoint union, 0 gaps). Combined after same-day wave_04 rescue un-supersede: dated **73,336
+(65.6%)**, bounded **100,927 (90.3%)**, interval median 37 days,
+`gemini_failed` **0**. The 638 wave_04 "failures" were Lite
+nonmonotonic overwritten by a dead 3.6 rescue (Antigravity 400
+`project_id`); revert + dip-repair recovered 380 dated + 217
+left-censored, 41 stay nonmonotonic. Two Esri-basemap figures: coverage
+class (Muizenberg orange cluster gone) and **H3-7** choropleth of dated
+median year (381 cells / 273 mapped). Row table carries `h3_r7`.
+HTML: `~/zasolar_data/geid_temporal/cape_town_citywide_backdating_v1_20260812/e8_descriptive_20260902/descriptive_stats_2026-09-02-citywide-aligned.html`.
+Same-day citywide CSV/GPKG research preview (111,801 polygons, Top-52
+schema + `h3_r7`/`source_kind`/`wave`/`cohort`; all structural gates PASS):
+local `deliverable_2026-09-02/`, Dropbox
+`RA_Solar/Gao/backdating/ct_citywide_install_dated_2026-09-02_research_preview/`.
+Write-up:
+[`DATA-cape-town-citywide-gemini-descriptive-2026-09-02.md`](DATA-cape-town-citywide-gemini-descriptive-2026-09-02.md).
+Coverage + polygon table, not E8 multi-model panel review and not an
+accuracy claim.
+
+**Citywide visit sequences 2026-09-23:** the frozen 111,801-row preview
+stays at its 2026-09-02 hashes. A sibling table adds the per-visit
+sequence for the 90,348 `citywide_27wave` anchors (1,291,477 evidence
+frames; repaired 0/1/u counts and `latest_absent_date` match the
+preview on every row). 13,157 anchors / 52,212 dates differ between the
+raw model code and the dip-repaired code the interval counts use.
+Top-52's 21,453 rows are `missing_scan_state` (the `/tmp/ct52_interval_states…`
+JSON is not in the tree). The same sequences are also a 101-column
+anchor×date panel (2019-01-15 … 2025-01-30; blank = not imaged, `u` =
+unusable). Repaired and raw panels differ in 52,212 cells. Local:
+`sequences_20260923/`. Collaborator package for the 90,348 27-wave
+roofs only (long visits + roof-level monotonicity and k=1/2/3
+confirmation; not the 101-column sheet):
+`deliverable_27wave_20260923/`. Same-rule date×installed panel as JHB
+(`ct_27wave_install_panel.csv`, 5,061,495 rows; Top-52 excluded)
+plus `scan_states/ct_27wave_scan_states.tar.zst` (90,348 merged JSON):
+Dropbox `presence_panels/cape_town/`. Write-up:
+[`DATA-cape-town-presence-sequences-2026-09-23.md`](DATA-cape-town-presence-sequences-2026-09-23.md).
+
+**Municipal true-date layers 2026-09-06** (collaborator: dating precision
+not enough; catalog other ways to build the panel):
+[`../briefs/SRC-municipal-layers-2026-09-06.md`](../briefs/SRC-municipal-layers-2026-09-06.md)
++ decision memo
+[`../briefs/BRIEF-municipal-true-date-panel-2026-09-06.md`](../briefs/BRIEF-municipal-true-date-panel-2026-09-06.md)
++ HTML briefing
+[`../briefs/BRIEF-municipal-true-date-panel-2026-09-06.html`](../briefs/BRIEF-municipal-true-date-panel-2026-09-06.html).
+Two-set CSVs: aerial
+[`../briefs/_muni_catalog/aerial_city_summary.csv`](../briefs/_muni_catalog/aerial_city_summary.csv)
+/
+[`../briefs/_muni_catalog/aerial_layers.csv`](../briefs/_muni_catalog/aerial_layers.csv)
+(110 layers); satellite
+[`../briefs/_muni_catalog/satellite_layers.csv`](../briefs/_muni_catalog/satellite_layers.csv).
+Live REST: Cape Town almost-annual 8 cm 2012–2022 and 5 cm 2025–26 (2023Jan
+is NGI 25 cm; 2024 is ~30% metro); Johannesburg 15 cm 2009–2023 plus coarser
+2000–06; eThekwini 10 cm 2016/18/19/20/22 (847k dated building footprints);
+Ekurhuleni 10 cm 2013/18/20; Tshwane 10 cm 2018+2023 on `e-gis001` (the
+`gis.tshwane.gov.za` host is 503); NMB via resource-proxy (1997–2022, 5 cm
+from 2017). Buffalo / Mangaung / Msunduzi: no live municipal ImageServer.
+NGI 0.25 m does not beat GEHI z19. Recommend V2 probe
+(CT-11 100 anchors × CoCT 2018/2022/2025, census detector, no Gemini) —
+unsigned.
+**Satellite H3-7 rollup 2026-09-06** (reuse catalogs, no live GEHI):
+[`../briefs/SRC-satellite-layers-h3r7-2026-09-06.md`](../briefs/SRC-satellite-layers-h3r7-2026-09-06.md).
+CT 381 cells: Google Earth TM z19 median **107** bbox-complete dates/anchor
+(2009–2025), Wayback z19 median **9**; z18 is fallback; **z20 not in the
+citywide catalog**. JHB 83 cells: TM 2019+ window only; Wayback z19 back to
+2012. Other metros had no GEHI catalog. **Live GEHI `info` 2026-09-13 done**
+(2,296 / 2,296, 0 fail): all **1,148** unique Vexcel-covered H3-7 centroids
+× {TM, Wayback} × z19. Independent SRC
+[`../briefs/SRC-satellite-vexcel-h3r7-gehi-info-2026-09-13.md`](../briefs/SRC-satellite-vexcel-h3r7-gehi-info-2026-09-13.md).
+TM median dates: CT **113**, JHB **90** (2009–2026, not the old 2019+ clip),
+eThekwini 89.5, NMB 91, Buffalo 107, Ekurhuleni spill 129, Tshwane **49**,
+Mangaung 51, Msunduzi 45. Wayback median 9–13 in large metros, 1–2 in
+Buffalo / Mangaung / Msunduzi. Centroid `info`, not bbox-complete. Do not
+grid cadastral hinterland.
+**Availability pack 2026-09-14** (year class + 1–2 frame flags):
+[`../briefs/BRIEF-satellite-availability-2026-09-14.html`](../briefs/BRIEF-satellite-availability-2026-09-14.html)
++ fig1 heatmap
+[`../briefs/FIG-satellite-year-heatmap-2026-09-14.html`](../briefs/FIG-satellite-year-heatmap-2026-09-14.html)
++ fig2 three-layer
+[`../briefs/FIG-layer-availability-2026-09-14.html`](../briefs/FIG-layer-availability-2026-09-14.html).
+TM `sparse_1_2` (at most 2 dates/cell and under half of Vexcel cells): **9** city-years,
+led by JHB 2023 (32/74, 1.00) and Ekurhuleni 2023 (4/23); Wayback + CoJ
+aerial fill JHB 2023 as a year-panel, not a day interval. Write-up
+[`DATA-satellite-vexcel-h3r7-availability-2026-09-14.md`](DATA-satellite-vexcel-h3r7-availability-2026-09-14.md).
+**H3-7 spatial coverage map 2026-09-14:**
+[`../briefs/FIG-h3-spatial-coverage-2026-09-14.html`](../briefs/FIG-h3-spatial-coverage-2026-09-14.html)
+joins urban-centre cells to Vexcel + TM dates on the same `h3_index`.
+JHB urban-centre gap **191 / 264**; of 74 Vexcel cells only **32** have TM 2023.
+CSV [`../briefs/_muni_catalog/satellite_vexcel_h3r7_spatial.csv`](../briefs/_muni_catalog/satellite_vexcel_h3r7_spatial.csv).
+**Vexcel municipality metadata 2026-09-06** (live API, H3-7 vs geoBoundaries
+polygons, 1% overlap):
+[`../briefs/SRC-vexcel-layers-h3r7-2026-09-06.md`](../briefs/SRC-vexcel-layers-h3r7-2026-09-06.md).
+**12** urban `final-ortho` collections, not the 7 in the 2026-08-12 file.
+Cape Town **is** covered: five `za-wc-*-2024` tiles, **367 / 603** metro
+H3-7 (60.9%), **278 / 381** census cells (73.0%), ~6.2 cm, 2024-03-18 …
+2024-04-12 — spatial partitions of one season, not five years. JHB 74/350
+(21.1%, Sandton/Soweto 404); Ekurhuleni has no own collection (23-cell
+JHB spill). One vintage per city; not a year panel.
+**Vs GHSL 2020 Urban Centre (城区, 2026-09-06):** CT **93%**, NMB **100%**,
+Msunduzi 94%, eThekwini 79%, Mangaung 72%, Buffalo 67%, Tshwane 48%,
+**JHB 27%**, Ekurhuleni 7%. CoJ is already 68% urban-centre land — the
+21% metro rate is not hinterland. Table:
+[`../briefs/SRC-vexcel-layers-h3r7-2026-09-06.md`](../briefs/SRC-vexcel-layers-h3r7-2026-09-06.md) §2.1.
+**Layer-metadata reading pack 2026-09-15** (no new probe; 09-06/13/14
+numbers re-checked against CSV): Dropbox
+`RA_Solar/Gao/backdating/sa_layer_metadata_2026-09-15/` · local
+`~/zasolar_data/geid_temporal/sa_layer_metadata_2026-09-15/` · start at
+pack `README.md`. Write-up
+[`DATA-sa-layer-metadata-pack-2026-09-15.md`](DATA-sa-layer-metadata-pack-2026-09-15.md).
 
 **Goal:** reproducible-and-bounded-accurate install dates via five layered
 phases — deterministic decoder (P0), provenance + verdict store (P1), external
@@ -215,6 +396,25 @@ join key, coverage-class semantics), and a new self-contained
 `descriptive_stats_2026-07-18-run3.html` added to the deliverable (coverage/
 confidence, temporal, spatial, area distributions). csv/gpkg untouched
 (sha256 verified unchanged).
+
+Presence-sequence extract (2026-09-23): raw per-frame 0/1 for the same
+41,393 RUN 3 anchors, for bracket robustness checks. Frozen handover
+files untouched. Output
+`deliverable_run3_sequences_2026-09-23/` (polygon csv/gpkg plus
+311,195-row `presence_observations`). Replay against
+`run3_v2/intervals/install_intervals_all.csv` matches on every anchor
+with the 2026-08-13 post-census fence turned off — that fence was not
+part of the 2026-07-18 interval build, so published evidence includes
+the post-census reference frame (`seq_post_census`).
+[`DATA-jhb-run3-presence-sequences-2026-09-23.md`](DATA-jhb-run3-presence-sequences-2026-09-23.md).
+Same day, `jhb_run3_install_panel.csv` expands that extract to one row
+per installation per catalog date (1,174,706 rows). Outside a published
+bracket the 0/1 is implied by monotonicity; 2,314 in-bracket catalog
+dates and all undated anchors stay blank. Delivered, with a Chinese
+README, to `Dropbox/RA_Solar/Gao/backdating/presence_panels/johannesburg/`
+(sha256 `b762530e…fff1b2`). Raw RUN 3 scan states are
+`johannesburg/scan_states/jhb_run3_scan_states.tar` (41,393 JSON,
+sha256 `a6d32c45…768375`). `cape_town/` is reserved and empty.
 
 Slice 26 note (2026-07-10): three-agent audit confirmed the scan's
 `catalog_max_date` is a global static (2025-12-31) never clipped by census
@@ -421,3 +621,24 @@ graph LR
     I7 --> I21
     I20 --> I22
 ```
+
+
+- 2026-10-02：补核当前 Flash 认定的三张 DINO 低分阳性边角图：三个参考安装均由其他高分窗口完整覆盖，按断点阈值过滤后未覆盖面积均为 0；可跳过这三个重复窗口，但尚未证明下游预测轮廓完全不变。证据与小安装 Rule A 限制见 [RUN](RUN-aerial-gate-tail-gemini-review-2026-10-02.md) 的“三张阳性低分边角图”节。
+
+
+- 2026-10-02：负责人决定航拍前置门沿 DINO 继续。全 4,010 个参考对象完整覆盖审计完成；0.45 为下一轮实验候选，生成 53,508 张逐图清单，保留 8,890、跳过 44,618（83.39%）。该收益有条件：4 个疑似误圈参考对象仍存在覆盖损失，未清理标签；保持全部原参考覆盖的诊断上限为 0.025218529627（跳过 54.02%）。超过 0.463084 将新增 CPT3468/380 的整对象损失；不直接升到 0.5。未锁定生产阈值，未测实际耗时或独立留出召回；详见 [RUN](RUN-aerial-gate-tail-gemini-review-2026-10-02.md) 的“DINO 阈值上推”节。
+
+
+- 2026-10-02 阈值确认：负责人人工确认五个对象中只有 CPT3468/380 有板，选定本轮 DINO 阈值 **0.45**；此前“0.45 候选 / 四个疑似对象待核验”的状态已被此决策覆盖。四个人工否定对象单独保存；剩余 4,006 个参考对象无新增覆盖损失，380 的 0.463084 窗口会保留。决策文件 `dino_threshold_045.json`，保留 8,890、跳过 44,618（83.39%）；详见 [RUN](RUN-aerial-gate-tail-gemini-review-2026-10-02.md) 最新人工核验节。范围仅为 26 格实验，未冒充 30 格正式锁定或独立留出验收。
+
+- 2026-10-02：完成 CT 表 C 数量召回／误报文献对照。核对主仓库汇总与逐格 CSV：cov50 85.63% 是 GT 子阵列覆盖召回，面积精确率 80.05% 不能转换成数量 FP；独立留出 cov50 为 82.9%。优先建议新增独立数量审核，随后在保护真小安装召回的条件下验证现有分类器对车辆／地面标识残留负例的改进。尚未测得数量 FP、未承诺增益、未改生产或前置门决策。完整证据与限定条件见 [文献对照简报](../briefs/BRIEF-ct-count-recall-fp-literature-2026-10-02.md)。
+
+- 2026-10-02：修正文献对照的展示入口。原 `.canvas.tsx` 在当前侧边文件编辑器显示源码；另生成可由浏览器直接渲染的[独立 HTML 对照](../briefs/BRIEF-ct-count-recall-fp-literature-2026-10-02.html)，保留评价单位筛选与完整报告展开，研究结论不变。
+
+- 2026-10-02：完成[CT 阵列群与 SAM3 研究决策简报](../briefs/BRIEF-ct-array-group-sam3-2026-10-02.md)。负责人已确认按“阵列群：归并明显属于同一片安装的碎片”计数；保留内部缝隙，不默认整屋顶归一群。推荐版本 B：先 12 例诊断，满足预设条件再扩到 60 例，分开评价归组、边界与车辆／标识身份误报。只读核验六格本地航拍与预测、四格九月重跑中间结果及 Dropbox 备份目录；起步无需全城恢复。样本量、预算与验收门槛均为建议假设，版本选择待负责人拍板；未安装或运行 SAM3、未恢复备份、未改变检测生产或 DINO 前置门决策。未来检测实现归 ZAsolar 主仓库。
+
+- 2026-10-02 后续决策（覆盖上条待拍板状态）：负责人选择版本 B，要求不投入本人标注／复核人时；改用几何自动选样与 Gemini + Codex 独立多模态核验，保留分歧而非强制多数票。12 例已完成原图及基准轮廓判断；共同建议支持 5 对局部碎片归组，61 个裁剪内轮廓变 56 群，预测并集面积未变。复用本机已缓存 SAM3 和 transformers，离线运行 22 次文字／自动框推理全部成功，未安装或下载模型。方法匿名的轮廓比较进行中，暂不扩到 60 例；这属于模型共识诊断，未测真实数量精度或外部阴影精度。详见[运行记录](RUN-ct-array-group-sam3-probe-2026-10-02.md)；生产、DINO 0.45 与交付库存均未改变。
+
+- 2026-10-02 自动诊断收尾（覆盖上条比较进行中状态）：10/10 匿名轮廓比较完成。部分案例双方更偏好 SAM3 文字轮廓，但新增疑似集热器／天窗等对象、身份分歧及计数语义漂移仍未排除；按止损规则不将无限制 SAM3 输出扩到 60 例。5 对归组建议只保留为诊断候选，不批量改计数；未确证车辆／标识残留误报或外部阴影，相关专项仍未验证。图像、原始意见、分歧和来源映射均保留，另有可渲染 HTML 图集。负责人无标注／复核投入；未运行受限精修组合流程，未测真实数量 FP／召回，生产不变。详见[运行记录](RUN-ct-array-group-sam3-probe-2026-10-02.md)的阶段决策。
+
+- 2026-10-02 负责人图集反馈：文字 SAM3 轮廓总体更 sharp；文字加自动框在 07 新增疑似水热器、12 未出现同类新增。已明确止损只针对无限制接纳全部输出，不否定边界精修；下一候选以文字提示收紧已有对象、保留群编号，自动框作对照，新增对象另核验。正示例框不是输出范围限制；反馈不升级为新增物体身份真值。受限方案尚未运行，生产不变，详见 [RUN](RUN-ct-array-group-sam3-probe-2026-10-02.md) 的负责人观察。
