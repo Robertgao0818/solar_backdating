@@ -341,36 +341,54 @@ def run_gates(rows: list[dict[str, Any]], expected_count: int) -> dict[str, Any]
     }
 
 
-def write_csv(rows: list[dict[str, Any]], path: Path) -> None:
+GPKG_INT_FIELDS = {
+    "source_feature_id",
+    "n_observations",
+    "n_absent",
+    "n_present",
+    "n_unusable",
+    "n_rounds",
+    "left_censored",
+    "census_bound",
+}
+GPKG_FLOAT_FIELDS = {
+    "centroid_lon",
+    "centroid_lat",
+    "area_m2",
+    "confidence",
+    "review_extent_m",
+}
+
+
+def gpkg_field_type(field: str) -> str:
+    if field in GPKG_INT_FIELDS:
+        return "int"
+    if field in GPKG_FLOAT_FIELDS:
+        return "float"
+    return "str"
+
+
+def write_csv(
+    rows: list[dict[str, Any]],
+    path: Path,
+    fields: list[str] | None = None,
+) -> None:
+    fieldnames = list(fields or CSV_FIELDS)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows({field: row[field] for field in CSV_FIELDS} for row in rows)
+        writer.writerows({field: row[field] for field in fieldnames} for row in rows)
 
 
-def write_gpkg(rows: list[dict[str, Any]], path: Path) -> None:
+def write_gpkg(
+    rows: list[dict[str, Any]],
+    path: Path,
+    fields: list[str] | None = None,
+) -> None:
+    fieldnames = list(fields or CSV_FIELDS)
     schema = {
         "geometry": "Polygon",
-        "properties": {
-            field: (
-                "int"
-                if field
-                in {
-                    "source_feature_id",
-                    "n_observations",
-                    "n_absent",
-                    "n_present",
-                    "n_unusable",
-                    "n_rounds",
-                    "left_censored",
-                    "census_bound",
-                }
-                else "float"
-                if field in {"centroid_lon", "centroid_lat", "area_m2", "confidence", "review_extent_m"}
-                else "str"
-            )
-            for field in CSV_FIELDS
-        },
+        "properties": {field: gpkg_field_type(field) for field in fieldnames},
     }
     with fiona.open(
         path,
@@ -384,7 +402,7 @@ def write_gpkg(rows: list[dict[str, Any]], path: Path) -> None:
             dst.write(
                 {
                     "geometry": row["_geometry"],
-                    "properties": {field: row[field] for field in CSV_FIELDS},
+                    "properties": {field: row[field] for field in fieldnames},
                 }
             )
 

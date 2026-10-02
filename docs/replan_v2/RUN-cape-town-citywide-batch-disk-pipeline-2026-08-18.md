@@ -5,7 +5,7 @@
 | 文档 ID | `RUN-cape-town-citywide-batch-disk-pipeline-2026-08-18` |
 | 版本 | **rev-6.2**（2026-08-26，D7 拓扑锁定；正文 rev-6 仍是磁盘方案母本） |
 |  supersede | Grok rev-5 草稿（`/tmp/grok-1000/grok-design-doc-ad849d97.md`，不入仓） |
-| Status | **执行中 / E0+E6 SIGNED 2026-08-26（D10）**（B0✓ E2✓ B1 BACKUP_OK+RESTORE_DRILL_OK，RELEASE 未做；A3 放量 D6；拓扑 D7+D9；见 §2.1） |
+| Status | **27-wave SCORE+BACKUP+RELEASE+rescue ALL_DONE 2026-09-02**（E0+E6 SIGNED D10；B0✓ E2✓ B1 RELEASE_OK；A3 放量 D6；拓扑 D7+D9）。Decode+描述性统计：[`DATA-cape-town-citywide-gemini-descriptive-2026-09-02.md`](DATA-cape-town-citywide-gemini-descriptive-2026-09-02.md)。E8 GPKG/面板核验仍未做。 |
 | 上位 | [`RUN-cape-town-citywide-legE-production-plan-2026-08-12.md`](RUN-cape-town-citywide-legE-production-plan-2026-08-12.md) · [`RUN-cape-town-citywide-backdating-delivery-plan-2026-08-12.md`](RUN-cape-town-citywide-backdating-delivery-plan-2026-08-12.md) |
 | 治理 | [`OWNER_DECISIONS.md`](OWNER_DECISIONS.md)：E0/E6 **机器 token 行**（见 §Governance） |
 | 范围外 | GPU / DINOv3 student scorer / RunPod 推理 |
@@ -350,10 +350,11 @@ token 未签前的 pre-flight 全部完成；以下相对 rev-6 正文的偏差�
 | A2 | **DONE**：roster 由 remaining anchors 派生（source_grid 排序去重）；`plan_ct52_production_waves.py --no-canary` 新增；**27 波 × 3500**（grid 聚簇，A4 顺带落地）；schema `ct_citywide_download_wave_plan_v2` |
 | A3 预备 | **DONE**：`--route-weights` 已实现（稳定 slot 展开，home:koko=2:2:1，±5% 断言）；`filter_wave_candidates.py`；**wave_01 分片就绪**：128,718 candidates（home_v4/v6 各 ~40% + TM3 3-lane 计划，koko_v4 ~20%），域外断言通过 |
 | 编排器 | `run_ct_citywide_disk_pipeline.sh`：gate / plan-waves / plan-wave-shards / launch-wave / merge-wave（2-wave+水线闸门、rsync `--remove-source-files`、path 改写、membership 审计）/ qa-wave（≥99% admit 门）/ archive-wave（rclone 单卷 + BACKUP_OK）/ prepare-score-lock / score-wave（staged-only）/ release-wave（BACKUP_OK+SCORE_OK 双哨兵 + `--anchor-ids-file` 子集删除） |
-| PR3 | **DONE**：`chip_lifecycle release` 非 dry-run 必须 `--backup-ok`；`--anchor-ids-file` 子集删除。**2026-08-27 hotfix**：`entry in kept` 对 list 做 O(n²) 扫描，wave_03 空转 ~25 min 后仍删完 154,577 张（`RELEASE_OK` 11:45:15Z）；改为 path-set 过滤，`describe()` 只预览 20 条 backfill |
+| PR3 | **DONE**：`chip_lifecycle release` 非 dry-run 必须 `--backup-ok`；`--anchor-ids-file` 子集删除。**2026-08-27 hotfix**：`entry in kept` 对 list 做 O(n²) 扫描，wave_03 空转 ~25 min 后仍删完 154,577 张（`RELEASE_OK` 11:45:15Z）；改为 path-set 过滤，`describe()` 只预览 20 条 backfill。**2026-09-01 回归**：未提交工作区把 `apply_anchor_filter` 改回 `entry in kept`，wave_22 再次 CPU 空转（`wchar=0`，热集仍 37G）；已恢复 path-set，保留 `.tfw` companion unlink |
 | box（A1） | tailnet 上发现 **rog-1**（100.111.51.77，离线）与新机 **bot**（100.86.6.50，在线但 SSH 未授权常见用户）。等 owner 给 bot 的 SSH 用户/授权后填槽 + 403 smoke |
 | 下载吞吐实测基准 | wave_01：128,718 candidates；home 单 route ≈1 chip/s、koko 轻载 ≈0.5 chip/s → **~14–15h/波**（与 S0 日历一致） |
 | Wayback dump CRS | **FIXED 2026-08-28**：Wayback `.jgw` 是 EPSG:3857 米。wave_03 上 99.9% Wayback 切图失败、逐张回退（TM 0 失败）。stitch 按单位推断 CRS，crop 先投影。wave_04 不热切。见 [`DATA-a3-wayback-dump-crs-2026-08-28.md`](DATA-a3-wayback-dump-crs-2026-08-28.md) |
+| 27-wave Gemini + 描述性统计 | **DONE 2026-09-02**：90,348/90,348 terminal；Lite + 3.6-high rescue + CPT3622 rescore。合计 Top-52：dated 72,956 / 111,801（65.3%），有界 89.9%。wave_04 独占全部 638 个 `gemini_failed`。见 [`DATA-cape-town-citywide-gemini-descriptive-2026-09-02.md`](DATA-cape-town-citywide-gemini-descriptive-2026-09-02.md) |
 
 **token 到位后的首个动作序列**：`b1 drill` → `launch-wave 1`（home×2+TM3、koko_v4）→ `b1 --release`（lifecycle 全量 hash，tmux 数小时）→ 波流水线双缓冲启动。
 
