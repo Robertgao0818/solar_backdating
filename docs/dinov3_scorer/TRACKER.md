@@ -144,6 +144,34 @@ its no-answer-change baseline runs both pipelines through the Phase-0 decoder
 
 ## Progress log
 
+- 2026-09-01 — **Literature return archived + next-plan brief** (does not
+  reopen A/A′/A″/B or lift the backbone veto). Intake:
+  [`../briefs/BRIEF-open-problems-lit-intake-2026-09-01.md`](../briefs/BRIEF-open-problems-lit-intake-2026-09-01.md).
+  Verified A–G cluster:
+  [`../briefs/SRC-open-problems-lit-2026-09-01.md`](../briefs/SRC-open-problems-lit-2026-09-01.md).
+  Decision memo:
+  [`../briefs/BRIEF-lit-intake-next-plan-2026-09-01.md`](../briefs/BRIEF-lit-intake-next-plan-2026-09-01.md).
+  Literature backs a **pixel-count warning** (Lechner 2009 ~11 px / 75%
+  for texture classification), not a blanket `<15 m²` layer-kill.
+  Owner leaning 2026-09-02: small arrays are a colour-blob task; 10 px
+  is enough only on usable, high-contrast, distractor-free chips; 0.56
+  recall is student-vs-teacher present, unstratified by contrast.
+  SelectiveNet-style reject remains a head problem. Does **not** license
+  Path B revival, super-res, a new ViT, or A″ pairing. Cheapest remaining
+  method slot = S2 EIG vintage replay (already specified in Leg-S). If D2
+  LoRA triggers, pairing needs a param-matched frame-wise LoRA control
+  (PeftCD only shows LoRA > frozen Siamese, not LoRA-Siamese > frame-wise
+  presence).
+
+- 2026-09-01 — **Literature-intake brief for a new web search** (does not
+  reopen A/A′/A″/B or lift the backbone veto). Packet:
+  [`../briefs/BRIEF-open-problems-lit-intake-2026-09-01.md`](../briefs/BRIEF-open-problems-lit-intake-2026-09-01.md).
+  Search target is mechanisms still open after the killed recipes (sparse
+  irregular interval decode, three-state unusable, <10 px information
+  limit, non-pooled sequence KD, independent GT, active vintage
+  selection, LoRA-only pairing). Returns belong in a new `SRC-*`, not
+  this tracker.
+
 - 2026-08-13 — **R4 v2 / H1 prereg frozen; quality-supervision reconstruction
   implemented in `run_r4_training.py` (attempt_id `r4_v2`).** Diagnosis:
   [DATA-r4-v1-quality-head-diagnosis-2026-08-13](DATA-r4-v1-quality-head-diagnosis-2026-08-13.md)

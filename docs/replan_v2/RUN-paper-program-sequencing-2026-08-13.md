@@ -6,6 +6,13 @@ commit；1-B 缺 GPT/Grok 通道未派发，见
 [DATA-s3-api-availability-2026-08-13](DATA-s3-api-availability-2026-08-13.md)；
 1-C 同机 decode+deliverable 双跑 GREEN，见
 [DATA-legR-r1-day1-2026-08-13](DATA-legR-r1-day1-2026-08-13.md)）
+
+**2026-09-01 literature return（未改 D1 签字，待 owner 两问）：**
+A–G 核验见 [`../briefs/SRC-open-problems-lit-2026-09-01.md`](../briefs/SRC-open-problems-lit-2026-09-01.md)；
+决策备忘录 [`../briefs/BRIEF-lit-intake-next-plan-2026-09-01.md`](../briefs/BRIEF-lit-intake-next-plan-2026-09-01.md)
+建议把 Wave 2 的 S2 离线 EIG **提前与 Wave 1-A 并行**（零 GPU/配额，不挡 r4_v2）。
+小阵政策 2026-09-02 owner leaning：不按面积整层弃权，改成「能看成色块再打分」；
+已交付全城表不回切。第三轮文献停。未签字前不派发 S2。
 上游决策依据：[`../briefs/BRIEF-student-vs-registration-2026-08-13.md`](../briefs/BRIEF-student-vs-registration-2026-08-13.md)
 （结论：owner 署名回报 = 模型/数据集论文；顺序 = V1+R4 → S3 并列 →
 S2 → S4 最后）
