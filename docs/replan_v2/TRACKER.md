@@ -63,7 +63,10 @@ unscored. A development-grid smoke on 2026-10-06 sent four T3 and four T2 calls.
 Logged T3 bodies have three images and T2 bodies have the same candidate
 and aerial with no satellite hash. Returned modelVersion is
 `gemini-3.1-flash-lite`. SCORE_DONE was not written for the smoke.
-Session `v2_10grid_score` is scoring the full window at concurrency 8.
+Session `v2_10grid_score` is scoring the full window. The steady-state
+ceiling was raised from 8 to 40 after one gateway account was taking the
+whole load. The start rate stays QPS 6, so the first second does not send
+40 requests. Already stored successes are not resent.
 51,208 dates are sendable and the 4 near-white chips are non-calls.
 Development versus evaluation interval counts are not written yet
 because the full ledger is still open. Results must not claim native-resolution

@@ -63,9 +63,10 @@ AERIAL_ROOT = Path.home() / "zasolar_data/tiles/cape_town/aerial_2025"
 RUN_ID = "reference_fulltimeline_lite_10grid_20261004"
 QPS = 6
 TECH_IN_FLIGHT = 12
-# The account that actually serves this model allows 10 concurrent requests.
-# A larger cap waits out the gateway slot and returns HTTP 429.
-SCORE_IN_FLIGHT = 8
+# Steady-state ceiling. QPS is the ramp: the first second starts about 6
+# requests, not this many at once. Sub2API balances each request onto an
+# account; a same-instant dump fills one account's concurrency slots.
+SCORE_IN_FLIGHT = 40
 # One pause used to leave every remaining date queued behind the stop flag.
 # A short chunk is cancelled and retried after the quota sleep.
 SCORE_CHUNK = 64

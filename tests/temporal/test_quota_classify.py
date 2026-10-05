@@ -8,6 +8,7 @@ import pytest
 from scripts.temporal.quota_control import QuotaCircuitBreaker, QuotaPaused, QuotaPolicy, classify_upstream
 from scripts.temporal import run_reference_fulltimeline_scan as scan
 from scripts.temporal.run_reference_fulltimeline_scan import (
+    QPS,
     SCORE_IN_FLIGHT,
     WINDOW_ID,
     RawLog,
@@ -53,8 +54,11 @@ def test_upstream_quota_429_still_opens_the_pause() -> None:
     assert classify_upstream(429, body) == "upstream_429_resource_exhausted"
 
 
-def test_score_concurrency_stays_within_one_account_slot() -> None:
-    assert SCORE_IN_FLIGHT <= 8
+def test_score_concurrency_ramps_at_qps_before_the_ceiling() -> None:
+    """Steady state may use the pool. The first second must stay at QPS."""
+
+    assert QPS == 6
+    assert SCORE_IN_FLIGHT == 40
 
 
 def test_default_two_pool_503s_pause(tmp_path: Path) -> None:
