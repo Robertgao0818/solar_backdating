@@ -1116,3 +1116,63 @@ def test_timeline_gaps_are_not_absent_and_fingerprint_has_no_date() -> None:
     )
     assert "2019" not in fingerprint
     assert len(fingerprint) == 64
+
+
+def test_role_summary_writes_zero_for_a_status_the_role_does_not_have(tmp_path) -> None:
+    """An empty cell is not a zero. Development had no left-censored roof."""
+
+    import csv
+
+    from scripts.temporal.score_v2_fulltimeline import write_products
+
+    def anchor(anchor_id: str, role: str) -> dict[str, str]:
+        return {
+            "anchor_id": anchor_id,
+            "grid_id": "CPT2304" if role == "development" else "CPT1956",
+            "grid_role": role,
+            "paired": "0",
+            "census_date": "2025-01-31",
+            "census_date_precision": "policy_census_bound",
+        }
+
+    def call(anchor_id: str, day: str, verdict: str) -> dict[str, object]:
+        return {
+            "arm": "t3",
+            "stage": "first_pass",
+            "call_status": "ok",
+            "verdict": verdict,
+            "anchor_id": anchor_id,
+            "capture_date": day,
+            "n_images": 3,
+            "model_version": MODEL_ALIAS,
+            "candidate_sha256": "candidate",
+            "aerial_sha256": "aerial",
+            "satellite_sha256": "satellite",
+            "satellite_date": "2025-03-30",
+        }
+
+    plan = {
+        "anchors": [anchor("dev", "development"), anchor("ev", "evaluation")],
+        "candidates": [
+            {"anchor_id": "dev", "capture_date": "2019-02-28", "callable": "1"},
+            {"anchor_id": "ev", "capture_date": "2019-02-28", "callable": "1"},
+            {"anchor_id": "ev", "capture_date": "2020-02-28", "callable": "1"},
+        ],
+    }
+    raw_rows = [
+        call("dev", "2019-02-28", "absent"),
+        call("ev", "2019-02-28", "absent"),
+        call("ev", "2020-02-28", "present"),
+    ]
+    write_products(tmp_path, plan, raw_rows)
+    with (tmp_path / "results" / "interval_summary_by_role.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    by_role = {row["grid_role"]: row for row in rows}
+    assert by_role["development"]["n_roofs"] == "1"
+    assert by_role["development"]["undated"] == "1"
+    assert by_role["development"]["left_censored"] == "0"
+    assert by_role["development"]["bounded"] == "0"
+    assert by_role["development"]["conflict_pending_review"] == "0"
+    assert by_role["evaluation"]["bounded"] == "1"
+    assert by_role["evaluation"]["left_censored"] == "0"
+    assert by_role["evaluation"]["undated"] == "0"

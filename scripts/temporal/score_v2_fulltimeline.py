@@ -655,10 +655,28 @@ def write_products(
         role = str(row.get("grid_role") or "")
         summary[role]["n"] += 1
         summary[role][str(row.get("status") or "")] += 1
+    # A role with no roofs in a status must still show 0. An empty CSV cell
+    # is read as a missing count, and the development grid had no left-censored roof.
+    role_status_fields = ["bounded", "conflict_pending_review", "left_censored", "undated"]
+    extra_statuses = sorted(
+        {
+            key
+            for counts in summary.values()
+            for key in counts
+            if key not in {"n", *role_status_fields}
+        }
+    )
+    role_status_fields.extend(extra_statuses)
     summary_rows = []
     for role in ("development", "evaluation"):
         counts = summary[role]
-        summary_rows.append({"grid_role": role, "n_roofs": counts["n"], **{key: counts[key] for key in sorted(counts) if key != "n"}})
+        summary_rows.append(
+            {
+                "grid_role": role,
+                "n_roofs": counts["n"],
+                **{key: counts[key] for key in role_status_fields},
+            }
+        )
     results = pack / "results"
     _write_csv(
         results / "t3_status.csv",
@@ -721,7 +739,7 @@ def write_products(
         "labels_modified",
     ]
     _write_csv(results / "intervals_t3.csv", intervals, interval_fields)
-    role_fields = ["grid_role", "n_roofs"] + sorted({key for row in summary_rows for key in row if key not in {"grid_role", "n_roofs"}})
+    role_fields = ["grid_role", "n_roofs", *role_status_fields]
     _write_csv(results / "interval_summary_by_role.csv", summary_rows, role_fields)
     effect = [row for row in paired_rows if str(row["in_effect_comparison"]) == "1"]
     candidate_agreement = (
