@@ -6,6 +6,116 @@ Source PRD: [`../install_date_optimization_v2_prd.md`](../install_date_optimizat
 Cape Town run-specific plan: [`RUN-cape-town-backdating-plan-2026-07-24.md`](RUN-cape-town-backdating-plan-2026-07-24.md) ·
 execution tracker: [`RUN-cape-town-backdating-tracker-2026-07-24.md`](RUN-cape-town-backdating-tracker-2026-07-24.md)
 
+**Full-timeline v2 ten-grid image pack (2026-10-05, images complete):**
+Both download processes exited 0. The pack is
+`~/zasolar_data/geid_temporal/reference_fulltimeline_v2_10grid_20261005/`.
+Census aerials: 1,114 non-empty GeoTIFFs, 1,973,324,004 bytes, from
+`fetch_cape_town_wms` at its fixed 768×768 size. TM z19 satellite chips:
+53,035 files, 3,437,051,290 bytes, 493/493 cluster dumps ok, 0 crop failures.
+QA keeps 53,031 release-eligible; 4 chips on 2022-12-30 are
+`pixel_uninformative` (near-white) and must not be scored as usable frames.
+TM z18: 180/180 ok, 2,169,474 bytes. Local citywide chip search was 0; the
+GEHI tile cache supplied the satellite rebuild. No scoring was run. About
+22 GB remains free on `/home`. CPT1956 anchors t00010449 and t00010452 were
+a koko_v6 empty catalog (no_history, 4/4 queries succeeded, 0 dates), not a
+real coverage gap. A 2026-10-05 GEHI re-query returned the neighbors' 73 TM
+dates; 35 are downloadable from 2019-02-28 through 2024-05-30. Those 70 z19
+chips were hardlinked into imagery/satellite_a3/chips/ beside the other
+roofs. The two post-census references, 2025-02-28 and 2025-10-30, were
+downloaded into that same tree. Each roof now has 37 z19 frames, the same
+dates as neighbor t00010448, and those frames passed the pixel and footprint
+gate. Aerial census frames were already in imagery/aerial/. The A3 manifest, sidecar, and QA table now include those 74 chips
+(53,109 rows; 53,105 release-eligible; the original 4 near-white failures
+remain). The citywide catalog outcomes for these two roofs are
+tm_and_wayback, 73 TM dates and 8 Wayback dates, route recheck_20261005.
+The full vintage CSV gained 162 rows and the 2019+ CSV gained 84 rows,
+appended without rewriting the earlier lines. no_history on that catalog
+is now 4. On 2026-10-05 the two roofs were rescored offline with the
+published adaptive scanner (`gemini-3.1-flash-lite`, census bound
+2025-01-31, 24 m review). Each has 12 evidence visits, all z19. After the
+published dip repair, both are `done_appears`: t00010449 brackets
+2022-03-30 to 2022-04-30 (midpoint 2022-04-14; four raw interior absents
+were flipped), and t00010452 brackets 2024-02-29 to 2024-05-30 (midpoint
+2024-04-14; no flips). The local 2026-09-02 install table, its GPKG, and
+the 2026-09-23 visit sequences now carry those rows. Dated brackets are
+73,338 and undated roofs are 1,029. Sequence coverage is complete 90,350
+and missing_scan_state 21,451. The Dropbox research previews were not
+changed; the citywide CSV there is still
+`c0bf9ed149fb73a97f34354c82f881df3f45769cfafe1e44e9fc68b1e29e7563`.
+The descriptive HTML and the 27-wave packages were not rebuilt. Run note:
+[`RUN-fulltimeline-v2-10grid-image-pack-2026-10-05.md`](RUN-fulltimeline-v2-10grid-image-pack-2026-10-05.md).
+
+**Full-timeline reference v2 (2026-10-06, scoring running in tmux; not finished):**
+The image pack is complete. The run note
+[`RUN-fulltimeline-reference-v2-10grid-2026-10-05.md`](RUN-fulltimeline-reference-v2-10grid-2026-10-05.md)
+drops five gates that must not block scoring: native-resolution aerial
+re-download (use the existing 768×768 GeoTIFFs), a fuller post-census
+satellite re-query (use the on-disk `post_census` frame, rank 1), holding
+every roof for aerial-identity adjudication, re-reading the Dropbox citywide
+tar, and a simulated-failure matrix. Kept: T3 is candidate + census aerial +
+one post-census satellite reference; T2 is the same candidate and aerial on
+the 149 paired roofs only; a missing declared image is not a successful call;
+a 2024 pre-census fallback is not the T3 reference; the scan does not stop at
+the first present; voided v1 labels are not reused. Measured work is 51,212
+callable in-window dates, 7,102 paired callable dates, and 4 near-white chips
+on CPT2935 dated 2022-12-30. The 4,555 incomplete-coverage dates stay
+unscored. A development-grid smoke on 2026-10-06 sent four T3 and four T2 calls.
+Logged T3 bodies have three images and T2 bodies have the same candidate
+and aerial with no satellite hash. Returned modelVersion is
+`gemini-3.1-flash-lite`. SCORE_DONE was not written for the smoke.
+Session `v2_10grid_score` is scoring the full window at concurrency 8.
+51,208 dates are sendable and the 4 near-white chips are non-calls.
+Development versus evaluation interval counts are not written yet
+because the full ledger is still open. Results must not claim native-resolution
+aerials, a clearest frame from the full pool, or that a narrower interval is
+higher accuracy. The replacement
+[plan](PLAN-fulltimeline-reference-v2-10grid-2026-10-05.md) still records
+those dropped gates. V1 results remain void.
+
+**Full-timeline Lite reference pilot (2026-10-05, scored result VOID):**
+Frozen Cape Town centroid grids, seed 20261004, window `capture_date >= 2019-01-01`
+and before the policy census bound 2025-01-31. Measured inventory is N=1114
+anchors, H=51142 downloadable in-window candidates, H_pair=7067, 149 paired
+anchors and 85 nested review anchors. Development grids CPT2304 and CPT3359;
+eight evaluation grids. Preflight admitted `gemini-3.1-flash-lite`. A numeric
+`candidate_index` enum was an HTTP 400; the frozen schema now uses the string
+enum `"1"` and still requires the integer 1. Scoring keeps 8 requests in
+flight because the serving account allows 10 concurrent calls. At
+2026-10-04 17:03Z the scorer exited with `pending_manifest=49768`: a quota
+pause recorded no raw row in that batch, and the drain treated the pause as
+"no progress" and stopped. The drain now retries after that sleep. The
+recheck sentinel written during that partial pass is removed; raw responses
+and the quota ledger stay. Manifest and pending lookup now use one raw
+index, so a chunk of calls is not followed by a full rescan. Scoring session
+`fulltimeline_lite_10grid` resumes from
+`~/zasolar_data/geid_temporal/reference_fulltimeline_lite_10grid_20261004/`.
+At 2026-10-04 18:05Z the only gateway account then mapped to
+`gemini-3.1-flash-lite` returned an upstream quota 429 and stays limited
+until `2026-10-04T21:37:15Z`. More accounts were given that model map later.
+The same scorer woke at 20:27Z and continued on those accounts without
+changing the alias. At 2026-10-05 02:44Z that process exited 0.
+`observations/SCORE_DONE.json` records `pending_manifest=0` and
+`n_requests=58205`. The bounded recheck then wrote
+`observations/RECHECK_DONE.json` with `n_recheck_requests=2308`. The log
+line is `pending_manifest=0` and `recheck_new_requests=2242`, then
+`EXIT:0`. No scorer is still running. Raw responses and the quota ledger
+stay. The offline audit then ran twice and agreed:
+`audit_ok=true`, valid-response rate 0.999725, candidate-byte agreement
+1, `accuracy_pass=false`. Intervals from the single-candidate labels are
+bounded 434, conflict 448, undated 232. The two-frame versus three-frame
+effect denominator is 0: all 1,114 aerial crops failed, and both arms were
+scored as the candidate image alone. Same-image arm disagreements (514
+dates) are repeat noise, not a frame-count result. Adaptive replay on
+these labels picked 16,913 dates and skipped 38,776. No human adjudication
+was added. Owner decision the same day: the scored result is void. Each
+Gemini request contained one image, so the labels are not a two-frame or
+three-frame result and are not a clean single-image baseline. Do not use
+the intervals or these labels. The satellite chip pixels were deleted the
+same day to free disk. Keep the raw log, plan, audit tables, A3 manifest,
+and quota ledger. Do not rerun these 10 grids on the same local aerial
+store. Run note:
+[`RUN-fulltimeline-reference-lite-10grid-2026-10-05.md`](RUN-fulltimeline-reference-lite-10grid-2026-10-05.md).
+
 **Aerial pre-detector gate review (2026-10-02, cross-project diagnostic):**
 Owner confirmed Cape Town-only scope; paired DINOv2/YOLO30 scores
 cover 26 grids (53,508 chips). No large global adjacent-score gap. Exploratory gaps
@@ -642,3 +752,11 @@ graph LR
 - 2026-10-02 自动诊断收尾（覆盖上条比较进行中状态）：10/10 匿名轮廓比较完成。部分案例双方更偏好 SAM3 文字轮廓，但新增疑似集热器／天窗等对象、身份分歧及计数语义漂移仍未排除；按止损规则不将无限制 SAM3 输出扩到 60 例。5 对归组建议只保留为诊断候选，不批量改计数；未确证车辆／标识残留误报或外部阴影，相关专项仍未验证。图像、原始意见、分歧和来源映射均保留，另有可渲染 HTML 图集。负责人无标注／复核投入；未运行受限精修组合流程，未测真实数量 FP／召回，生产不变。详见[运行记录](RUN-ct-array-group-sam3-probe-2026-10-02.md)的阶段决策。
 
 - 2026-10-02 负责人图集反馈：文字 SAM3 轮廓总体更 sharp；文字加自动框在 07 新增疑似水热器、12 未出现同类新增。已明确止损只针对无限制接纳全部输出，不否定边界精修；下一候选以文字提示收紧已有对象、保留群编号，自动框作对照，新增对象另核验。正示例框不是输出范围限制；反馈不升级为新增物体身份真值。受限方案尚未运行，生产不变，详见 [RUN](RUN-ct-array-group-sam3-probe-2026-10-02.md) 的负责人观察。
+
+- 2026-10-02 受限 SAM3 实验完成（覆盖上条尚未运行状态）：原 10 个有对象案例保留 61 个编号；新增 02/03 完整上下文，对 03 扩大视野内的 5 个现有库存对象补齐基准，最终为 2/26 个对象。07 可收紧且不接纳下方疑似集热器；02/03 参数偏好不同，局部漏板仍有争议，未锁定全局参数。完成 12 例身份补选及从 41 个本地网格选出的 8 个当前库存候选，32 个 Gemini 请求全部成功。当前库存 broad_07 获得双方“屋顶投影、非光伏”共识，其他身份分歧保留；此前已过滤车辆不计作交付残留。地面标识与阴影下真板未确证，不扩到 60 例全面接纳，不批量改计数或生产。已更新可渲染图集，核对 115 个输入来源与 66 个图像哈希未变。详见[受限实验 RUN](RUN-ct-array-group-sam3-constrained-2026-10-02.md)，其中记录 Codex 06 概览读图错误与更正后的独立性限制。
+
+- 2026-10-03：负责人指出 census 交付可能漏覆盖，受限交集／固定外扩会继承缺口；又提出 Gemini 的天窗判断可能混淆反光光伏。按负责人要求写成两个可并行交给 agent 的研究方案：[A 第二帧身份核验](../briefs/BRIEF-ct-multiframe-identity-2026-10-03.md)、[B DINO 后直接 SAM3 的检测器旁路对照](../briefs/BRIEF-ct-dino-sam3-detector-bypass-2026-10-03.md)。A 独立从已有争议池起步，B 独立比较 census／自由文字 SAM3／候选并集并审计拒绝窗口；各自专属输出目录与 RUN，定义 identity_requests／identity_evidence 接口，不互相等待。样本量、预算和推进门槛均标假设，不预设第二帧能判真值或检测器可删除；维持 0 负责人人时。此次仅交付研究方案，未派发 agent、未下载／推理、未改生产；推荐版本待负责人派发时选择。
+
+- 2026-10-03 方案 A 执行完成：负责人明确授权调用 subagent；完成12个定向位置的市政2025Jan／2026Jan双帧诊断、同采样控制与12/12 Gemini Flash独立成对核验。最终语义审核后为4个光伏支持、2个非光伏支持、6个完整焦点未决；此前10个分歧／未决中5个获得新增影像支持。broad_06/08、supp_12由旧天窗意见转获光伏支持，提示反光板误否风险；supp_12此前已被分类过滤，不能自动恢复或称新检测。supp_08下部有板共识保留，上部原有反光板／后期新装争议不因两路presence=true被消掉，覆盖首次机械汇总的5/2/5。满足方案A开发推进假设，支持定向争议补帧，不构成全城数量FP／召回或人工真值验收。29旧来源哈希与12新帧通过检查；未量化配准，不做像素叠加。所有生产、标签及门阈值未变。详见[双帧RUN](RUN-ct-multiframe-identity-2026-10-03.md)；可渲染图集为 http://127.0.0.1:43179/review 。方案B未在本线程执行。
+
+- 2026-10-03 方案 B 有限开发版已执行：36 个计入比例的 DINO 门窗口（19 格、四折都有）加展示用 D02/D03/D07，离线文字 SAM3 39/39 成功。负责人确认的 CPT3468/380（库存 87501，20.53 m²，S01）在窗口内可见但 SAM3 覆盖为 0，因此不能省掉 census 检测器。刚低于 0.45 的拒绝窗 S16 有一块 9.03 m² 轮廓不被任何放行窗盖住，Flash 读成光伏，但是暗矩形、身份未决，只列入门漏检候选，不改 0.45。模型支持的补漏位置只有这一处，低于假设的 3 处，且已有整处遗漏，不扩大独立验证，也不给替代总排名。方案 A 的 12 条证据编号未接合（0/6）。同机 Mask R-CNN 计时和 solar_cls 重跑都缺失，4070 上稳态单窗约 0.30 秒不能当成加速。生产、阈值和交付库存未改。详见 [RUN](RUN-ct-dino-sam3-bypass-2026-10-03.md)；图集 `~/zasolar_data/geid_temporal/ct_dino_sam3_bypass_probe_20261003/review.html`。

@@ -88,6 +88,11 @@ def _response_body(response: Any) -> str:
 
 def classify_upstream(status: int | None, body: str, error: str | None = None) -> str:
     text = f"{body} {error or ''}".lower()
+    # A local gateway slot wait is not an upstream quota reset. The body can
+    # still say RESOURCE_EXHAUSTED, but pausing the whole run for that window
+    # stops work the account can still serve.
+    if status == 429 and "concurrency slot" in text:
+        return "http_429"
     if status == 429 and any(token in text for token in ("resource_exhausted", "quota", "rate limit")):
         return "upstream_429_resource_exhausted"
     if status == 429:
@@ -125,6 +130,7 @@ class QuotaCircuitBreaker:
         policy: QuotaPolicy,
         pause_path: str | Path | None = None,
         model_tier: str = "primary",
+        pool_503_trip_after: int = 2,
     ) -> None:
         if not policy.window_id:
             raise ValueError("quota window_id must be non-empty")
@@ -140,6 +146,9 @@ class QuotaCircuitBreaker:
         self.pause_path = Path(pause_path) if pause_path else self.ledger_path.parent / "PAUSED_QUOTA.json"
         self.policy = policy
         self.model_tier = model_tier
+        self.pool_503_trip_after = int(pool_503_trip_after)
+        if self.pool_503_trip_after < 1:
+            raise ValueError("pool_503_trip_after must be positive")
         self._lock = threading.RLock()
         self._reserved = 0
         self._in_flight = 0
@@ -339,7 +348,7 @@ class QuotaCircuitBreaker:
                 self._trip_locked("upstream_429")
             if error_class == "pool_503":
                 self._pool_503_streak += 1
-                if self._pool_503_streak >= 2:
+                if self._pool_503_streak >= self.pool_503_trip_after:
                     self._trip_locked("pool_503")
             else:
                 self._pool_503_streak = 0
