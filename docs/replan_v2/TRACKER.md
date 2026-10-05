@@ -45,7 +45,7 @@ changed; the citywide CSV there is still
 The descriptive HTML and the 27-wave packages were not rebuilt. Run note:
 [`RUN-fulltimeline-v2-10grid-image-pack-2026-10-05.md`](RUN-fulltimeline-v2-10grid-image-pack-2026-10-05.md).
 
-**Full-timeline reference v2 (2026-10-06, scoring running in tmux; not finished):**
+**Full-timeline reference v2 (2026-10-06, scoring finished):**
 The image pack is complete. The run note
 [`RUN-fulltimeline-reference-v2-10grid-2026-10-05.md`](RUN-fulltimeline-reference-v2-10grid-2026-10-05.md)
 drops five gates that must not block scoring: native-resolution aerial
@@ -63,15 +63,27 @@ unscored. A development-grid smoke on 2026-10-06 sent four T3 and four T2 calls.
 Logged T3 bodies have three images and T2 bodies have the same candidate
 and aerial with no satellite hash. Returned modelVersion is
 `gemini-3.1-flash-lite`. SCORE_DONE was not written for the smoke.
-Session `v2_10grid_score` is scoring the full window. The steady-state
-ceiling was raised from 8 to 40 after one gateway account was taking the
-whole load. The start rate stays QPS 6, so the first second does not send
-40 requests. Already stored successes are not resent.
-51,208 dates are sendable and the 4 near-white chips are non-calls.
-Development versus evaluation interval counts are not written yet
-because the full ledger is still open. Results must not claim native-resolution
-aerials, a clearest frame from the full pool, or that a narrower interval is
-higher accuracy. The replacement
+Session `v2_10grid_score` finished on 2026-10-06. SCORE_DONE records
+pending_manifest 0, terminal_t3_count 51212, and n_requests 58310. The
+steady-state ceiling was raised from 8 to 40 after one gateway account was
+taking the whole load. The start rate stayed QPS 6, so the first second did
+not send 40 requests. Already stored successes were not resent. 51,208 dates
+were sent. The 4 near-white chips are `pixel_uninformative`. Every successful
+T3 call used three images and returned `gemini-3.1-flash-lite`. One-image
+successful T3 calls are 0. Five dates ended `invalid_response`
+(`hard_label_not_admitted`, three attempts each) and are not coded absent.
+The paired effect denominator is 7,102, with candidate-byte and aerial-byte
+agreement both 1. Verdicts agree on 6,331 dates and differ on 771. That
+difference is the third image changing a label, not an accuracy result.
+Development roofs (CPT2304 and CPT3359, 265): bounded 79, conflict 165,
+left-censored 0, undated 21. Evaluation roofs (849): bounded 171, conflict
+616, left-censored 6, undated 56. The 6 left-censored roofs stay earlier
+than the first visible date and have an empty install date. The 781 conflicts
+keep the later absent, and `labels_modified` is 0 on all 1,114 roofs. The 77
+undated roofs have no confirmed present. The census aerial was not used to
+close their interval at 2025-01-31. Results must not claim native-resolution
+aerials, a clearest frame from the full pool, or that a narrower interval or
+a lower unknown rate is higher accuracy. The replacement
 [plan](PLAN-fulltimeline-reference-v2-10grid-2026-10-05.md) still records
 those dropped gates. V1 results remain void.
 
