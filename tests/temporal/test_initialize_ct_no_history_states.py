@@ -42,7 +42,7 @@ def test_initialize_accepts_ct_source_grid_schema(tmp_path: Path) -> None:
         census_date="2025-01-31",
     )
 
-    assert result["created_count"] == 6
+    assert result["created_count"] == 4
     for row in anchor_rows:
         state = load_scan_state(state_dir / f"{row['anchor_id']}.json")
         assert state is not None

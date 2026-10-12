@@ -28,6 +28,9 @@ from scripts.temporal.scan_state import (
 
 WINDOW_START = "2019-01-01"
 MODEL_ALIAS = "gemini-3.1-flash-lite"
+# A later comparison may call this alias. It is admitted only when the
+# response modelVersion is exactly this string, never as a stand-in for 3.1.
+EXACT_COMPARE_ALIASES = frozenset({"gemini-3.5-flash-lite"})
 DEFAULT_SEED = 20261004
 PAIRED_PER_GRID = 20
 REVIEW_PER_GRID = 10
@@ -1089,12 +1092,15 @@ def admit_model_version(returned: str | None, frozen_version: str | None) -> boo
 
     Before the technical check freezes a version, only the exact alias is
     admitted. A different Flash or Pro version is not rewritten into Lite.
+    An allowlisted comparison alias is admitted only as that exact string.
     """
 
     value = str(returned or "").strip()
     if not value:
         return False
     expected = str(frozen_version or MODEL_ALIAS).strip()
+    if expected in EXACT_COMPARE_ALIASES:
+        return value == expected
     return value == expected == MODEL_ALIAS or (
         frozen_version is not None and value == frozen_version and MODEL_ALIAS in frozen_version
     )

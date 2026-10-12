@@ -22,18 +22,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.temporal.initialize_ct_no_history_states import (
+    EXPECTED_NO_HISTORY as NO_HISTORY,
+)
 from scripts.temporal.run_ct05_chip_pipeline import inspect_raster
 from scripts.temporal.scan_state import load_scan_state
 
-
-NO_HISTORY = {
-    "ct_full_inventory_2026_06_21_merged_t00010449",
-    "ct_full_inventory_2026_06_21_merged_t00010452",
-    "ct_full_inventory_2026_06_21_merged_t00038228",
-    "ct_full_inventory_2026_06_21_merged_t00038233",
-    "ct_full_inventory_2026_06_21_merged_t00038296",
-    "ct_full_inventory_2026_06_21_merged_t00038301",
-}
 WAYBACK_ONLY = "ct_full_inventory_2026_06_21_merged_t00038314"
 GEOMETRY_EXCEPTION = "ct_full_inventory_2026_06_21_merged_t00107162"
 

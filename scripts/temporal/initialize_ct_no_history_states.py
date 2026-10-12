@@ -5,6 +5,10 @@ The CT catalog probe has already established that these anchors were queried
 successfully but have no TM or Wayback history.  They must remain in the final
 denominator without consuming Gemini calls and without being encoded as an
 ``absent`` observation.
+
+The 2026-08-18 merge listed six such anchors.  On 2026-10-05 a GEHI recheck
+moved t00010449 and t00010452 to tm_and_wayback, so the frozen roster is the
+remaining four.
 """
 
 from __future__ import annotations
@@ -31,8 +35,6 @@ from scripts.temporal.scan_state import (
 
 
 EXPECTED_NO_HISTORY = {
-    "ct_full_inventory_2026_06_21_merged_t00010449",
-    "ct_full_inventory_2026_06_21_merged_t00010452",
     "ct_full_inventory_2026_06_21_merged_t00038228",
     "ct_full_inventory_2026_06_21_merged_t00038233",
     "ct_full_inventory_2026_06_21_merged_t00038296",
@@ -67,7 +69,7 @@ def initialize(
     scan_states_dir: Path,
     *,
     census_date: str,
-    expected_count: int = 6,
+    expected_count: int = 4,
     require_frozen_ids: bool = True,
     selected_anchor_ids: set[str] | None = None,
 ) -> dict[str, object]:
@@ -149,7 +151,7 @@ def main() -> None:
     parser.add_argument("--catalog-outcomes-csv", type=Path, required=True)
     parser.add_argument("--scan-states-dir", type=Path, required=True)
     parser.add_argument("--census-date", default="2025-01-31")
-    parser.add_argument("--expected-count", type=int, default=6)
+    parser.add_argument("--expected-count", type=int, default=4)
     parser.add_argument("--allow-roster-drift", action="store_true")
     parser.add_argument(
         "--selected-anchors-csv",

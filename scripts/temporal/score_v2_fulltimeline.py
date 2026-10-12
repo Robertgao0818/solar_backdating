@@ -534,8 +534,14 @@ def write_products(
     pack: Path,
     plan: Mapping[str, Sequence[Mapping[str, str]]],
     raw_rows: Sequence[Mapping[str, Any]],
+    *,
+    write_paired: bool = True,
 ) -> dict[str, Any]:
-    """Write the status table, the paired comparison, and T3 intervals."""
+    """Write the status table and T3 intervals.
+
+    The paired T2 table is written only when ``write_paired`` is true. A
+    T3-only comparison has no T2 calls, so it must not emit that file.
+    """
 
     grouped = _raw_by_key(raw_rows)
     anchors = {row["anchor_id"]: row for row in plan["anchors"]}
@@ -569,7 +575,7 @@ def write_products(
                 "satellite_date": (ok or {}).get("satellite_date") or "",
             }
         )
-        if anchor_id not in paired_ids:
+        if not write_paired or anchor_id not in paired_ids:
             continue
         t2_rows = grouped.get(("t2", anchor_id, day), [])
         t2_ok = _ok_row(t2_rows)
@@ -696,26 +702,27 @@ def write_products(
             "satellite_date",
         ],
     )
-    _write_csv(
-        results / "paired_comparison.csv",
-        paired_rows,
-        [
-            "anchor_id",
-            "grid_id",
-            "grid_role",
-            "capture_date",
-            "t3_status",
-            "t3_verdict",
-            "t2_verdict",
-            "in_effect_comparison",
-            "candidate_bytes_agree",
-            "aerial_bytes_agree",
-            "candidate_sha256_t3",
-            "candidate_sha256_t2",
-            "aerial_sha256_t3",
-            "aerial_sha256_t2",
-        ],
-    )
+    if write_paired:
+        _write_csv(
+            results / "paired_comparison.csv",
+            paired_rows,
+            [
+                "anchor_id",
+                "grid_id",
+                "grid_role",
+                "capture_date",
+                "t3_status",
+                "t3_verdict",
+                "t2_verdict",
+                "in_effect_comparison",
+                "candidate_bytes_agree",
+                "aerial_bytes_agree",
+                "candidate_sha256_t3",
+                "candidate_sha256_t2",
+                "aerial_sha256_t3",
+                "aerial_sha256_t2",
+            ],
+        )
     interval_fields = [
         "anchor_id",
         "grid_id",

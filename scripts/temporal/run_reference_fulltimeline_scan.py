@@ -33,6 +33,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.temporal.fulltimeline_manifest import assemble_manifest, scoring_requests  # noqa: E402
 from scripts.temporal.reference_fulltimeline import (  # noqa: E402
+    EXACT_COMPARE_ALIASES,
     MODEL_ALIAS,
     POLICY_CENSUS_DATE,
     POLICY_CENSUS_PRECISION,
@@ -267,13 +268,22 @@ def _fingerprint(record_fields: Mapping[str, Any]) -> str:
     return request_fingerprint(record_fields)
 
 
+def requested_model_alias(budget: Mapping[str, Any]) -> str:
+    """Return the model this run will post. The 3.1 path stays the default."""
+
+    alias = str(budget.get("model_alias") or MODEL_ALIAS).strip()
+    if alias != MODEL_ALIAS and alias not in EXACT_COMPARE_ALIASES:
+        raise SystemExit(f"refusing model alias {alias!r}")
+    return alias
+
+
 def _contract(params: Mapping[str, Any], *, arm: str, stage: str, degradation: str, shas: Mapping[str, str], reference: bool) -> dict[str, Any]:
     prompt = str(params.get("prompt") or "")
     if not prompt:
         prompt = REFERENCE_CHECK_PROMPT if reference else PROMPT
     return {
         "prompt_sha256": prompt_fingerprint(prompt),
-        "model_alias": MODEL_ALIAS,
+        "model_alias": str(params.get("model_alias") or MODEL_ALIAS),
         "model_version": str(params.get("model_version") or ""),
         "temperature": 0,
         "thinking_level": str(params.get("thinking_level") or ""),
@@ -375,6 +385,7 @@ class Scorer:
         contract = _contract(
             {
                 **self.budget,
+                "model_alias": requested_model_alias(self.budget),
                 "model_version": str(self.budget.get("model_version") or self._frozen_version()),
                 "prompt": str(request.get("prompt") or ""),
             },
@@ -471,16 +482,17 @@ class Scorer:
             "run_id": self.run_id,
             "wave_id": request.get("grid_id", ""),
             "attempt_kind": request["stage"],
-            "requested_alias": MODEL_ALIAS,
+            "requested_alias": requested_model_alias(self.budget),
             "model_tier": "primary",
         }
         thinking = str(self.budget.get("thinking_level") or "") or None
+        requested = requested_model_alias(self.budget)
         try:
             body = post_native_generate_content(
                 base_url=self.settings["base_url"],
                 native_path=self.settings["native_path"],
                 api_key=self.settings["api_key"],
-                model=MODEL_ALIAS,
+                model=requested,
                 prompt=str(request["prompt"]),
                 image_paths=paths,
                 max_tokens=int(self.budget["max_output_tokens"]),
@@ -516,11 +528,14 @@ class Scorer:
         frozen = self._frozen_version()
         # The preflight itself is what discovers the Lite version string.
         if frozen is None and reference_only == 0 and request.get("stage") != "preflight":
-            frozen = MODEL_ALIAS
+            frozen = requested
         classified = _classify_body(body, frozen_version=frozen if request.get("stage") != "preflight" else str(body.get("modelVersion") or ""))
         if request.get("stage") == "preflight":
             version = str(body.get("modelVersion") or "")
-            admitted = MODEL_ALIAS in version and "3.8" not in version and "pro" not in version.lower()
+            if requested == MODEL_ALIAS:
+                admitted = MODEL_ALIAS in version and "3.8" not in version and "pro" not in version.lower()
+            else:
+                admitted = version == requested
             classified["call_status"] = "ok" if admitted else "model_version_mismatch"
             classified["model_version"] = version
             classified["verdict"] = None
@@ -572,7 +587,11 @@ class Scorer:
         if self.mismatch:
             _write_json(
                 self.root / "audit" / "model_mismatch.json",
-                {"model_alias": MODEL_ALIAS, "returned_model_version": self.mismatch, "admitted": False},
+                {
+                    "model_alias": requested_model_alias(self.budget),
+                    "returned_model_version": self.mismatch,
+                    "admitted": False,
+                },
             )
             raise SystemExit(f"foreign modelVersion {self.mismatch}; scoring stopped")
         if self.pause_reason:
@@ -964,19 +983,23 @@ def _preflight(root: Path, scorer: Scorer) -> str:
         if row.get("stage") == "preflight":
             version = str(row.get("model_version") or "")
             break
-    admitted = bool(version) and MODEL_ALIAS in version and "3.8" not in version and "pro" not in version.lower()
+    requested = requested_model_alias(scorer.budget)
+    if requested == MODEL_ALIAS:
+        admitted = bool(version) and MODEL_ALIAS in version and "3.8" not in version and "pro" not in version.lower()
+    else:
+        admitted = version == requested
     _write_json(
         root / "audit" / "preflight.json",
         {
-            "requested_alias": MODEL_ALIAS,
+            "requested_alias": requested,
             "model_version": version,
             "call_status": status,
             "admitted": admitted,
         },
     )
     if not admitted:
-        raise SystemExit(f"preflight modelVersion {version!r} is not {MODEL_ALIAS}")
-    _write_json(path, {"model_alias": MODEL_ALIAS, "model_version": version, "admitted": True})
+        raise SystemExit(f"preflight modelVersion {version!r} is not {requested}")
+    _write_json(path, {"model_alias": requested, "model_version": version, "admitted": True})
     scorer.budget["model_version"] = version
     _log(f"[preflight] admitted {version}")
     return version
