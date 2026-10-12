@@ -86,3 +86,7 @@ PYTHONPATH order is enforced by `scripts/activate_env.sh`:
 This repo uses the main project's auto-memory at
 `~/.claude/projects/-home-gao-projects-ZAsolar/memory/`. Don't spawn a
 separate memory tree.
+
+## Default Gemini model
+
+- Default Gemini model for all ZAsolar and solar_backdating work is `gemini-3.5-flash-lite` (Gemini 3.5 Flash Lite). Use it unless the user explicitly asks for another model.

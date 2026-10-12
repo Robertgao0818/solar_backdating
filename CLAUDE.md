@@ -72,3 +72,7 @@ python scripts/temporal/score_anchor_presence.py --help
   Phase-0 anchor-presence scoring is mostly CPU + I/O bound
 - `ZASOLAR_ROOT` env var overrides default path to main repo
   (defaults to `/home/gao/projects/ZAsolar`)
+
+## Default Gemini model
+
+- Default Gemini model for all ZAsolar and solar_backdating work is `gemini-3.5-flash-lite` (Gemini 3.5 Flash Lite). Use it unless the user explicitly asks for another model.
