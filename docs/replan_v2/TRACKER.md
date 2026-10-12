@@ -6,6 +6,34 @@ Source PRD: [`../install_date_optimization_v2_prd.md`](../install_date_optimizat
 Cape Town run-specific plan: [`RUN-cape-town-backdating-plan-2026-07-24.md`](RUN-cape-town-backdating-plan-2026-07-24.md) ·
 execution tracker: [`RUN-cape-town-backdating-tracker-2026-07-24.md`](RUN-cape-town-backdating-tracker-2026-07-24.md)
 
+**Dropbox intermediate backup (2026-10-08, uploading):**
+Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
+CacheStorage and `~/.cache/google-chrome` were removed. Cursor logs were
+removed except the open `20261007T211728` session. `docker builder prune -af`
+removed 2.84GB of build cache; the four running containers stayed. `df` then
+showed 8.9G free. The earlier `du` total was about 12G of uncompressed
+logical size; this btrfs mount uses `compress=zstd:1`, so fewer blocks came
+back. Session `dropbox_backup_20261008` streams dated tars with `rclone rcat`
+to `dropbox:solar_backdating_backups/`. It does not write through the FUSE
+mount. Order: gate `vit_tokens`, gate `chips`, a new `gehi_tile_cache`
+tar dated 2026-10-08 (the 2026-09-23 tar stays), older datacenter-geo raw
+pilots, `projects/ZAsolar/results`, then a filename compare of the Vexcel
+eval tiles against the 2026-07-11 tar. Local sources are not deleted. Stage 1 verified at 20:08
+(`gate_learning_curve_vit_tokens_2026-10-08.tar`, 37,174,446,080 bytes,
+sha256 `f3f85f505c0ed9f4fc3f81bbaf63721312e75676845a71980232bb66f15a5d53`).
+Stage 2, the gate chips, started immediately after. After that
+verification the local `train/vit_tokens` directory was removed. Data
+used fell from 218.28GiB to 184.06GiB and `df` then showed about 43G
+free. `train/data`, `runs`, and `scores` were not in that tar and remain.
+The chips archive verified at 20:34
+(`gate_learning_curve_chips_2026-10-08.tar`, 15,634,667,520 bytes,
+sha256 `817053bf58a5d38c6391193b6020e1b68c1501a5e91e9649a6e47f17bd7c2cd2`)
+and the local `chips` directory was then removed. Data used fell from
+184.06GiB to 171.32GiB; `df` showed about 56G free. The GEHI tile-cache
+upload started at 20:34 and its local tree remains.
+Run note:
+[`RUN-dropbox-backup-intermediates-2026-10-08.md`](RUN-dropbox-backup-intermediates-2026-10-08.md).
+
 **Full-timeline v2 ten-grid image pack (2026-10-05, images complete):**
 Both download processes exited 0. The pack is
 `~/zasolar_data/geid_temporal/reference_fulltimeline_v2_10grid_20261005/`.
@@ -83,9 +111,39 @@ keep the later absent, and `labels_modified` is 0 on all 1,114 roofs. The 77
 undated roofs have no confirmed present. The census aerial was not used to
 close their interval at 2025-01-31. Results must not claim native-resolution
 aerials, a clearest frame from the full pool, or that a narrower interval or
-a lower unknown rate is higher accuracy. The replacement
+a lower unknown rate is higher accuracy. Against the local 2026-09-02
+production table, all 1,114 roofs match. Production dated brackets are 761
+and T3 bounded intervals are 250; both ends exist for 209 roofs, where T3 is
+wider on 130, the same width on 62, and narrower on 17. Median width on that
+subset moves from 78 days to 366 days. That is not an accuracy result.
+Of the 761 production brackets, 539 become T3 conflicts and receive no
+install interval. The replacement
 [plan](PLAN-fulltimeline-reference-v2-10grid-2026-10-05.md) still records
 those dropped gates. V1 results remain void.
+
+**Full-timeline reference v2, gemini-3.5-flash-lite T3 comparison (2026-10-07, finished):**
+Session `v2_t3_gemini35` exited 0 at 08:02. The new root
+`reference_fulltimeline_v2_10grid_20261005_gemini35_flash_lite` has terminal
+T3 on all 51,212 callable dates. Successful calls are 50,747, all
+`gemini-3.5-flash-lite`, all three images, finish STOP. The 3.1 raw ledger,
+status table, intervals, and SCORE_DONE are unchanged. T2 was not sent.
+On 50,742 dates both models returned an admitted label and the three image
+hashes match: 41,668 labels agree and 9,074 differ (82.1% agreement). That
+agreement is not accuracy. The largest cell is 3.1 present to 3.5 absent,
+5,224 dates. 3.5 present labels are 8,825 against 3.1's 12,338; unknown
+labels are 2,339 against 509. 461 dates are `invalid_response`
+(`hard_label_not_admitted`, three attempts) and are not coded absent. The
+sentinel field `n_hash_mismatch` 466 counts empty status-table hashes on
+those failures plus the five 3.1 invalid dates, not a different image.
+Request hashes on the 461 failed dates match the 3.1 successes. Interval
+status agrees on 831 of 1,114 roofs. 3.5 intervals are bounded 119, conflict
+866, left-censored 1, undated 128, with `labels_modified` 0. Of 71 roofs
+bounded on both sides, 50 keep both endpoints and 21 change both. Run note:
+[`RUN-fulltimeline-v2-gemini35-flash-lite-2026-10-07.md`](RUN-fulltimeline-v2-gemini35-flash-lite-2026-10-07.md).
+Collaborator package (3.1 T3 + 3.1 T2 + 3.5 T3, HTML overview + date-label
+and interval CSVs, gate-checked counts) delivered 2026-10-07 to Dropbox
+`RA_Solar/Gao/backdating/ct_10grid_fulltimeline_t3_t2_2026-10-07/`, built by
+`scripts/temporal/build_10grid_t3_t2_collaborator_delivery.py`.
 
 **Full-timeline Lite reference pilot (2026-10-05, scored result VOID):**
 Frozen Cape Town centroid grids, seed 20261004, window `capture_date >= 2019-01-01`
@@ -775,3 +833,5 @@ graph LR
 - 2026-10-03 方案 A 执行完成：负责人明确授权调用 subagent；完成12个定向位置的市政2025Jan／2026Jan双帧诊断、同采样控制与12/12 Gemini Flash独立成对核验。最终语义审核后为4个光伏支持、2个非光伏支持、6个完整焦点未决；此前10个分歧／未决中5个获得新增影像支持。broad_06/08、supp_12由旧天窗意见转获光伏支持，提示反光板误否风险；supp_12此前已被分类过滤，不能自动恢复或称新检测。supp_08下部有板共识保留，上部原有反光板／后期新装争议不因两路presence=true被消掉，覆盖首次机械汇总的5/2/5。满足方案A开发推进假设，支持定向争议补帧，不构成全城数量FP／召回或人工真值验收。29旧来源哈希与12新帧通过检查；未量化配准，不做像素叠加。所有生产、标签及门阈值未变。详见[双帧RUN](RUN-ct-multiframe-identity-2026-10-03.md)；可渲染图集为 http://127.0.0.1:43179/review 。方案B未在本线程执行。
 
 - 2026-10-03 方案 B 有限开发版已执行：36 个计入比例的 DINO 门窗口（19 格、四折都有）加展示用 D02/D03/D07，离线文字 SAM3 39/39 成功。负责人确认的 CPT3468/380（库存 87501，20.53 m²，S01）在窗口内可见但 SAM3 覆盖为 0，因此不能省掉 census 检测器。刚低于 0.45 的拒绝窗 S16 有一块 9.03 m² 轮廓不被任何放行窗盖住，Flash 读成光伏，但是暗矩形、身份未决，只列入门漏检候选，不改 0.45。模型支持的补漏位置只有这一处，低于假设的 3 处，且已有整处遗漏，不扩大独立验证，也不给替代总排名。方案 A 的 12 条证据编号未接合（0/6）。同机 Mask R-CNN 计时和 solar_cls 重跑都缺失，4070 上稳态单窗约 0.30 秒不能当成加速。生产、阈值和交付库存未改。详见 [RUN](RUN-ct-dino-sam3-bypass-2026-10-03.md)；图集 `~/zasolar_data/geid_temporal/ct_dino_sam3_bypass_probe_20261003/review.html`。
+
+- 2026-10-09：德班交付不做“文字 SAM3 未覆盖就删除”。抽样框是这次分类前全市库存的 65,040 块，不是四月 10 格。四层各 12 块、种子 20261008、层内至少相距 250 米；48 张图当场从 `za-kzn-durban-2026` 抽取，48/48 推理成功。未覆盖集中在 ≥100 m² 且分数 <0.85（9/12，中位覆盖 0），其中有列车、铁路场和瓦屋顶，但也有真板整窗覆盖为 0，包括分数 0.914 的 C005 和 0.936 的 C048。n=12 不是全市假阳性率。1,991 块低分大对象没有做成复查队列。交付、阈值、开普敦锁定和 pod 未改。详见 [RUN](RUN-durban-census-sam3-text-sample-2026-10-08.md)；图集 `~/zasolar_data/geid_temporal/durban_census_sam3_text_sample_20261008/review.html`。
