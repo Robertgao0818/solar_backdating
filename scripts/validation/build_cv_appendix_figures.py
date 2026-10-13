@@ -157,14 +157,26 @@ def require_hashes() -> dict:
 
 
 def git_commit() -> str:
+    """HEAD of this repo. Refuse a dirty tracked tree so the manifest matches the code.
+
+    Untracked files are ignored. The two pipeline ``.bak`` copies have been
+    untracked since 2026-08-29 and are not part of this figure build.
+    """
+    repo = Path(__file__).resolve().parents[2]
     try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parents[2],
+        dirty = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repo,
             text=True,
-        ).strip()
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
+    if dirty.strip():
+        raise Stop(
+            "STOP: tracked files are modified, so code_commit would not describe "
+            "the tree that built this release.\n" + dirty
+        )
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
 
 def apply_style() -> None:
@@ -497,7 +509,7 @@ def run_d5() -> dict:
 
 
 def _check_crosscorr(cross: pd.DataFrame) -> None:
-    """The revised window should put the peak at lag 2 with n = 64."""
+    """v1 regression check. Literals are the published v1r1 numbers, not a stock rule."""
 
     def at(lag: int) -> tuple[float, int]:
         row = cross.loc[cross["lag_months"] == lag].iloc[0]
@@ -1302,7 +1314,7 @@ def run_d3() -> dict:
 
 
 def _check_panel_se(specs: list[dict]) -> None:
-    """Clustered panel SEs widen; the slope itself must not move."""
+    """v1 regression check. Literals are the published v1r1 clustered standard errors."""
     by_spec = {row["spec"]: row for row in specs}
     counts = by_spec["counts_panel_snapshot_fe"]
     capacity = by_spec["capacity_panel_snapshot_fe"]
