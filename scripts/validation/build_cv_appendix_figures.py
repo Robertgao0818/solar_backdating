@@ -37,7 +37,7 @@ import shapely
 import statsmodels.api as sm
 from matplotlib.colors import LogNorm, TwoSlopeNorm
 from matplotlib.patches import Patch
-from matplotlib.ticker import FixedFormatter, FixedLocator
+from matplotlib.ticker import FixedFormatter, FixedLocator, FuncFormatter
 from scipy import stats
 from shapely.geometry import shape as shapely_shape
 
@@ -102,10 +102,11 @@ from scripts.validation.cv_appendix_rules import (
 
 PHASE0 = WORK_ROOT / "phase0"
 STAGING = WORK_ROOT / "staging_v1"
-# release_v1/ is the pre-fix baseline. This revision writes a new tree.
-RELEASE_REVISION = "v1r1"
+# release_v1/ is the pre-fix baseline and release_v1r1/ is the previous
+# revision. This pass writes a new tree and does not touch either.
+RELEASE_REVISION = "v1r2"
 RELEASE_REVISION_DATE = "2026-10-14"
-RELEASE = WORK_ROOT / "release_v1r1"
+RELEASE = WORK_ROOT / "release_v1r2"
 PARCEL_GPKG = WORK_ROOT / "parcels" / "parcels.gpkg"
 FIG_WIDTH_IN = FIG_WIDTH_MM / 25.4
 MONTHS = month_index_range(HISTOGRAM_MONTH_START, HISTOGRAM_MONTH_END)
@@ -1409,6 +1410,19 @@ def run_d4() -> dict:
     return numbers
 
 
+def _ticks_inside(lo: float, hi: float, step: float) -> list[float]:
+    """Ticks strictly inside the view, so an end label cannot leave the canvas."""
+    first = np.ceil((lo + step * 1e-6) / step) * step
+    last = np.floor((hi - step * 1e-6) / step) * step
+    if last + step * 1e-9 < first:
+        raise Stop(f"STOP: no D4 ticks inside {lo}..{hi} at step {step}.")
+    return [float(np.round(tick, 10)) for tick in np.arange(first, last + step * 0.5, step)]
+
+
+def _degree_tick(value, _position) -> str:
+    return f"{value:.1f}".replace("-", "\u2212")
+
+
 def _scalebar(ax, kilometers: float = 10) -> None:
     x0, x1 = ax.get_xlim()
     y0, y1 = ax.get_ylim()
@@ -1418,6 +1432,103 @@ def _scalebar(ax, kilometers: float = 10) -> None:
     y = y0 + 0.07 * (y1 - y0)
     ax.plot([x, x + width], [y, y], color="black", lw=1.2, solid_capstyle="butt", zorder=5)
     ax.text(x + width / 2, y + 0.015 * (y1 - y0), f"{kilometers:.0f} km", ha="center", va="bottom", fontsize=8, zorder=5)
+
+
+def _overlap_area(a, b) -> float:
+    x0 = max(a.x0, b.x0)
+    y0 = max(a.y0, b.y0)
+    x1 = min(a.x1, b.x1)
+    y1 = min(a.y1, b.y1)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    return float((x1 - x0) * (y1 - y0))
+
+
+def _assert_d4_text(fig, latitude_axis, colorbar_axes, renderer) -> None:
+    """Latitude minus signs stay on the canvas, and no label sits on a colour bar."""
+    from matplotlib.transforms import Bbox
+
+    scale = FIG_DPI / fig.dpi
+    figure_box = fig.bbox
+    for label in latitude_axis.get_yticklabels():
+        box = label.get_window_extent(renderer)
+        text = label.get_text().replace("\u2212", "-")
+        if not text.startswith("-"):
+            raise Stop(f"STOP: D4 latitude tick {label.get_text()!r} has no minus sign.")
+        if box.x0 * scale < 3:
+            raise Stop(f"STOP: D4 latitude tick {label.get_text()!r} is clipped at the left edge.")
+    colorbar_boxes = []
+    for cax in colorbar_axes:
+        boxes = []
+        for candidate in [cax.get_window_extent(renderer), *(
+            text_obj.get_window_extent(renderer)
+            for text_obj in cax.findobj(plt.Text)
+            if text_obj.get_text().strip()
+        )]:
+            coords = (candidate.x0, candidate.y0, candidate.x1, candidate.y1)
+            if all(np.isfinite(value) for value in coords) and candidate.width > 0 and candidate.height > 0:
+                boxes.append(candidate)
+        if not boxes:
+            raise Stop("STOP: D4 colour bar has no finite extent.")
+        colorbar_boxes.append(Bbox.union(boxes))
+    colorbar_ids = {id(text_obj) for cax in colorbar_axes for text_obj in cax.findobj(plt.Text)}
+    placed = []
+    for text_obj in fig.findobj(plt.Text):
+        if not text_obj.get_text().strip() or not text_obj.get_visible() or id(text_obj) in colorbar_ids:
+            continue
+        box = text_obj.get_window_extent(renderer)
+        coords = (box.x0, box.y0, box.x1, box.y1)
+        if not all(np.isfinite(value) for value in coords) or box.width <= 0 or box.height <= 0:
+            continue
+        if box.x0 < 1 or box.y0 < 1 or box.x1 > figure_box.width - 1 or box.y1 > figure_box.height - 1:
+            raise Stop(
+                f"STOP: D4 text is clipped: {text_obj.get_text()!r} "
+                f"box=({box.x0:.1f},{box.y0:.1f},{box.x1:.1f},{box.y1:.1f}) "
+                f"figure=({figure_box.width:.1f},{figure_box.height:.1f})."
+            )
+        for region in colorbar_boxes:
+            area = _overlap_area(box, region)
+            if area > 4:
+                raise Stop(f"STOP: D4 text overlaps a colour bar: {text_obj.get_text()!r}.")
+        for other_text, other_box in placed:
+            area = _overlap_area(box, other_box)
+            if area > 4:
+                raise Stop(
+                    f"STOP: D4 text overlaps: {text_obj.get_text()!r} and {other_text!r}."
+                )
+        placed.append((text_obj.get_text(), box))
+
+
+def _assert_d4_png(path: Path, map_positions) -> None:
+    """Left edge is blank, and hatch does not show through the grey analysis cells."""
+    image = plt.imread(path)
+    rgb = image[..., :3] if image.ndim == 3 else image
+    if (rgb[:, :3] < 0.98).any():
+        raise Stop("STOP: D4 has ink in the leftmost 3 pixel columns.")
+    height, width = rgb.shape[:2]
+    grey = np.array([138, 138, 138]) / 255
+    hatch = np.array([180, 180, 180]) / 255
+    for index in (0, 1):
+        pos = map_positions[index]
+        row0 = int((1 - pos.y1) * height)
+        row1 = int((1 - pos.y0) * height)
+        col0 = int(pos.x0 * width)
+        col1 = int(pos.x1 * width)
+        crop = rgb[row0:row1, col0:col1]
+        grey_mask = np.max(np.abs(crop - grey), axis=-1) < 0.045
+        hatch_mask = np.max(np.abs(crop - hatch), axis=-1) < 0.05
+        padded = np.pad(grey_mask, 1)
+        neighbours = np.zeros(grey_mask.shape, dtype=int)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                neighbours += padded[1 + dy : 1 + dy + grey_mask.shape[0], 1 + dx : 1 + dx + grey_mask.shape[1]]
+        inside = hatch_mask & (neighbours >= 5)
+        fraction = float(inside.sum()) / max(int(grey_mask.sum()), 1)
+        print(f"D4 map {index} hatch-in-grey {fraction:.4f}", flush=True)
+        if fraction >= 0.02:
+            raise Stop(f"STOP: D4 map {index} hatch inside grey cells is {fraction:.1%}.")
 
 
 def _axes_inches(fig: plt.Figure, x_in: float, y_in: float, w_in: float, h_in: float) -> plt.Axes:
@@ -1441,14 +1552,17 @@ def plot_d4(frame: gpd.GeoDataFrame, city: gpd.GeoDataFrame, numbers: dict, stem
     ylim = (bounds[1] - pad_y, bounds[3] + pad_y)
     lon_span = xlim[1] - xlim[0]
     lat_span = ylim[1] - ylim[0]
-    left_in = 0.36
+    # 0.46 in holds a full "−34.0" tick, including the minus sign.
+    # The right margin stays wide enough for the last longitude label.
+    left_in = 0.46
     right_in = 0.04
-    gap_in = 0.05
+    gap_in = 0.03
     map_w = (FIG_WIDTH_IN - left_in - right_in - 2 * gap_in) / 3
     map_h = map_w * (lat_span / lon_span)
-    bottom_in = 0.46
-    cbar_h = 0.14
-    xlabel_in = 0.28
+    bottom_in = 0.48
+    cbar_h = 0.12
+    # Tick labels plus "Longitude (degrees)" sit above the colour bars.
+    xlabel_in = 0.56
     title_in = 0.26
     legend_in = 0.32
     top_in = 0.02
@@ -1461,6 +1575,10 @@ def plot_d4(frame: gpd.GeoDataFrame, city: gpd.GeoDataFrame, numbers: dict, stem
     cbar_ab = _axes_inches(fig, xs[0], y_cbar, xs[1] + map_w - xs[0], cbar_h)
     cbar_c = _axes_inches(fig, xs[2], y_cbar, map_w, cbar_h)
 
+    # Default locators put 18.2 / 19.0 and −34.4 / −33.6 just outside the
+    # view. Those labels are drawn with clip_on False and leave the canvas.
+    lon_ticks = _ticks_inside(xlim[0], xlim[1], 0.2)
+    lat_ticks = _ticks_inside(ylim[0], ylim[1], 0.1)
     norm = LogNorm(vmin=1, vmax=numbers["vmax_parcels"])
     ratio_norm = TwoSlopeNorm(vmin=-numbers["log_ratio_clip"], vcenter=0, vmax=numbers["log_ratio_clip"])
     panels = [
@@ -1470,30 +1588,42 @@ def plot_d4(frame: gpd.GeoDataFrame, city: gpd.GeoDataFrame, numbers: dict, stem
     ]
     footprint = frame.geometry.union_all()
     outline = gpd.GeoSeries([footprint.boundary], crs=frame.crs)
+    footprint_fill = gpd.GeoSeries([footprint], crs=frame.crs)
     zero_grey = "#8a8a8a"
     for ax, (column, title, color_norm, cmap) in zip(axes, panels):
         city.plot(ax=ax, facecolor="white", edgecolor="#b4b4b4", linewidth=0.0, hatch="////", zorder=0)
-        city.boundary.plot(ax=ax, color="#444444", linewidth=0.45, zorder=4)
+        # Solid union under the hexes, so hatch cannot show through the gaps.
+        if column == "log_ratio":
+            footprint_fill.plot(ax=ax, color="white", linewidth=0, zorder=0.5)
+        else:
+            footprint_fill.plot(ax=ax, color=zero_grey, linewidth=0, zorder=0.5)
+        city.boundary.plot(ax=ax, color="#777777", linewidth=0.6, zorder=4)
         if column != "log_ratio":
             frame.plot(ax=ax, color=zero_grey, linewidth=0, zorder=1)
             drawn = frame.loc[frame[column] > 0]
         else:
             drawn = frame
         drawn.plot(ax=ax, column=column, cmap=cmap, norm=color_norm, linewidth=0, zorder=2, legend=False)
-        outline.plot(ax=ax, color="#222222", linewidth=0.45, zorder=5)
+        outline.plot(ax=ax, color="black", linewidth=0.7, zorder=5)
         ax.set_xlim(*xlim)
         ax.set_ylim(*ylim)
         ax.set_aspect("equal", adjustable="box")
+        ax.xaxis.set_major_locator(FixedLocator(lon_ticks))
+        ax.yaxis.set_major_locator(FixedLocator(lat_ticks))
+        ax.xaxis.set_major_formatter(FuncFormatter(_degree_tick))
+        ax.yaxis.set_major_formatter(FuncFormatter(_degree_tick))
         ax.set_title(title, pad=2)
-        ax.set_xlabel("Longitude (degrees)")
+        ax.set_xlabel("Longitude (degrees)", labelpad=2)
         _scalebar(ax)
     # A y-axis title would sit in the left margin and either clip or force the
     # maps under 55 mm. Numeric latitude ticks stay on the left map only.
+    axes[0].tick_params(axis="y", pad=1)
     for ax in axes[1:]:
         ax.tick_params(axis="y", labelleft=False)
     log_mappable = plt.cm.ScalarMappable(norm=norm, cmap="viridis")
     log_bar = fig.colorbar(log_mappable, cax=cbar_ab, orientation="horizontal")
-    log_ticks = [1, 2, 5, 10, 20, 48]
+    log_top = int(numbers["vmax_parcels"])
+    log_ticks = [1, 2, 5, 10, 20, log_top]
     log_bar.ax.xaxis.set_major_locator(FixedLocator(log_ticks))
     log_bar.ax.xaxis.set_major_formatter(FixedFormatter([str(tick) for tick in log_ticks]))
     log_bar.set_label("Parcels (log scale)")
@@ -1513,17 +1643,22 @@ def plot_d4(frame: gpd.GeoDataFrame, city: gpd.GeoDataFrame, numbers: dict, stem
         borderaxespad=0.0,
     )
     fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    _assert_d4_text(fig, axes[0], [cbar_ab, cbar_c], renderer)
+    map_pos = [ax.get_position().frozen() for ax in axes]
     for index, ax in enumerate(axes):
         width_mm = ax.get_window_extent().width / fig.dpi * 25.4
         print(f"D4 map {index} width {width_mm:.2f} mm", flush=True)
         if width_mm < 55.0:
             raise Stop(f"STOP: D4 map {index} is {width_mm:.2f} mm wide, under 55 mm.")
     save_figure(fig, stem)
-    width_mm, height_mm = _png_mm(stem.with_suffix(".png"))
+    png_path = stem.with_suffix(".png")
+    width_mm, height_mm = _png_mm(png_path)
     print(f"D4 canvas {width_mm:.2f} x {height_mm:.2f} mm", flush=True)
     if abs(width_mm - FIG_WIDTH_MM) > 0.2:
         raise Stop(f"STOP: D4 width is {width_mm:.2f} mm, not {FIG_WIDTH_MM} mm.")
-    _assert_png_ink(stem.with_suffix(".png"), min_span_x=0.90, min_span_y=0.85)
+    _assert_png_ink(png_path, min_span_x=0.90, min_span_y=0.85)
+    _assert_d4_png(png_path, map_pos)
 
 
 def _fmt(value, digits=3):
@@ -1609,11 +1744,9 @@ def _scope_text(cells_qa: dict) -> dict[str, str]:
             "polygons do not cover the metro"
         ),
         "caption_d4": (
-            " Mid-grey is an analysis cell with zero parcels. Hatching inside the city boundary "
-            "is outside the aerial-footprint sample. Neither is an Eskom mask: the published "
+            " Mid-grey cells and hatching are not an Eskom mask: the published "
             "supply-authority layer leaves most of the metro, including the CBD, outside both "
-            "its CCT and Eskom polygons. On map C, a white cell inside the thin outline has "
-            "log ratio 0, including a cell that is zero on both counts."
+            "its CCT and Eskom polygons."
         ),
         "deviation": (
             "ODP_SPLIT_1 layer 3 does not cover the metro: required city locations and most "
@@ -1676,7 +1809,7 @@ Monthly new counts, not the cumulative curves, give a Pearson correlation of {_f
 
 D3 draws one point per analysis cell. The drawn fit is OLS with an intercept and HC1 robust standard errors. Cross-section HC1 matches clustering by cell, because each row is one cell. For counts the slope is {_fmt(counts['slope'], 4)} (SE {_fmt(counts['se'], 4)}), R² {_fmt(counts['r2'])}, N {counts['n']:,}, and {counts['zero_share']:.1%} of cells are zero on both axes. For capacity the slope is {_fmt(capacity['slope'], 4)} (SE {_fmt(capacity['se'], 4)}), R² {_fmt(capacity['r2'])}. The black squares are bin means: a bin for cells with a zero model value, then up to {N_QUANTILE_BINS} quantile bins of the remaining cells. The dashed line is 45 degrees. The same CSV supports the checks that are not drawn: dropping zero-zero cells, keeping cells whose parcels are mostly residential, adding off-grid SSEG status `2.0`, using the lower and upper stock rules, and a stacked snapshot panel with snapshot fixed effects. The panel rows cluster standard errors by H3-9 cell. The `se_type` column says which covariance was used. Those fits are in `fig_D3_ols.csv`.
 
-D4 uses the same cells and the same snapshot. The three maps sit in one row and share one longitude and latitude window, in degrees. There is no separate latitude axis title, so the maps can each stay at least 55 mm wide. The first two maps share one logarithmic colour bar underneath, with ticks at 1, 2, 5, 10, 20 and {d4['vmax_parcels']:.0f} parcels. An analysis cell with zero parcels is mid-grey. Area inside the city boundary but outside the aerial-footprint sample is hatched. The third map is clipped for display at the 99th percentile of the absolute log ratio (±{d4['log_ratio_clip']:.2f}). A white cell inside the thin analysis outline is a log ratio of 0, including a cell that is zero on both counts. Hatched area is outside the analysis footprint. The unclipped range is {d4['log_ratio_min']:.2f} to {d4['log_ratio_max']:.2f}, and the CSV has the unclipped value. Red means more model parcels than SSEG parcels.
+D4 uses the same cells and the same snapshot. The three maps sit in one row and share one longitude and latitude window, in degrees. There is no separate latitude axis title, so the maps can each stay at least 55 mm wide. The first two maps share one logarithmic colour bar underneath, with ticks at 1, 2, 5, 10, 20 and {int(d4['vmax_parcels'])} parcels. An analysis cell with zero parcels is mid-grey. Area inside the city boundary but outside the aerial-footprint sample is hatched. The third map is clipped for display at the 99th percentile of the absolute log ratio (±{d4['log_ratio_clip']:.2f}). A white cell inside the black outline has log ratio 0, including a cell that is zero on both counts. Black = analysis footprint, grey = city boundary. The unclipped range is {d4['log_ratio_min']:.2f} to {d4['log_ratio_max']:.2f}, and the CSV has the unclipped value. Red means more model parcels than SSEG parcels.
 
 ## Limits
 
@@ -1706,7 +1839,7 @@ Timing of detected rooftop PV and municipal SSEG commissioning in Cape Town. (A)
 
 ## Figure D4
 
-The same cells and snapshot as Figure D3. The three maps share one longitude and latitude window, in degrees. The first two share a logarithmic colour bar with ticks at 1, 2, 5, 10, 20 and {d4['vmax_parcels']:.0f}. Mid-grey is an analysis cell with zero parcels. Hatching inside the city boundary is outside the analysis footprint. The third map is log((1 + model parcels) / (1 + SSEG parcels)), clipped for display at ±{d4['log_ratio_clip']:.2f} (the 99th percentile of the absolute value). A white cell inside the thin outline has log ratio 0. Positive values are cells with more model parcels than SSEG parcels. The darker outline around the metro is the City of Cape Town boundary from geoBoundaries ADM2. The scale bar is 10 km.{scope['caption_d4']}
+The same cells and snapshot as Figure D3. Axes are longitude and latitude in degrees; the three maps share one window. The first two share a logarithmic colour bar with ticks at 1, 2, 5, 10, 20 and {int(d4['vmax_parcels'])}. Mid-grey is an analysis cell with zero parcels. Hatching inside the city boundary is outside the analysis footprint. The third map is log((1 + model parcels) / (1 + SSEG parcels)), clipped for display at ±{d4['log_ratio_clip']:.2f} (the 99th percentile of the absolute value). A white cell inside the black outline has log ratio 0, including a cell that is zero on both counts. Positive values are cells with more model parcels than SSEG parcels. Black = analysis footprint, grey = city boundary (geoBoundaries ADM2). The scale bar is 10 km.{scope['caption_d4']}
 """
     return readme, captions
 
