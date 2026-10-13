@@ -4,7 +4,7 @@
 |---|---|
 | 文档 ID | `PLAN-cv-appendix-figures-execution-2026-10-13` |
 | 日期 | 2026-10-13（rev2 同日：负责人拍板后更新） |
-| Status | **v1 已在本地建好，等待验收，尚未上传。** v2/v3 未开始。执行：Grok Build；验收：Opus 5.5 |
+| Status | **v1 验收为小改后接受。v1r1 已在本地建好，等待复验，尚未上传。** `release_v1/` 保留为修改前基线。v2/v3 未开始。执行：Grok Build；验收：Opus 5.5 |
 | 上游 | 任务清单 [`PLAN-cv-validation-appendix-tasklist-2026-10-13.md`](PLAN-cv-validation-appendix-tasklist-2026-10-13.md)（rev3）；SSEG 入库 [`DATA-sseg-registration-intake-2026-10-13.md`](DATA-sseg-registration-intake-2026-10-13.md)；市政 / Vexcel 复核 [`DATA-ct-vexcel-municipal-recheck-2026-10-13.md`](DATA-ct-vexcel-municipal-recheck-2026-10-13.md)；负责人决议 [`OWNER_DECISIONS.md`](OWNER_DECISIONS.md) D11 |
 | 范围 | 只做附录的 **6 张图**（D1–D6），以及每张图的作图数据和图注草稿。表 D1–D7 和 3.1 对 3.5 的门槛比较不在本轮（见 §5） |
 
