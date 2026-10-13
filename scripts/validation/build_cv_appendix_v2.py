@@ -924,7 +924,7 @@ It is a draft for comment. D1 is not a precision or recall result. D2 is not cle
 
 The cell is H3-9 `{d2['cell']}`, the analysis cell with the most parcels whose first dated install falls in January 2020 through June 2024, among cells with at least {MIN_RESIDENTIAL_PARCELS} residential parcels. It has {d2['n_residential_parcels']} residential parcels and {d2['n_new_parcels']} new PV parcels. The largest new parcel is {d2['top_share']:.1%} of the new area ({d2['top_zone']}).
 
-The next two cells, in the same order, are listed so the cell can be swapped before this batch is uploaded:
+The top three cells, including the one drawn above, are listed so it can be swapped before this batch is uploaded:
 
 {cards}
 
