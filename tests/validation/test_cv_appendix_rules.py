@@ -283,6 +283,8 @@ def test_v2_collaborator_text_states_counts_as_prose():
     assert "2020: 1, 2021: 0, 2022: 1, 2023: 1, 2024: 4" in readme
     assert "owner's pick" in readme
     assert "89ad3601c7bffff" in readme
+    assert "1 parcel)" in readme
+    assert "1 parcels" not in readme
     assert "most parcels" not in readme
     assert "revision v2r2" in readme
     assert "6.2 cm" in captions

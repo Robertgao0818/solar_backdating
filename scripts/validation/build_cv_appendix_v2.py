@@ -1535,6 +1535,8 @@ def _release_text(d2: dict, picks: pd.DataFrame, rank_position: int) -> tuple[st
     gsd_cm = float(d2["vexcel_gsd_cm"])
     cell_lead = _cell_lead(d2, rank_position)
     model_prose = _year_prose(d2["model_by_year"])
+    n_already = int(d2["n_already"])
+    already_phrase = f"{n_already} parcel" if n_already == 1 else f"{n_already} parcels"
     readme = f"""# Cape Town CV appendix figures, batch v2 revision {REVISION} (2026-10-14)
 
 This folder has two figures: D2 (one example cell, preview) and D1 (six illustrative detection chips).
@@ -1544,7 +1546,7 @@ It is a draft for comment. D1 is not a precision or recall result. D2 is not cle
 
 Panel A uses five aerial epochs of that cell. 2023 is omitted: the municipal layer named 2023 is a 2022 image at 25 cm. 2024 is Vexcel collection `{d2['vexcel_collection']}`, first capture {capture}, not the partial municipal 2024 mosaic. The ground sample distance printed on that panel is {gsd_cm:.1f} cm, measured on this cell's extract. The corner text says the imagery licence is not cleared.
 
-Panel B colours one point per model parcel by the year of its first dated midpoint. Grey points were already present by 2019 ({d2['n_already']} parcels) and are not in the bars. Census-bounded parcels have no year and are not drawn. The black line is the H3-9 boundary.
+Panel B colours one point per model parcel by the year of its first dated midpoint. Grey points were already present by 2019 ({already_phrase}) and are not in the bars. Census-bounded parcels have no year and are not drawn. The black line is the H3-9 boundary.
 
 Panel C counts new model parcels and commissioned SSEG parcels in the cell, through {WINDOW_END.date().isoformat()}. Model counts by year: {model_prose}. {sseg_sentence}
 
