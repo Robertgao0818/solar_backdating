@@ -257,6 +257,8 @@ SSEG 的 commission date（并网验收日期，记作 C）**不会早于真实�
 
 ## 2. 建议顺序
 
+> **2026-10-13：** 图 D1–D6 的执行说明（交付产物、交付方式、分批顺序）见 [`PLAN-cv-appendix-figures-execution-2026-10-13.md`](PLAN-cv-appendix-figures-execution-2026-10-13.md)。图优先，按 D5/D3/D4 → D2/D1 → D6 分三批交付。
+
 0. （rev2）向 Eddy 要 SSEG 路径；同时把 §A.1 的停止规则口径写死，发群里确认。
 1. 先发给合作者确认 P1–P6（P1 按会议方向走 A；P2 等 Eddy）。这一步不做，后面都可能返工。
 2. 不依赖 SSEG 的先做：表 D1、表 D2、`h3_r9` 列、平衡样本定义、按快照重建存量、表 D3、P4 测试集清点。

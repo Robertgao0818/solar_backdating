@@ -51,6 +51,14 @@ to 2024-07-02; about 5,150 of those have coordinates. Use the full-precision
 `wkt` column, because `latitude/longitude` are rounded to ~100 m. `erf` is
 hashed, so parcel matching must be spatial. No property use code. No
 comparison against model output has been run yet; §B is still unfrozen.
+**Figure execution plan (2026-10-13, DRAFT):**
+[`PLAN-cv-appendix-figures-execution-2026-10-13.md`](PLAN-cv-appendix-figures-execution-2026-10-13.md).
+Figures go first, in three Dropbox drops under `RA_Solar/Gao/backdating/ct_cv_appendix_figures_v{n}_<date>/`:
+v1 = D5/D3/D4, v2 = D2/D1, v3 = D6 (only after §B is frozen). Phase 0 is the
+CoCT parcel download (835,018 parcels, ~420 requests) plus point-in-parcel
+joins. The unit is PV parcels, the primary snapshot is 2024-06-30, and
+capacity uses 0.19 kWp/m², not the SSEG-fitted 0.040. Eskom direct-supply
+areas still need a boundary source. Not started.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
