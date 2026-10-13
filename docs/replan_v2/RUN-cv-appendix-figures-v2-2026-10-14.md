@@ -3,7 +3,7 @@
 | 字段 | 值 |
 |---|---|
 | 日期 | 2026-10-14 |
-| 状态 | 本地已组装，等待 Opus 验收。**没有上传。** |
+| 状态 | **已被 Opus 拒绝（2026-10-14）。没有上传。** 修正版是 [`RUN-cv-appendix-figures-v2r1-2026-10-14.md`](RUN-cv-appendix-figures-v2r1-2026-10-14.md)。下面第 4 节里“不是坐标系错开”这句不成立，以 v2r1 的偏移表为准。 |
 | 计划 | [`PLAN-cv-appendix-figures-execution-2026-10-13.md`](PLAN-cv-appendix-figures-execution-2026-10-13.md) §3 Phase 2 |
 | 代码 | `67a9c71c975184537b36e6a1e0d45ca9d2c1624e`（`release_v2/release_manifest.json` 的 `code_commit`） |
 | 本地包 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2/` |
@@ -91,6 +91,8 @@ Vexcel 用的是 ZAsolar 里已经配好的账号，只裁了这一个格子。�
 | L1952 | 346 | 210 | 28 |
 | L1953 | 143 | 55 | 11 |
 | L1954 | 385 | 153 | 25 |
+
+> **更正（2026-10-14）：** 下一句不成立。外接框装得下中心点，看不出大约 1.4 米的南北平移。测量和改法见 [`RUN-cv-appendix-figures-v2r1-2026-10-14.md`](RUN-cv-appendix-figures-v2r1-2026-10-14.md) 第 4 节。
 
 L1952、L1953、L1954 配上的很少。抽查过它们的范围：人工多边形的中心点几乎都落在检测图层的外接框里（L1952 约 94%，L1954 约 99%），所以不是坐标系错开。这三格里没配上的多边形很多。如果有人把上表加总后写成精确率或召回率，就会把不同场景、以及没有人工核对过的视觉类别，说成一个准确率。这一批明确不这样做。
 

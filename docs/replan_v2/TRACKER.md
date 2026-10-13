@@ -70,12 +70,14 @@ of `release_v1r2/` only). Local package remains
 [`RUN-cv-appendix-figures-v1-2026-10-13.md`](RUN-cv-appendix-figures-v1-2026-10-13.md)
 section rev2. Published numbers are unchanged, including clustered panel
 standard errors and the shared cross-correlation window (best lag 2,
-Pearson 0.621, n = 64). **v2 is local and awaiting acceptance. It is
-not uploaded.** Package:
-`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2/`. Run note:
-[`RUN-cv-appendix-figures-v2-2026-10-14.md`](RUN-cv-appendix-figures-v2-2026-10-14.md).
-Code `67a9c71`. D2 is a preview of one H3-9 cell; D1 is six illustrative
-chips, not a precision or recall result. v3 has not started.
+Pearson 0.621, n = 64). **v2 was rejected by Opus on 2026-10-14 and was
+not uploaded.** The bounded rework is **v2r1, local and awaiting
+acceptance. It is not uploaded.** Package:
+`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2r1/`. The
+rejected tree `release_v2/` is unchanged (code `67a9c71`). Run note:
+[`RUN-cv-appendix-figures-v2r1-2026-10-14.md`](RUN-cv-appendix-figures-v2r1-2026-10-14.md).
+Code `8ade10a`. D2 is still a preview of one H3-9 cell; D1 is still six
+illustrative chips, not a precision or recall result. v3 has not started.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
