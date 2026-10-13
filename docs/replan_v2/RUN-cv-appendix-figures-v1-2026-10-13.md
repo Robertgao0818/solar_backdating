@@ -11,7 +11,7 @@
 | 修改前基线 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1/`（代码 `357dd9f`，不覆盖） |
 | 上传目录 | `dropbox:RA_Solar/appendix/ct_cv_appendix_figures_v1_2026-10-13/`（只传了 `release_v1r2/` 的内容，2026-10-14，校验 0 差异） |
 
-这一批是三张图，不是检测准确率，也不是安装日期的误差。D5 看时间，D3 看格子里模型和市政登记是否一起变多，D4 看它们在地图上差在哪里。2026-10-14 的 rev1 只改标准误、相关的时间窗和图面，不改 §2 的存量口径。同一天的 rev2 只改 D4 的图面，格子上的数字和 D5、D3 都没有变。v2（D2 预览和 D1）和 v3（D6）没有开始。
+这一批是三张图，不是检测准确率，也不是安装日期的误差。D5 看时间，D3 看格子里模型和市政登记是否一起变多，D4 看它们在地图上差在哪里。2026-10-14 的 rev1 只改标准误、相关的时间窗和图面，不改 §2 的存量口径。同一天的 rev2 只改 D4 的图面，格子上的数字和 D5、D3 都没有变。v2（D2 预览和 D1）后来单独成批，见 [`RUN-cv-appendix-figures-v2-2026-10-14.md`](RUN-cv-appendix-figures-v2-2026-10-14.md)，尚未上传。v3（D6）没有开始。
 
 ## 1. 包里有什么
 
@@ -201,4 +201,4 @@ Opus 对 v1r1 的结论是 ACCEPT WITH MINOR FIXES，只剩 D4 的图面，还�
 
 画布仍宽 179.92 mm（2125 像素）。D4 高度从 rev1 的 98.64 mm 增到 105.16 mm（1242 像素），多出来的是经度标题让出的位置。每张地图宽 55.26 mm，仍不低于 55 mm。D5 仍是 179.92 × 223.52 mm，D3 仍是 179.92 × 90.17 mm。这两张图和全部 `data/` CSV 与 `release_v1r1/` 字节相同。`sha256sum -c SHA256SUMS.txt` 通过。
 
-复验只需要重看 D4 的 PNG 和 PDF、`captions.md` 里的 D4 段，以及 `SHA256SUMS.txt`。不要上传。v2 没有开始。
+复验只需要重看 D4 的 PNG 和 PDF、`captions.md` 里的 D4 段，以及 `SHA256SUMS.txt`。rev2 当天的要求是不要上传，而且 v2 还没开始。v2 后来单独成批，见 [`RUN-cv-appendix-figures-v2-2026-10-14.md`](RUN-cv-appendix-figures-v2-2026-10-14.md)。
