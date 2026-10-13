@@ -14,23 +14,106 @@ from scripts.validation.cv_appendix_d6 import (
     CASE_LAG,
     InvalidParcelInterval,
     assign_exterior_metres,
+    classify_case,
     classify_dated_case,
     commission_inside_interval,
     delta_months,
     display_edges,
     earliest_commission,
+    enters_case_count,
     enters_delta_histogram,
     histogram_with_tails,
     reference_histogram,
     summarize_months,
     summarize_registration_lag,
 )
+from scripts.validation.cv_appendix_rules import parcel_model_interval
 
 
 def test_only_dated_parcels_enter_the_histogram():
     assert enters_delta_histogram("dated")
     for kind in ("left_censored", "census_bound", "mixed", "undated", "no_model"):
         assert not enters_delta_histogram(kind)
+    doc = enters_delta_histogram.__doc__ or ""
+    assert "all polygons are dated" not in doc.lower()
+    assert "ignored" in doc.lower()
+
+
+def test_case_count_is_separate_from_the_histogram():
+    for kind in ("dated", "census_bound", "mixed", "left_censored"):
+        assert enters_case_count(kind)
+    for kind in ("undated", "no_model"):
+        assert not enters_case_count(kind)
+    assert enters_delta_histogram("dated")
+    assert not enters_delta_histogram("mixed")
+    commission = pd.Timestamp("2020-01-01")
+    assert classify_case("dated", commission, pd.Timestamp("2020-06-01"), commission, 90) == classify_dated_case(
+        commission, pd.Timestamp("2020-06-01"), commission, 90
+    )
+    with pytest.raises(ValueError):
+        classify_case("undated", commission, pd.Timestamp("2020-06-01"), commission, 90)
+    with pytest.raises(ValueError):
+        classify_case("no_model", None, None, commission, 90)
+
+
+def test_census_bound_uses_the_dated_rule_on_the_census_day():
+    kind, start, end = parcel_model_interval(
+        ["census_bound"],
+        [pd.Timestamp("2024-04-01")],
+        [pd.Timestamp("2025-01-31")],
+    )
+    assert kind == "census_bound"
+    assert start == pd.Timestamp("2024-04-01")
+    assert end == pd.Timestamp("2025-01-31")
+    commission = pd.Timestamp("2024-07-02")
+    # U is the census day, after C, so this is not registration lag.
+    assert classify_case(kind, start, end, commission, 90) == CASE_AGREE
+    late = commission + pd.Timedelta(days=91)
+    assert classify_case(kind, late, end, commission, 90) == CASE_CONTRADICTION
+    on_limit = commission + pd.Timedelta(days=90)
+    assert classify_case(kind, on_limit, end, commission, 90) == CASE_AGREE
+    # The same rule still returns lag when U is on or before C.
+    assert classify_case(kind, pd.Timestamp("2020-01-01"), commission, commission, 90) == CASE_LAG
+
+
+def test_mixed_case_uses_the_earliest_bounds():
+    kind, start, end = parcel_model_interval(
+        ["dated", "census_bound", "undated"],
+        [pd.Timestamp("2022-06-01"), pd.Timestamp("2022-01-15"), None],
+        [pd.Timestamp("2022-08-01"), pd.Timestamp("2025-01-31"), None],
+    )
+    assert kind == "mixed"
+    assert start == pd.Timestamp("2022-01-15")
+    assert end == pd.Timestamp("2022-08-01")
+    commission = pd.Timestamp("2022-03-01")
+    assert classify_case(kind, start, end, commission, 90) == CASE_AGREE
+    # Earliest U on or before C is registration lag, even if the census day is later.
+    lag_kind, lag_start, lag_end = parcel_model_interval(
+        ["dated", "census_bound"],
+        [pd.Timestamp("2021-01-01"), pd.Timestamp("2021-06-01")],
+        [pd.Timestamp("2021-04-01"), pd.Timestamp("2025-01-31")],
+    )
+    assert lag_end == pd.Timestamp("2021-04-01")
+    assert classify_case(lag_kind, lag_start, lag_end, pd.Timestamp("2021-05-01"), 90) == CASE_LAG
+    contradiction_start = commission + pd.Timedelta(days=91)
+    assert (
+        classify_case(kind, contradiction_start, pd.Timestamp("2022-12-01"), commission, 90)
+        == CASE_CONTRADICTION
+    )
+
+
+def test_left_censored_is_never_a_contradiction():
+    commission = pd.Timestamp("2020-06-01")
+    present = pd.Timestamp("2020-01-15")
+    assert classify_case("left_censored", None, present, commission, 90) == CASE_LAG
+    assert classify_case("left_censored", None, present, commission, 0) == CASE_LAG
+    assert classify_case("left_censored", None, present, commission, 180) == CASE_LAG
+    assert classify_case("left_censored", None, commission, commission, 90) == CASE_LAG
+    assert classify_case("left_censored", pd.NaT, commission + pd.Timedelta(days=1), commission, 0) == CASE_AGREE
+    with pytest.raises(ValueError):
+        classify_case("left_censored", pd.Timestamp("2021-01-01"), present, commission, 90)
+    with pytest.raises(ValueError):
+        classify_case("left_censored", None, None, commission, 90)
 
 
 def test_cases_follow_the_frozen_boundaries():

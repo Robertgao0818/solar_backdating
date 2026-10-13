@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build CV appendix figure D6 (batch v3).
+"""Build CV appendix figure D6 (batch v3r1).
 
 The figure is a histogram of parcel midpoint minus SSEG commission date.
 Definitions live in cv_appendix_constants.py, cv_appendix_rules.py, and
@@ -57,13 +57,16 @@ from scripts.validation.cv_appendix_d6 import (
     CASES,
     DISPLAY_MAX_MONTHS,
     DISPLAY_MIN_MONTHS,
+    InvalidParcelInterval,
     assign_exterior_metres,
     assert_interval_ordered,
+    classify_case,
     classify_dated_case,
     commission_inside_interval,
     delta_months,
     display_edges,
     earliest_commission,
+    enters_case_count,
     enters_delta_histogram,
     histogram_with_tails,
     reference_histogram,
@@ -73,8 +76,9 @@ from scripts.validation.cv_appendix_d6 import (
 from scripts.validation.cv_appendix_rules import interval_midpoint, is_commissioned_status, parcel_model_interval
 
 PHASE0 = WORK_ROOT / "phase0"
-STAGING = WORK_ROOT / "staging_v3"
-RELEASE = WORK_ROOT / "release_v3"
+STAGING = WORK_ROOT / "staging_v3r1"
+RELEASE = WORK_ROOT / "release_v3r1"
+FROZEN_V3 = WORK_ROOT / "release_v3"
 PARCEL_GPKG = WORK_ROOT / "parcels" / "parcels.gpkg"
 FIG_WIDTH_IN = FIG_WIDTH_MM / 25.4
 WINDOW_START = pd.Timestamp(HISTOGRAM_MONTH_START + "-01")
@@ -91,13 +95,14 @@ PUBLISHED_COMMISSIONED_MATCHED = 5146
 DEVIATIONS = [
     "Delta in months is an exact day count divided by 365.2425/12. The plan asks for months and does not name the divisor.",
     "The reference line is the exact mixture of per-pair discrete uniforms over inclusive calendar days. It is not a Monte Carlo draw.",
-    "A parcel with both a dated polygon and a census-bounded polygon is labelled mixed. It is counted and kept out of the histogram and out of the three cases. Every mixed interval has U on or after L.",
+    "A parcel with both a dated polygon and a census-bounded polygon is labelled mixed. It is kept out of the histogram and out of the dated main case table. Its own rows use the three-way rule on the earliest start and the earliest end across those polygons. Every mixed interval has U on or after L.",
     "The 10 m buffer is defined in EPSG:32734 metres. It added no parcels: every commissioned row with a WKT point is already strictly inside a parcel, and the unmatched commissioned rows have no WKT. Rounded latitude and longitude were not read.",
     "The strict parcel assignment published in Phase 0 is reused, including its smaller-parcel choice where one point fell in more than one parcel. Those points are not reassigned.",
-    "The drawn window is -36 to 36 months. Means, medians, shares, and the three case counts use every dated pair, including pairs outside the window.",
+    "The drawn window is -36 to 36 months. Means, medians, shares, and the dated case counts use every dated pair, including pairs outside the window.",
     "Contradiction cases were not reviewed on an aerial image. The three case counts are a description of the two dates.",
     "Commissions before 2019 stay in the main sample and are counted on their own. They are not dropped.",
     "No single-record commission date falls on or after 2024-10-31, so the three-month cutoff removes nobody from this extract. The cutoff is still applied.",
+    "Census-bounded parcels are kept out of the main case count. That table covers only dated parcels. Census-bounded parcels are listed on their own rows. Their interval end is the census date, so a commission date before that day is agreement or contradiction.",
 ]
 
 
@@ -409,6 +414,117 @@ def _labelled(frame: pd.DataFrame, tau_days: int) -> pd.Series:
     return pd.Series(labels, index=frame.index)
 
 
+def _case_labels(frame: pd.DataFrame, tau_days: int) -> pd.Series:
+    """Cases for one non-histogram sample. The caller chooses the rows."""
+    labels = []
+    for kind, start, end, commission in zip(frame["parcel_kind"], frame["L"], frame["U"], frame["C"]):
+        kind_name = str(kind)
+        if not enters_case_count(kind_name):
+            raise Stop(f"STOP: {kind_name} is not classified into the three cases.")
+        try:
+            labels.append(classify_case(kind_name, start, end, commission, tau_days))
+        except (InvalidParcelInterval, ValueError) as exc:
+            raise Stop(f"STOP: case classification failed for {kind_name}: {exc}") from exc
+    series = pd.Series(labels, index=frame.index)
+    if int(series.isin(list(CASES)).sum()) != len(frame):
+        raise Stop("STOP: a parcel did not receive one of the three cases.")
+    return series
+
+
+def _assert_release_targets() -> None:
+    if STAGING.name != "staging_v3r1" or RELEASE.name != "release_v3r1":
+        raise Stop(f"STOP: refusing to write {STAGING} or {RELEASE}.")
+    frozen_release = (WORK_ROOT / "release_v3").resolve()
+    frozen_staging = (WORK_ROOT / "staging_v3").resolve()
+    if RELEASE.resolve() == frozen_release or STAGING.resolve() == frozen_staging:
+        raise Stop("STOP: refusing to write the frozen v3 tree.")
+
+
+def _assert_frozen_v3(classes: pd.DataFrame) -> None:
+    """The v3 case rows stay as released. New samples are extra rows."""
+    frozen_classes = pd.read_csv(FROZEN_V3 / "data" / "fig_D6_classes.csv")
+    key = ["sample", "tau_days", "case"]
+    merged = frozen_classes.merge(classes, on=key, how="left", suffixes=("_v3", "_new"))
+    if merged[["n_new", "n_dated_new"]].isna().any().any():
+        raise Stop("STOP: a release_v3 case row is missing from v3r1.")
+    if not (merged["n_v3"] == merged["n_new"]).all() or not (merged["n_dated_v3"] == merged["n_dated_new"]).all():
+        raise Stop("STOP: a release_v3 case count changed in v3r1.")
+
+
+def _assert_frozen_bytes(name: str) -> None:
+    """Stop if a file that v3 already published is no longer the same bytes."""
+    new_bytes = (STAGING / name).read_bytes()
+    old_bytes = (FROZEN_V3 / "data" / name).read_bytes()
+    if new_bytes != old_bytes:
+        raise Stop(f"STOP: {name} differs from release_v3. The dated table was not rewritten.")
+
+
+def _assert_added_cases(classes: pd.DataFrame) -> None:
+    """Stop before release if the tau=90 review table is not reproduced."""
+    expected = {
+        "main_census_bound": (241, 0, 68, 173),
+        "main_mixed": (643, 314, 113, 216),
+        "main_left_censored": (1071, 865, 206, 0),
+    }
+
+    def triple(sample: str, tau: int) -> tuple[int, int, int, int]:
+        hit = classes.loc[(classes["sample"] == sample) & (classes["tau_days"] == tau)]
+        if len(hit) != 3:
+            raise Stop(f"STOP: {sample} at tau {tau} does not have three case rows.")
+        by_case = {str(row.case): int(row.n) for row in hit.itertuples()}
+        size = int(hit["n_dated"].iloc[0])
+        return (
+            size,
+            by_case["registration_lag"],
+            by_case["agreement"],
+            by_case["contradiction"],
+        )
+
+    lines = []
+    for sample in ("main_dated", "main_census_bound", "main_mixed", "main_left_censored"):
+        for tau in (0, 30, 90, 180):
+            size, lag, agree, contra = triple(sample, tau)
+            lines.append(f"{sample} tau {tau}: n {size} lag {lag} agree {agree} contra {contra}")
+            if lag + agree + contra != size:
+                raise Stop("STOP: cases do not partition " + lines[-1])
+    print("\n".join(lines), flush=True)
+    for sample, wanted in expected.items():
+        found = triple(sample, 90)
+        if found != wanted:
+            raise Stop(
+                "STOP: tau 90 case counts differ from the review table. "
+                f"{sample} found {found}, expected {wanted}. "
+                "The release was not written."
+            )
+    for tau in (0, 30, 90, 180):
+        if triple("main_census_bound", tau)[1] != 0:
+            raise Stop(f"STOP: census-bounded registration lag is not 0 at tau {tau}.")
+        if triple("main_left_censored", tau)[3] != 0:
+            raise Stop(f"STOP: a left-censored parcel was called a contradiction at tau {tau}.")
+    for sample in ("main_census_bound", "main_mixed", "main_left_censored", "main_dated"):
+        lags = {triple(sample, tau)[1] for tau in (0, 30, 90, 180)}
+        if len(lags) != 1:
+            raise Stop(f"STOP: registration lag for {sample} changes with tau: {sorted(lags)}.")
+
+
+def _clipped_reference_note(hist: pd.DataFrame, y_max: float) -> str:
+    """Sentence for the two reference bins that rise above the axis."""
+    bins = hist.loc[hist["region"] == "bin"].copy()
+    near = bins.loc[np.isclose(bins["bin_left_months"], -1.0) | np.isclose(bins["bin_left_months"], 0.0)]
+    near = near.sort_values("bin_left_months")
+    clipped = bins.loc[bins["n_reference"] > y_max]
+    clipped_edges = {float(value) for value in clipped["bin_left_months"]}
+    if len(near) != 2 or clipped_edges != {-1.0, 0.0}:
+        detail = clipped[["bin_left_months", "n_reference"]].to_dict("records")
+        raise Stop(
+            "STOP: the clipped reference bins are not the two bins next to 0. "
+            f"Found {detail}."
+        )
+    left_n = int(round(float(near.iloc[0]["n_reference"])))
+    right_n = int(round(float(near.iloc[1]["n_reference"])))
+    return f"Reference reaches {left_n:,} and {right_n:,} in the two bins next to 0 (clipped)."
+
+
 def _dated_frame(sample: pd.DataFrame) -> pd.DataFrame:
     dated = sample.loc[sample["parcel_kind"].map(enters_delta_histogram)].copy()
     if dated.empty:
@@ -612,14 +728,23 @@ def _long_metrics(payload: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def plot_d6(dated: pd.DataFrame, hist: pd.DataFrame, metrics: dict, stem: Path) -> None:
+def plot_d6(
+    dated: pd.DataFrame,
+    hist: pd.DataFrame,
+    metrics: dict,
+    stem: Path,
+    y_max: float,
+    clip_note: str,
+) -> None:
     apply_style()
     bins = hist.loc[hist["region"] == "bin"]
     edges = np.r_[bins["bin_left_months"].to_numpy(), bins["bin_right_months"].iloc[-1]]
     observed = bins["n_observed"].to_numpy()
     reference = bins["n_reference"].to_numpy()
-    fig = plt.figure(figsize=(FIG_WIDTH_IN, 4.35))
-    ax = fig.add_axes((0.10, 0.20, 0.86, 0.58))
+    # 1.3 times the observed peak keeps the bars readable. The reference
+    # spike is clipped at that line and named in the annotation.
+    fig = plt.figure(figsize=(FIG_WIDTH_IN, 4.05))
+    ax = fig.add_axes((0.10, 0.16, 0.86, 0.74))
     ax.bar(
         edges[:-1],
         observed,
@@ -629,26 +754,48 @@ def plot_d6(dated: pd.DataFrame, hist: pd.DataFrame, metrics: dict, stem: Path) 
         label="Dated parcels",
         zorder=2,
     )
-    ax.stairs(reference, edges, color="#222222", linewidth=1.05, label="Uniform inside each interval", zorder=3)
+    ax.stairs(
+        reference,
+        edges,
+        color="#222222",
+        linewidth=1.05,
+        label="Uniform inside each interval",
+        zorder=3,
+        clip_on=True,
+    )
     ax.axvline(0, color="#666666", linewidth=0.6, linestyle="--", zorder=1)
     ax.set_xlim(DISPLAY_MIN_MONTHS - 0.8, DISPLAY_MAX_MONTHS + 0.8)
-    ax.set_ylim(0, max(float(observed.max()), float(reference.max())) * 1.08)
+    ax.set_ylim(0, y_max)
     ax.set_xlabel("Δ (months): interval midpoint − commission date")
     ax.set_ylabel("Parcels")
+    median_text = _fmt_months(metrics["median_delta_months"]).replace("-", "\u2212")
     ax.set_title(
         "D6. Model midpoint minus SSEG commission date\n"
         f"N = {_fmt_count(metrics['n_dated'])} dated parcels; "
-        f"median {_fmt_months(metrics['median_delta_months'])} months; "
+        f"median {median_text} months; "
         f"{_fmt_count(metrics['n_abs_delta_le_6'])} within 6 months; "
         f"{_fmt_count(metrics['n_abs_delta_le_12'])} within 12 months",
         loc="left",
+        pad=2,
     )
     ax.legend(frameon=False, loc="upper right")
+    ax.text(
+        0.01,
+        0.98,
+        clip_note.replace(" in the two bins", "\nin the two bins"),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=7.5,
+        color="#222222",
+        linespacing=1.25,
+        zorder=4,
+    )
     ax.yaxis.grid(True, linewidth=0.3, color="#dddddd")
     ax.set_axisbelow(True)
     fig.text(
         0.10,
-        0.035,
+        0.028,
         "Negative Δ means the midpoint is earlier than the commission date.\n"
         f"Outside −36 to 36 months: {_fmt_count(metrics['n_below_window'])} below, "
         f"{_fmt_count(metrics['n_above_window'])} above. Totals use every dated parcel.",
@@ -675,23 +822,45 @@ def _release_text(metrics: dict, sample: pd.DataFrame, classes: pd.DataFrame) ->
 
     n_main = kind_n("main", "parcels")
     n_dated = metrics["n_dated"]
+    tau_order = tuple(sorted(int(item) for item in (TAU_DAYS_MAIN, *TAU_DAYS_SENSITIVITY)))
     lines = []
-    for tau in (TAU_DAYS_MAIN, *TAU_DAYS_SENSITIVITY):
+    for tau in tau_order:
         lines.append(
-            f"| {int(tau)} | {case_n('main_dated', int(tau), 'registration_lag')} | "
-            f"{case_n('main_dated', int(tau), 'agreement')} | "
-            f"{case_n('main_dated', int(tau), 'contradiction')} |"
+            f"| {int(tau)} | {_fmt_count(case_n('main_dated', int(tau), 'registration_lag'))} | "
+            f"{_fmt_count(case_n('main_dated', int(tau), 'agreement'))} | "
+            f"{_fmt_count(case_n('main_dated', int(tau), 'contradiction'))} |"
         )
     case_table = "\n".join(lines)
-    readme = f"""# Cape Town CV appendix figure D6, batch v3 (2026-10-14)
+    added_lines = []
+    for sample_name, label in (
+        ("main_census_bound", "census-bounded"),
+        ("main_mixed", "mixed"),
+        ("main_left_censored", "left-censored"),
+    ):
+        for tau in tau_order:
+            added_lines.append(
+                f"| {label} | {int(tau)} | {_fmt_count(case_n(sample_name, int(tau), 'registration_lag'))} | "
+                f"{_fmt_count(case_n(sample_name, int(tau), 'agreement'))} | "
+                f"{_fmt_count(case_n(sample_name, int(tau), 'contradiction'))} |"
+            )
+    added_table = "\n".join(added_lines)
+    dated_contra_90 = case_n("main_dated", 90, "contradiction")
+    census_contra_90 = case_n("main_census_bound", 90, "contradiction")
+    mixed_contra_90 = case_n("main_mixed", 90, "contradiction")
+    left_contra_90 = case_n("main_left_censored", 90, "contradiction")
+    literal_contra_90 = dated_contra_90 + census_contra_90 + mixed_contra_90
+    pre_lag = case_n("main_pre2019_dated", 90, "registration_lag")
+    pre_agree = case_n("main_pre2019_dated", 90, "agreement")
+    pre_contra = case_n("main_pre2019_dated", 90, "contradiction")
+    readme = f"""# Cape Town CV appendix figure D6, batch v3r1 (2026-10-14)
 
 This folder has one figure, D6. It compares the model interval on a cadastral parcel with the SSEG commission date on that parcel. It is a draft for comment. The counts describe the two dates. They were not reviewed on an aerial image, and they are not a score for the model.
+
+This description is neither the §B.5.1 model-attributed contradiction rate nor the §B.7 3.1-vs-3.5 threshold test. Both need the §B.6 aerial adjudication, which is a separate run.
 
 The model is {MODEL_LABEL}. {MODEL_EXCLUDED}
 
 ## Please confirm four defaults
-
-These were not restated by the collaborator note, so they are marked as defaults.
 
 1. The counting unit is a cadastral parcel that contains PV, not a polygon and not a building.
 2. The stock snapshot used elsewhere in this appendix is 2024-06-30. The SSEG commission dates in this extract end on {metrics['commission_date_max']}, so a later snapshot would make the register look smaller. D6 itself does not use that snapshot. It keeps a commission date when the date is before {D6_COMMISSION_BEFORE}.
@@ -702,11 +871,11 @@ These were not restated by the collaborator note, so they are marked as defaults
 
 A parcel is in the main sample when it contains exactly one commissioned SSEG record, the record's WKT point falls inside the parcel, and the commission date is before {D6_COMMISSION_BEFORE}. That is {_fmt_count(n_main)} parcels. Commissioned means the status starts with `1.0 ` or `4.0 `. Off-grid rows are not included. Rounded latitude and longitude were not read.
 
-Of these parcels, {_fmt_count(n_dated)} have a dated model interval and are the histogram. {_fmt_count(kind_n('main', 'left_censored'))} were already present before the 2019 satellite window, so they have no interval start and cannot be a contradiction. {_fmt_count(kind_n('main', 'census_bound'))} are known only up to the census date {CENSUS_DATE}. {_fmt_count(kind_n('main', 'mixed'))} have both a dated polygon and a census-bounded polygon. {_fmt_count(kind_n('main', 'undated'))} are undated. {_fmt_count(kind_n('main', 'no_model'))} contain the SSEG point and no census polygon. Those five groups are counted and are not in the histogram.
+Of these parcels, {_fmt_count(n_dated)} have a dated model interval and are the histogram and the main case table below. {_fmt_count(kind_n('main', 'left_censored'))} were already present before the 2019 satellite window, so they have no interval start and cannot be a contradiction. {_fmt_count(kind_n('main', 'census_bound'))} are known only up to the census date {CENSUS_DATE}. {_fmt_count(kind_n('main', 'mixed'))} have both a dated polygon and a census-bounded polygon. {_fmt_count(kind_n('main', 'undated'))} are undated. {_fmt_count(kind_n('main', 'no_model'))} contain the SSEG point and no census polygon. The left-censored, census-bounded, and mixed parcels have their own case rows in `fig_D6_classes.csv`. Undated parcels and parcels with no model polygon are not placed in the three cases. None of those five groups is in the histogram.
 
-The parcel interval uses the earliest start and the earliest end among the dated polygons on the parcel. The midpoint is the calendar midpoint of that interval. Where one point fell in more than one parcel, the published Phase 0 assignment is kept.
+For a dated parcel, the interval uses the earliest start and the earliest end among the polygons that set the interval. Undated polygons on that parcel are ignored. A mixed parcel uses the earliest start and the earliest end across its dated and census-bounded polygons. The midpoint is the calendar midpoint of that interval. Where one point fell in more than one parcel, the published Phase 0 assignment is kept.
 
-{_fmt_count(kind_n('main_pre2019', 'parcels'))} main-sample commissions are before 2019. {_fmt_count(kind_n('main_pre2019', 'left_censored'))} of them are left-censored, which is the pattern the 2019 window leads one to expect. {_fmt_count(kind_n('main_pre2019', 'dated'))} of them are dated and stay in the histogram. They are listed in `fig_D6_classes.csv` under `main_pre2019_dated`.
+{_fmt_count(kind_n('main_pre2019', 'parcels'))} main-sample commissions are before 2019. {_fmt_count(kind_n('main_pre2019', 'left_censored'))} of them are left-censored, which is the pattern the 2019 window leads one to expect. {_fmt_count(kind_n('main_pre2019', 'dated'))} of them are dated and stay in the histogram. At tau of 90 days those dated parcels are {_fmt_count(pre_lag)} registration lag, {_fmt_count(pre_agree)} agreement, and {_fmt_count(pre_contra)} contradiction (`main_pre2019_dated`). The {_fmt_count(pre_contra)} contradictions are close to built in. The model window starts in 2019, so the interval start is after the commission date plus tau almost by construction. These parcels mainly point to reinstalls or additions, or to register or matching problems.
 
 No main-sample commission date is on or after {D6_COMMISSION_BEFORE} (excluded parcels: {kind_n('excluded_cutoff', 'parcels')}). The latest commissioned date in the extract is {metrics['commission_date_max']}.
 
@@ -716,15 +885,23 @@ No main-sample commission date is on or after {D6_COMMISSION_BEFORE} (excluded p
 
 On the {_fmt_count(n_dated)} dated parcels, the mean is {_fmt_months(metrics['mean_delta_months'])} months and the median is {_fmt_months(metrics['median_delta_months'])} months. The interquartile range is {_fmt_months(metrics['iqr_delta_months'])} months (25th percentile {_fmt_months(metrics['q1_delta_months'])}, 75th percentile {_fmt_months(metrics['q3_delta_months'])}). {_fmt_count(metrics['n_abs_delta_le_6'])} have |Δ| at most 6 months, and {_fmt_count(metrics['n_abs_delta_le_12'])} have |Δ| at most 12 months. The commission date falls inside the closed interval on {_fmt_count(metrics['n_commission_inside_interval'])} parcels.
 
-The black line is the histogram that would arise if each commission date were equally likely to fall on any inclusive calendar day inside that pair's own interval. Pairs with a short interval pile up near zero. The median interval width is {_fmt_months(metrics['median_width_days'])} days, so the line is not a band of fixed width. The drawn window is −36 to 36 months. {_fmt_count(metrics['n_below_window'])} dated parcels fall below it and {_fmt_count(metrics['n_above_window'])} fall above it. The totals above include them.
+The black line is the histogram that would arise if each commission date were equally likely to fall on any inclusive calendar day inside that pair's own interval. Pairs with a short interval pile up near zero. The median interval width is {_fmt_months(metrics['median_width_days'])} days, so the line is not a band of fixed width. The drawn window is −36 to 36 months. {_fmt_count(metrics['n_below_window'])} dated parcels fall below it and {_fmt_count(metrics['n_above_window'])} fall above it. The totals above include them. The vertical axis stops at 1.3 times the tallest observed bar ({_fmt_count(int(round(metrics['observed_peak'])))} parcels), so the limit is {metrics['y_max']:.1f}. {metrics['reference_clip_note']} The reference values are the histogram counts, rounded to the nearest parcel.
 
 ## Three descriptive cases
 
-tau is 90 days in the main count. Registration lag means the interval end is on or before the commission date. Agreement means the interval start is on or before the commission date plus tau, and the interval end is after the commission date. Contradiction means the interval start is after the commission date plus tau. A contradiction can be a missed panel or a bad match. This batch does not separate those.
+tau is 90 days in the main count. The table below covers only the {_fmt_count(n_dated)} dated parcels. The owner has not chosen whether that dated-only count, or the wider count in the next table, is the primary case count. Registration lag means the interval end is on or before the commission date. Agreement means the interval start is on or before the commission date plus tau, and the interval end is after the commission date. Contradiction means the interval start is after the commission date plus tau. A contradiction can be a missed panel or a bad match. This batch does not separate those.
 
 | tau (days) | registration lag | agreement | contradiction |
 |---|---:|---:|---:|
 {case_table}
+
+Census-bounded, mixed, and left-censored parcels stay out of that table. They are classified on their own rows. A census-bounded parcel has its interval end on the census date. A mixed parcel uses the earliest start and the earliest end across its dated and census-bounded polygons. A left-censored parcel has no interval start: registration lag if the interval end is on or before the commission date, otherwise agreement, and never a contradiction.
+
+| parcel kind | tau (days) | registration lag | agreement | contradiction |
+|---|---:|---:|---:|---:|
+{added_table}
+
+At tau of 90 days the dated-only contradiction count is {_fmt_count(dated_contra_90)}. Census-bounded parcels add {_fmt_count(census_contra_90)} and mixed parcels add {_fmt_count(mixed_contra_90)}. Left-censored parcels add {_fmt_count(left_contra_90)}. The wider total is {_fmt_count(literal_contra_90)}. The main table above remains the dated-only count.
 
 The median width of {_fmt_months(metrics['median_width_days'])} days sits next to these counts because a wider interval would move parcels out of the contradiction column. The dated share of the main sample is {_fmt_count(n_dated)} / {_fmt_count(n_main)}.
 
@@ -744,18 +921,17 @@ The Top-52 cohort has no per-visit sequence in the imaging file used by the timi
 
 SSEG coordinates are known to be wrong for some rows. The commissioned point-in-parcel match rate is 5,146 / 5,458. Rows without a WKT point stay unmatched. This figure does not correct a coordinate by hand.
 """
-    captions = f"""# Captions, batch v3
+    captions = f"""# Captions, batch v3r1
 
 ## Figure D6
 
-Histogram of Δ, the calendar midpoint of a parcel's model interval minus the SSEG commission date, in months of {D6_MONTH_DAYS:.6f} days. The parcel is in the histogram when it has exactly one commissioned SSEG record inside it, the commission date is before {D6_COMMISSION_BEFORE}, and every model polygon used for the interval is dated (N = {_fmt_count(n_dated)}). Parcels already present before 2019, parcels known only up to the census date, mixed parcels, undated parcels, and parcels with no model polygon are counted in the README and are not bars. The black line gives, for each pair, equal weight to every inclusive calendar day inside that pair's own interval; it is taller near zero because the median interval is {_fmt_months(metrics['median_width_days'])} days. Negative Δ means the midpoint is earlier than the commission date. Mean {_fmt_months(metrics['mean_delta_months'])} months, median {_fmt_months(metrics['median_delta_months'])} months, interquartile range {_fmt_months(metrics['iqr_delta_months'])} months. {_fmt_count(metrics['n_abs_delta_le_6'])} parcels have |Δ| at most 6 months and {_fmt_count(metrics['n_abs_delta_le_12'])} have |Δ| at most 12 months. The commission date lies inside the interval for {_fmt_count(metrics['n_commission_inside_interval'])} parcels. The window is −36 to 36 months; {_fmt_count(metrics['n_below_window'])} parcels are below it and {_fmt_count(metrics['n_above_window'])} are above it, and the totals include them. At 90 days, {_fmt_count(case_n('main_dated', 90, 'registration_lag'))} parcels have the interval end on or before the commission date, {_fmt_count(case_n('main_dated', 90, 'agreement'))} agree within the tolerance, and {_fmt_count(case_n('main_dated', 90, 'contradiction'))} have an interval start more than 90 days after the commission date. Those three counts were not checked against an aerial image.
+Histogram of Δ, the calendar midpoint of a parcel's model interval minus the SSEG commission date, in months of {D6_MONTH_DAYS:.6f} days. The parcel is in the histogram when it has exactly one commissioned SSEG record inside it, the commission date is before {D6_COMMISSION_BEFORE}, and the parcel kind is dated (N = {_fmt_count(n_dated)}). Undated polygons on a dated parcel are ignored when the interval is formed. Parcels already present before 2019, parcels known only up to the census date, mixed parcels, undated parcels, and parcels with no model polygon are counted in the README and are not bars. The black line gives, for each pair, equal weight to every inclusive calendar day inside that pair's own interval; it is taller near zero because the median interval is {_fmt_months(metrics['median_width_days'])} days. The vertical axis stops at 1.3 times the tallest observed bar. {metrics['reference_clip_note']} Negative Δ means the midpoint is earlier than the commission date. Mean {_fmt_months(metrics['mean_delta_months'])} months, median {_fmt_months(metrics['median_delta_months'])} months, interquartile range {_fmt_months(metrics['iqr_delta_months'])} months. {_fmt_count(metrics['n_abs_delta_le_6'])} parcels have |Δ| at most 6 months and {_fmt_count(metrics['n_abs_delta_le_12'])} have |Δ| at most 12 months. The commission date lies inside the interval for {_fmt_count(metrics['n_commission_inside_interval'])} parcels. The window is −36 to 36 months; {_fmt_count(metrics['n_below_window'])} parcels are below it and {_fmt_count(metrics['n_above_window'])} are above it, and the totals include them. At 90 days, among these dated parcels only, {_fmt_count(case_n('main_dated', 90, 'registration_lag'))} have the interval end on or before the commission date, {_fmt_count(case_n('main_dated', 90, 'agreement'))} agree within the tolerance, and {_fmt_count(case_n('main_dated', 90, 'contradiction'))} have an interval start more than 90 days after the commission date. Census-bounded parcels add {_fmt_count(census_contra_90)} contradictions and mixed parcels add {_fmt_count(mixed_contra_90)}. The wider total is {_fmt_count(literal_contra_90)}. The owner has not chosen which total is the primary case count. Those counts were not checked against an aerial image.
 """
     return readme, captions
 
 
 def prepare() -> None:
-    if RELEASE.name != "release_v3":
-        raise Stop(f"STOP: refusing to write {RELEASE}.")
+    _assert_release_targets()
     head = git_commit()
     STAGING.mkdir(parents=True, exist_ok=True)
     hashes = validate_inputs()
@@ -823,7 +999,23 @@ def prepare() -> None:
         else:
             pre_labels = pd.Series(dtype=object)
         class_rows.extend(_case_rows("main_pre2019_dated", pre_labels, int(tau)))
+        for sample_name, kind in (
+            ("main_census_bound", "census_bound"),
+            ("main_mixed", "mixed"),
+            ("main_left_censored", "left_censored"),
+        ):
+            subset = compared["main"].loc[compared["main"]["parcel_kind"] == kind]
+            if kind == "left_censored" and (subset["U"].isna().any() or subset["L"].notna().any()):
+                missing_u = int(subset["U"].isna().sum())
+                has_l = int(subset["L"].notna().sum())
+                raise Stop(
+                    "STOP: a left-censored main-sample parcel is missing U or has an L "
+                    f"(missing U {missing_u}, with L {has_l}). It was not called agreement."
+                )
+            class_rows.extend(_case_rows(sample_name, _case_labels(subset, int(tau)), int(tau)))
     classes = pd.DataFrame(class_rows)
+    _assert_added_cases(classes)
+    _assert_frozen_v3(classes)
     # The buffer added nobody, so its case counts have to equal the main counts.
     main_cases = classes.loc[classes["sample"] == "main_dated", ["tau_days", "case", "n"]]
     buffer_cases = classes.loc[classes["sample"] == "buffer_dated", ["tau_days", "case", "n"]]
@@ -835,6 +1027,8 @@ def prepare() -> None:
     summary.to_csv(STAGING / "fig_D6_summary.csv", index=False)
     classes.to_csv(STAGING / "fig_D6_classes.csv", index=False)
     sample.to_csv(STAGING / "fig_D6_sample.csv", index=False)
+    for unchanged in ("fig_D6_hist.csv", "fig_D6_summary.csv", "fig_D6_sample.csv"):
+        _assert_frozen_bytes(unchanged)
     pair_cols = [
         "objectid",
         "L",
@@ -850,7 +1044,12 @@ def prepare() -> None:
         "case_180",
     ]
     dated.loc[:, pair_cols].to_parquet(STAGING / "d6_dated_pairs.parquet", index=False)
-    plot_d6(dated, hist, metrics, STAGING / "fig_D6_commission_delta")
+    observed_peak = float(metrics["observed_peak"])
+    y_max = observed_peak * 1.3
+    clip_note = _clipped_reference_note(hist, y_max)
+    metrics["y_max"] = y_max
+    metrics["reference_clip_note"] = clip_note
+    plot_d6(dated, hist, metrics, STAGING / "fig_D6_commission_delta", y_max, clip_note)
     png_mm = _png_mm(STAGING / "fig_D6_commission_delta.png")
     pdf_mm = _pdf_mm(STAGING / "fig_D6_commission_delta.pdf")
     if abs(png_mm[0] - FIG_WIDTH_MM) > 0.15 or abs(pdf_mm[0] - FIG_WIDTH_MM) > 0.15:
@@ -878,8 +1077,7 @@ def prepare() -> None:
 
 
 def assemble() -> None:
-    if RELEASE.name != "release_v3":
-        raise Stop(f"STOP: refusing to write {RELEASE}.")
+    _assert_release_targets()
     required = [
         STAGING / "fig_D6_commission_delta.png",
         STAGING / "fig_D6_commission_delta.pdf",
@@ -921,8 +1119,8 @@ def assemble() -> None:
     (RELEASE / "README.md").write_text((STAGING / "README.md").read_text())
     (RELEASE / "captions.md").write_text((STAGING / "captions.md").read_text())
     manifest = {
-        "batch": "v3",
-        "revision": "v3",
+        "batch": "v3r1",
+        "revision": "v3r1",
         "revision_date": "2026-10-14",
         "date": "2026-10-14",
         "code_commit": head,

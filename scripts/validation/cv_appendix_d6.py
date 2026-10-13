@@ -37,12 +37,25 @@ class InvalidParcelInterval(ValueError):
 
 
 def enters_delta_histogram(kind: str) -> bool:
-    """True only for a parcel whose polygons are all dated.
+    """True when the parcel kind is dated.
 
-    Left-censored, census-bounded, mixed, and undated parcels are counted
-    by kind and do not contribute a midpoint.
+    The kind is dated only when the polygons that set L and U are dated.
+    Undated polygons on the same parcel are ignored when that interval is
+    formed. A dated parcel is therefore not a parcel whose every polygon
+    is dated. Left-censored, census-bounded, mixed, and undated parcels
+    are counted by kind and do not contribute a midpoint.
     """
     return kind == KIND_DATED
+
+
+def enters_case_count(kind: str) -> bool:
+    """True for kinds that receive one of the three descriptive cases.
+
+    Dated, census-bounded, mixed, and left-censored parcels are classified.
+    Undated parcels and parcels with no model polygon are not. This gate is
+    separate from the histogram: only a dated parcel contributes a midpoint.
+    """
+    return kind in {KIND_DATED, "census_bound", "mixed", "left_censored"}
 
 
 def _day(value: object) -> pd.Timestamp:
@@ -80,6 +93,35 @@ def classify_dated_case(start: object, end: object, commission: object, tau_days
     if left > limit:
         return CASE_CONTRADICTION
     raise ValueError("dated pair did not fall into one case")
+
+
+def classify_case(kind: str, start: object, end: object, commission: object, tau_days: int) -> str:
+    """One parcel that enters the case count, at one tau.
+
+    Dated, census-bounded, and mixed parcels use the dated three-way rule
+    on the interval the caller supplies. For a mixed parcel that interval
+    is the section B.3 earliest L and earliest U across dated and
+    census-bounded polygons. A census-bounded parcel has U equal to the
+    census date. When every commission date is before that day the result
+    is agreement or contradiction.
+
+    A left-censored parcel has no L. Registration lag if U is on or before
+    C, otherwise agreement. Tau does not move it, and it is never a
+    contradiction.
+    """
+    if not enters_case_count(kind):
+        raise ValueError(f"{kind} is excluded from the three cases")
+    if int(tau_days) < 0:
+        raise ValueError(f"tau_days must be >= 0, got {tau_days}")
+    if kind == "left_censored":
+        if start is not None and not pd.isna(start):
+            raise ValueError("a left-censored parcel must not have L")
+        if end is None or pd.isna(end):
+            raise ValueError("a left-censored parcel is missing U")
+        if _day(end) <= _day(commission):
+            return CASE_LAG
+        return CASE_AGREE
+    return classify_dated_case(start, end, commission, tau_days)
 
 
 def delta_months(midpoint: object, commission: object, month_days: float = D6_MONTH_DAYS) -> float:
