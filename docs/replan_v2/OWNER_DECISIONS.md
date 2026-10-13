@@ -166,3 +166,15 @@ owner 于 2026-08-26 会话确认「帮我签完E0+E6,我授权你，日期写�
 
 E0_PREFETCH_DISK_SIGNED=2026-08-26
 E6_SCORER_GO=2026-08-26
+
+## D11 — 合作者附录：P1-A 定案、SSEG 口径 §B 冻结 · 2026-10-13
+
+**决议**：
+1. 附录按 P1-A 改写，即"普查检测（CoCT 2025Jan）+ 卫星回溯 + 快照日期"，不做逐年航拍检测。理由：backdating 主要靠卫星图。
+2. [`PLAN-cv-validation-appendix-tasklist-2026-10-13.md`](PLAN-cv-validation-appendix-tasklist-2026-10-13.md) §B 的 SSEG 对比口径冻结，方括号里的建议值全部采用（τ=90 天、航拍窗口 C+30 天、对照 50 个、双人判读 20%、bootstrap 2,000 次、停止阈值上界 ≤10%、改进 <2 个百分点、宽度和未定日比例变差 ≤20%）。之后不再改口径。
+3. 附录图交付到独立目录 `dropbox:RA_Solar/appendix/`；D2 先出预览版，发表许可以后再确认。
+4. 执行交给 Grok Build，验收交给 Opus 5.5。
+
+执行说明：[`PLAN-cv-appendix-figures-execution-2026-10-13.md`](PLAN-cv-appendix-figures-execution-2026-10-13.md)。
+
+owner 于 2026-10-13 会话确认："拍板两条都确定，因为backdating主要还是靠卫星图"。
