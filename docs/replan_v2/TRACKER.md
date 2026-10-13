@@ -61,16 +61,17 @@ created): v1 = D5/D3/D4, v2 = D2 preview (Vexcel allowed, PREVIEW
 watermark) + D1, v3 = D6. Grok Build executes (§7) and Opus 5.5 accepts
 (§8 checklist) before any upload. Phase 0 is the CoCT parcel download
 (835,018 parcels, ~420 requests) plus point-in-parcel joins.
-**v1r1 re-acceptance on 2026-10-14 was ACCEPT WITH MINOR FIXES, D4 layout
-only. v1r2 is local and awaiting re-acceptance. Not uploaded.** Package:
+**v1r2 ACCEPTED by Opus on 2026-10-14 and uploaded.** `rclone check
+--one-way` reported 0 differences and 18 matching files. Remote:
+`dropbox:RA_Solar/appendix/ct_cv_appendix_figures_v1_2026-10-13/` (contents
+of `release_v1r2/` only). Local package remains
 `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1r2/`.
-`release_v1/` and `release_v1r1/` stay. Run note:
+`release_v1/` and `release_v1r1/` were not uploaded. Run note:
 [`RUN-cv-appendix-figures-v1-2026-10-13.md`](RUN-cv-appendix-figures-v1-2026-10-13.md)
-section rev2. Only the D4 figure styling changed. Published numbers are
-unchanged, including clustered panel standard errors and the shared
-cross-correlation window (best lag 2, Pearson 0.621, n = 64). Do not copy
-any release folder to `dropbox:RA_Solar/appendix/` until this re-acceptance.
-v2 and v3 have not started.
+section rev2. Published numbers are unchanged, including clustered panel
+standard errors and the shared cross-correlation window (best lag 2,
+Pearson 0.621, n = 64). v2 (D2 preview + D1) is in progress and is not
+uploaded. v3 has not started.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker

@@ -3,13 +3,13 @@
 | 字段 | 值 |
 |---|---|
 | 日期 | 2026-10-13；rev1 与 rev2 的图面修订都在 2026-10-14 |
-| 状态 | rev2 已在本地建好，等待复验，**尚未上传**。`release_v1/` 和 `release_v1r1/` 都保留 |
+| 状态 | rev2 已由 Opus 接受，并已上传。`rclone check --one-way` 为 0 差异、18 个文件。`release_v1/` 和 `release_v1r1/` 未上传 |
 | 计划 | [`PLAN-cv-appendix-figures-execution-2026-10-13.md`](PLAN-cv-appendix-figures-execution-2026-10-13.md) |
 | 代码 | `712ae1b3c783952d973475e7f3a9e9c89969862f`（`release_v1r2/release_manifest.json` 的 `code_commit`。本 RUN 的文档提交在它之后，不改图） |
 | 本地包 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1r2/` |
 | 上一轮 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1r1/`（代码 `530e71b`，不覆盖） |
 | 修改前基线 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1/`（代码 `357dd9f`，不覆盖） |
-| 预定上传目录 | `dropbox:RA_Solar/appendix/ct_cv_appendix_figures_v1_2026-10-13/`（复验通过之前不要传） |
+| 上传目录 | `dropbox:RA_Solar/appendix/ct_cv_appendix_figures_v1_2026-10-13/`（只传了 `release_v1r2/` 的内容，2026-10-14，校验 0 差异） |
 
 这一批是三张图，不是检测准确率，也不是安装日期的误差。D5 看时间，D3 看格子里模型和市政登记是否一起变多，D4 看它们在地图上差在哪里。2026-10-14 的 rev1 只改标准误、相关的时间窗和图面，不改 §2 的存量口径。同一天的 rev2 只改 D4 的图面，格子上的数字和 D5、D3 都没有变。v2（D2 预览和 D1）和 v3（D6）没有开始。
 
