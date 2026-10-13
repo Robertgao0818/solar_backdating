@@ -73,6 +73,10 @@ HISTOGRAM_MONTH_END = "2025-01"
 CUMULATIVE_MONTH_END = "2024-06"
 # D6 later: commission must be at least three months before the census day.
 D6_COMMISSION_BEFORE = "2024-10-31"
+# Mean Gregorian month. D6 divides an exact day count by this length.
+# 365.2425 days is the mean Gregorian year. The plan asks for months and
+# does not name the divisor; this is the unit, not a new sample rule.
+D6_MONTH_DAYS = 365.2425 / 12.0
 
 # Stock rule names. "lower" counts a polygon only when the interval end is on
 # or before the snapshot. "upper" counts it when the interval start is on or
@@ -203,6 +207,7 @@ def constants_payload() -> dict:
         "tau_days_sensitivity": list(TAU_DAYS_SENSITIVITY),
         "buffer_m_sensitivity": BUFFER_M_SENSITIVITY,
         "d6_commission_before": D6_COMMISSION_BEFORE,
+        "d6_month_days": D6_MONTH_DAYS,
         "parcel_server_count_expected": PARCEL_SERVER_COUNT,
         "match_rate_min": MATCH_RATE_MIN,
         "class_counts_expected": CLASS_COUNTS,

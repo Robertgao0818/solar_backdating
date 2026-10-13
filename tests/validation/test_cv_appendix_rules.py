@@ -194,7 +194,13 @@ def test_page_ranges_cover_the_server_count():
 def test_figure_scripts_do_not_multiply_by_the_rejected_density():
     root = Path(__file__).resolve().parents[2] / "scripts" / "validation"
     banned = ("* 0.040", "* 0.04", "*0.040", "*0.04")
-    for name in ("cv_appendix_rules.py", "cv_appendix_constants.py", "build_cv_appendix_figures.py"):
+    for name in (
+        "cv_appendix_rules.py",
+        "cv_appendix_constants.py",
+        "cv_appendix_d6.py",
+        "build_cv_appendix_figures.py",
+        "build_cv_appendix_v3.py",
+    ):
         text = (root / name).read_text()
         for token in banned:
             assert token not in text, name
