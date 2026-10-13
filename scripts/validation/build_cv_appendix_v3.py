@@ -459,6 +459,18 @@ def _assert_frozen_bytes(name: str) -> None:
         raise Stop(f"STOP: {name} differs from release_v3. The dated table was not rewritten.")
 
 
+def _assert_frozen_summary() -> None:
+    """Summary metrics stay as in v3. Only the render commit line may change."""
+    old = pd.read_csv(FROZEN_V3 / "data" / "fig_D6_summary.csv")
+    new = pd.read_csv(STAGING / "fig_D6_summary.csv")
+    old = old.loc[old["metric"] != "render_commit"].reset_index(drop=True)
+    new = new.loc[new["metric"] != "render_commit"].reset_index(drop=True)
+    try:
+        pd.testing.assert_frame_equal(new, old, check_dtype=False, check_exact=False, rtol=0, atol=1e-12)
+    except AssertionError as exc:
+        raise Stop("STOP: fig_D6_summary.csv metrics differ from release_v3.\n" + str(exc)) from exc
+
+
 def _assert_added_cases(classes: pd.DataFrame) -> None:
     """Stop before release if the tau=90 review table is not reproduced."""
     expected = {
@@ -1027,8 +1039,9 @@ def prepare() -> None:
     summary.to_csv(STAGING / "fig_D6_summary.csv", index=False)
     classes.to_csv(STAGING / "fig_D6_classes.csv", index=False)
     sample.to_csv(STAGING / "fig_D6_sample.csv", index=False)
-    for unchanged in ("fig_D6_hist.csv", "fig_D6_summary.csv", "fig_D6_sample.csv"):
+    for unchanged in ("fig_D6_hist.csv", "fig_D6_sample.csv"):
         _assert_frozen_bytes(unchanged)
+    _assert_frozen_summary()
     pair_cols = [
         "objectid",
         "L",
