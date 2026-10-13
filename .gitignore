@@ -21,6 +21,8 @@ data/geid_temporal
 data/geid_temporal/
 data/geid_vintage_probe
 data/geid_vintage_probe/
+data/sseg
+data/sseg/
 data/anchors_*/
 data/install_dates_*/
 data/timenode_heatmaps/

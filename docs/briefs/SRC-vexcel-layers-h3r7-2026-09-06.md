@@ -1,5 +1,15 @@
 # SRC — Vexcel ortho layers by municipality at H3-7
 
+> **Cape Town correction (2026-10-13):** a 591-point live probe found **7**
+> `za-wc-*-2024` collections, not 5 (`za-wc-gordonsbay-2024` and
+> `za-wc-melkbosstrand-2024` were missed by the six-point probe). Union covers
+> 1,812.9 km² of the metro, **98.9%** of the 111,801 census anchors, and 96.0%
+> of census H3-9 cells. Capture spans 2024-02-29 … 2024-05-13. There is still no
+> pre-2024 collection. The Cape Town figures below (5 tiles, 60.9% / 73.0%,
+> 03-18 … 04-12) are superseded; see
+> [`../replan_v2/DATA-ct-vexcel-municipal-recheck-2026-10-13.md`](../replan_v2/DATA-ct-vexcel-municipal-recheck-2026-10-13.md).
+> Other cities were not re-probed.
+
 Date: 2026-09-06 · Method: **live Vexcel API v2**, metadata plus 120 m GSD
 extracts. Grain: Uber H3 resolution 7 (same 1% overlap rule as
 `vexcel_sa_h3_r7_coverage_2026-08-12`).

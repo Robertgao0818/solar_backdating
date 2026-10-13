@@ -6,6 +6,52 @@ Source PRD: [`../install_date_optimization_v2_prd.md`](../install_date_optimizat
 Cape Town run-specific plan: [`RUN-cape-town-backdating-plan-2026-07-24.md`](RUN-cape-town-backdating-plan-2026-07-24.md) ·
 execution tracker: [`RUN-cape-town-backdating-tracker-2026-07-24.md`](RUN-cape-town-backdating-tracker-2026-07-24.md)
 
+**Collaborator CV validation appendix task list (2026-10-13, DRAFT, not started):**
+Source is the Zou/Chen/Wang `CV_Data_Validation_Appendix_Plan.docx`
+(D.1–D.11, Tables D1–D7, Figures D1–D6). It assumes Vexcel 7.5 cm,
+2020–2024, detected vintage by vintage. Our Cape Town data come from one
+census detection on the 2025Jan CoCT aerial plus satellite backdating, and
+Vexcel CT is a single 2024 season. Six premises must be agreed with the
+collaborators first; the main ones are the redesign, the missing SSEG
+extract, building footprints, and a clean test set. List:
+[`PLAN-cv-validation-appendix-tasklist-2026-10-13.md`](PLAN-cv-validation-appendix-tasklist-2026-10-13.md).
+rev2 adds last week's meeting as relayed by the owner (no written minutes):
+keep upgrading backdating. The gate is Gemini 3.1 vs 3.5 against SSEG by
+year-month: correlation >0.7 and date gap <90 days stops further model
+upgrades. Eddy sends the SSEG path. The metric definitions are still
+ambiguous and must be fixed before the run. 3.5 exists only on the ten-grid
+set (1,114 anchors).
+rev3 (§B) drafts the SSEG metric for group sign-off. Correlation becomes a
+descriptive measure only, computed on monthly flows with a 0–12 month lag.
+The gate is a parcel-level one-sided contradiction rate,
+last-absent L > commission C + 90 d. It uses C as an upper bound because
+registration only lags installation. Contradictions are adjudicated first
+on aerial years (CoCT 2020–22, Vexcel 2024, CoCT 2025) and then by blind
+human review of satellite frames. The stop rule is the model-attributable
+rate upper bound ≤[10%] with no significant 3.5-vs-3.1 gain. That needs
+about 300 matched parcels.
+**Same-day live recheck:**
+[`DATA-ct-vexcel-municipal-recheck-2026-10-13.md`](DATA-ct-vexcel-municipal-recheck-2026-10-13.md).
+Vexcel Cape Town has no pre-2024 collection. It has **7** `za-wc-*-2024`
+tiles, not 5; gordonsbay and melkbosstrand were missed in September. They
+were captured 2024-02-29 … 05-13 and cover **98.9%** of the 111,801 census
+anchors and 96.0% of census H3-9 cells. The September 60.9% figure is
+superseded, and the SRC now carries a banner. In a 300-anchor WMS sample,
+CoCT aerials 2019/20/21/22/25/26 have imagery at all 300 anchors. 2023Jan is
+NGI 2022 25 cm, and 2024 covers 161/300. That leaves a 2020–22 + Vexcel 2024
++ 2025 aerial year panel with only 2023 missing. The CoCT vector layer
+counts are unchanged, and there is still no public per-installation SSEG.
+**SSEG received (2026-10-13 evening):**
+[`DATA-sseg-registration-intake-2026-10-13.md`](DATA-sseg-registration-intake-2026-10-13.md).
+The collaborator sent `sseg_registration_geo.csv` (17,176 rows, sha256
+`40c54ab8…`). It lives read-only at `~/zasolar_data/sseg/` (repo symlink
+`data/sseg`) and is backed up to `dropbox:solar_backdating_backups/sseg/`
+(rclone check clean). 5,458 rows are commissioned, with commission dates up
+to 2024-07-02; about 5,150 of those have coordinates. Use the full-precision
+`wkt` column, because `latitude/longitude` are rounded to ~100 m. `erf` is
+hashed, so parcel matching must be spatial. No property use code. No
+comparison against model output has been run yet; §B is still unfrozen.
+
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
 CacheStorage and `~/.cache/google-chrome` were removed. Cursor logs were
