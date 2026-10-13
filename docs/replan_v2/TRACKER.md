@@ -79,7 +79,11 @@ rejected tree `release_v2/` is unchanged (code `67a9c71`). Run note:
 [`RUN-cv-appendix-figures-v2r1-2026-10-14.md`](RUN-cv-appendix-figures-v2r1-2026-10-14.md).
 Code `8ade10a`. The usable chip sheet is
 `staging_v2r1_sheet/d1_candidate_sheet.png`. M3 and M4 wait for the
-owner's pick. v3 has not started.
+owner's pick. **v3 (D6 only) is assembled locally and is waiting for
+acceptance. It is not uploaded.** Package:
+`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v3/`. Run note:
+[`RUN-cv-appendix-figures-v3-2026-10-14.md`](RUN-cv-appendix-figures-v3-2026-10-14.md).
+Render commit `3092979`. v2r1 remains not uploaded.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
