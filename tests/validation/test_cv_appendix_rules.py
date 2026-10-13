@@ -230,16 +230,16 @@ def test_v2_revision_refuses_frozen_directories():
 
     frozen_staging = builder.WORK_ROOT / "staging_v2r1"
     frozen_release = builder.WORK_ROOT / "release_v2r1"
-    for tag in (None, "", "v2r1", "v3r1", "v1r2", "../v2r2"):
+    for tag in (None, "", "v2r1", "v2r2", "v3r1", "v1r2", "../v2r2"):
         try:
             builder.bind_revision(tag)
         except SystemExit:
             continue
         raise AssertionError(f"revision {tag!r} was accepted")
-    builder.bind_revision("v2r2")
-    assert builder.STAGING.name == "staging_v2r2"
-    assert builder.RELEASE.name == "release_v2r2"
-    assert builder.REVISION == "v2r2"
+    builder.bind_revision("v2r3")
+    assert builder.STAGING.name == "staging_v2r3"
+    assert builder.RELEASE.name == "release_v2r3"
+    assert builder.REVISION == "v2r3"
     builder.STAGING = frozen_staging
     builder.RELEASE = frozen_release
     builder.REVISION = None

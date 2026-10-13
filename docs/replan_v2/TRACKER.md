@@ -80,12 +80,16 @@ D1 chips; that redraw is v2r2, below. The
 rejected tree `release_v2/` is unchanged (code `67a9c71`). Run note:
 [`RUN-cv-appendix-figures-v2r1-2026-10-14.md`](RUN-cv-appendix-figures-v2r1-2026-10-14.md).
 Code `8ade10a`. The usable chip sheet is
-`staging_v2r1_sheet/d1_candidate_sheet.png`. **v2r2 is built locally and
-is awaiting acceptance. It is not uploaded.** It draws that rank-2 cell,
-applies M3 and M4, and leaves the v2r1 tree unchanged. Package:
-`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2r2/`. Run note:
+`staging_v2r1_sheet/d1_candidate_sheet.png`. **v2r2 was accepted with minor fixes on 2026-10-14 and uploaded.**
+`rclone check --one-way` reported 0 differences and 11 matching files.
+Remote: `dropbox:RA_Solar/appendix/ct_cv_appendix_figures_v2_2026-10-14/`
+(contents of `release_v2r2/` only). The release tree was not modified.
+It draws rank-2 cell `89ad3617603ffff` and keeps the six D1 chips.
+Package: `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2r2/`.
+Run note:
 [`RUN-cv-appendix-figures-v2r2-2026-10-14.md`](RUN-cv-appendix-figures-v2r2-2026-10-14.md).
-Render commit `c523bcf`. **v3 (D6 only) was accepted with minor fixes on
+Render commit `c523bcf`. The 6.2 cm label is delivered zoom-21 pixel
+spacing, not native capture GSD; relabeling waits for the next redraw. **v3 (D6 only) was accepted with minor fixes on
 2026-10-14. The tree was not modified and it is not uploaded.** Package:
 `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v3/`. Run note:
 [`RUN-cv-appendix-figures-v3-2026-10-14.md`](RUN-cv-appendix-figures-v3-2026-10-14.md).

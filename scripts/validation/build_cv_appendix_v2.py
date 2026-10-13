@@ -13,6 +13,7 @@ claim.
     python scripts/validation/build_cv_appendix_v2.py all --revision v2r2 --cell 89ad3617603ffff --d1-source v2r1
     python scripts/validation/build_cv_appendix_v2.py assemble --revision v2r2
 
+v2r2 was uploaded on 2026-10-14 and is now frozen, so those commands stop.
 --revision writes staging_<tag>/ and release_<tag>/. The v2r1 constants
 below stay pointed at the frozen tree, and a run that would write a
 frozen directory stops. Nothing is uploaded from this script.
@@ -68,6 +69,7 @@ FROZEN_DIR_NAMES = frozenset(
         "staging_v1r2",
         "staging_v2",
         "staging_v2r1",
+        "staging_v2r2",
         "staging_v3",
         "staging_v3r1",
         "release_v1",
@@ -75,6 +77,7 @@ FROZEN_DIR_NAMES = frozenset(
         "release_v1r2",
         "release_v2",
         "release_v2r1",
+        "release_v2r2",
         "release_v3",
         "release_v3r1",
     }
