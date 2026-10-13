@@ -3,9 +3,9 @@
 | 字段 | 值 |
 |---|---|
 | 日期 | 2026-10-14 |
-| 状态 | 本地已组装，等待 Opus 验收。**没有上传。** v2 已被拒绝，`release_v2/` 原样保留 |
+| 状态 | Opus 2026-10-14 **ACCEPT WITH MINOR FIXES**。`release_v2r1/` 按原样接受，等负责人追认 D2 格子和 D1 芯片。**没有上传。** M3、M4 还没做。v2 已被拒绝，`release_v2/` 原样保留 |
 | 计划 | [`PLAN-cv-appendix-figures-execution-2026-10-13.md`](PLAN-cv-appendix-figures-execution-2026-10-13.md) §3 Phase 2 |
-| 验收意见 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/acceptance/review_v2_opus_20261014T0242.md` |
+| 验收意见 | 本包：`~/zasolar_data/geid_temporal/cv_appendix_20261013/acceptance/review_v2r1_opus_20261014T0322.md`。上一包的拒绝意见仍在同目录的 `review_v2_opus_20261014T0242.md` |
 | 代码 / 出图 | `8ade10ac9f633c06ad2806c9e9a061312b0651cd`。清单里的 `code_commit` 和 `render_commit` 都是这一次提交。脚本先提交，再出图 |
 | 本地包 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2r1/` |
 | 作图中间文件 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/staging_v2r1/` |
@@ -29,7 +29,7 @@ D2 的 PNG 是 2125×1605 像素，折合 179.92×135.89 mm；PDF 页面是 510.
 - `data/d1_picks.csv`：六张芯片的格子号、面积、IoU、`max_iou_other`、`candidate_id` 和中心点。多边形的 WKT 留在中间文件里，没有放进发布包。
 - `README.md`、`captions.md`、`release_manifest.json`、`SHA256SUMS.txt`。
 
-审阅用的接触表在 `staging_v2r1/d1_candidate_sheet.png`，候选编号在 `staging_v2r1/d1_override_menu.csv`。两份都不进发布包。
+能用来挑芯片的接触表在 `staging_v2r1_sheet/d1_candidate_sheet.png`。每一行左边是槽名。每张小图是 300 像素、地面半宽 15 米，画了和 D1 同色的多边形框和一个十字，并写着候选编号、格子、面积和 `max_iou_other`。`staging_v2r1/d1_candidate_sheet.png` 没有框，不要用它挑。候选编号表仍在 `staging_v2r1/d1_override_menu.csv`。这些都不进发布包，也不改 `release_v2r1/`。
 
 ## 2. 输入核对
 
@@ -119,7 +119,7 @@ v2 的两张误检里，较暗的那张（L1896，13.0 m²，最高 IoU 0）仍�
 
 六张芯片共用一个地面尺度。半宽仍是 30.73 米，比例尺 20 米。半宽由工商那块长边决定，漏检不再把比例尺拉远。绿色是配上了的检测，橙色是没有人工多边形的检测，蓝色是没有检测的人工多边形。轮廓先画一圈白边。图下方写着 “Illustrative chips, not a precision or recall estimate”。图注另有一句：Only the selected object is outlined; other panels visible in a chip are not marked and may be matched or unmatched. 芯片里别的板子没有画框，它们可能已经配上，也可能没有。如果把没画框的板子都当成漏检，就会把“只框选中的那一个”读成“画面上其他板子模型都没看见”。
 
-看过芯片之后要单独记住三件事。住宅真匹配的框在院子里一条地面或棚架上的板子，旁边红瓦屋顶上更典型的屋顶板没有被这一个框住。IoU 0.91，规则上没有挑错；负责人如果想要一个屋顶例子，可以换。较亮的未匹配检测框在一条车道上的浅色车辆，不是屋顶板。这个位置的名字是“小而亮”的排序，不是已经核实的类别。如果把标题读成“这是一块被误认的光伏”，就会把一辆车讲成光伏的误检类型。较大的漏检在通过 0.10 这道线之后，20–80 m² 里只剩 4 个人工多边形，最大的一块是 27.8 m²。它是真的没配上，但并不比小漏检大很多。旧的 76 m² 例子是 0.47 的近似配对，不能拿回来充数。
+看过芯片之后要单独记住三件事。住宅真匹配的框在院子里一条地面或棚架上的板子，旁边红瓦屋顶上更典型的屋顶板没有被这一个框住。IoU 0.91，规则上没有挑错；负责人如果想要一个屋顶例子，可以换。较亮的未匹配检测框住的是一座白色格栅凉棚或车棚的顶，旁边停着一辆白车；车在框的西面大约 4 米，不在框里。这个位置的名字是“小而亮”的排序，不是已经核实的类别。格栅看起来像光伏组件的网格，所以它仍是一张能用的误检例子；如果把这个标题读成已经核实的天窗或热水器，就会把排序规则说成分类结果。较大的漏检在通过 0.10 这道线之后，20–80 m² 里只剩 4 个人工多边形，最大的一块是 27.8 m²。它是真的没配上，但并不比小漏检大很多。旧的 76 m² 例子是 0.47 的近似配对，不能拿回来充数。
 
 换一张芯片的命令是：
 
@@ -127,7 +127,7 @@ v2 的两张误检里，较暗的那张（L1896，13.0 m²，最高 IoU 0）仍�
 python scripts/validation/build_cv_appendix_v2.py d1 --d1-override "FP small bright=1097"
 ```
 
-`1097` 是接触表上下一张较亮的未匹配检测（L1950，10.4 m²，最高 IoU 0）。槽名必须和上表第一列一致。L1952–54，或者最高 IoU 达到 0.10 的行，脚本会拒绝。这条命令同样只改中间文件。
+`1097` 是新接触表上、当前这一张旁边的下一张较亮未匹配检测（L1950，10.4 m²，最高 IoU 0）。槽名必须和上表第一列一致。L1952–54，或者最高 IoU 达到 0.10 的行，脚本会拒绝。这条命令同样只改中间文件，而且当前脚本的组装目录仍是 `release_v2r1/`，那里已经有文件，所以会拒绝覆盖。换芯片要进新目录。
 
 ## 6. 和计划不一致的地方
 
@@ -144,6 +144,6 @@ python scripts/validation/build_cv_appendix_v2.py d1 --d1-override "FP small bri
 
 ## 7. 没有做的事
 
-没有改 §2 的存量口径，没有重算 v1 的斜率、相关系数或类别计数，没有重跑检测，没有调用 Gemini，没有上传 v2 或 v2r1，没有开始 v3（D6）。群消息草稿仍在 `~/zasolar_data/geid_temporal/cv_appendix_20261013/acceptance/group_msg_v1r2_draft.md`，没有发出。
+没有改 §2 的存量口径，没有重算 v1 的斜率、相关系数或类别计数，没有重跑检测，没有调用 Gemini，没有上传 v2 或 v2r1，没有开始 v3（D6）。群消息草稿仍在 `~/zasolar_data/geid_temporal/cv_appendix_20261013/acceptance/group_msg_v1r2_draft.md`，没有发出。Opus 已按“接受，附小改”收下 `release_v2r1/`。M1 是上面这处凉棚的更正。M2 是新的接触表。M3 和 M4 要等负责人决定换格子或重画之后，再写进 `release_v2r2/`。
 
-上传之前，负责人还可以换成第二名格子，或从接触表里换成另一张芯片。换了就要重画，并组装进一个新目录。不能只改图注，也不能覆盖 `release_v2r1/`。
+负责人现在可以追认现状，也可以换成第二名格子，或从 `staging_v2r1_sheet/d1_candidate_sheet.png` 换成另一张芯片。换了就要重画，并组装进一个新目录。不能只改图注，也不能覆盖 `release_v2r1/`。

@@ -71,13 +71,15 @@ of `release_v1r2/` only). Local package remains
 section rev2. Published numbers are unchanged, including clustered panel
 standard errors and the shared cross-correlation window (best lag 2,
 Pearson 0.621, n = 64). **v2 was rejected by Opus on 2026-10-14 and was
-not uploaded.** The bounded rework is **v2r1, local and awaiting
-acceptance. It is not uploaded.** Package:
+not uploaded.** The bounded rework **v2r1 was accepted with minor fixes
+on 2026-10-14. It is not uploaded.** The release tree is unchanged.
+The owner still has to ratify the D2 cell and the D1 chips. Package:
 `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2r1/`. The
 rejected tree `release_v2/` is unchanged (code `67a9c71`). Run note:
 [`RUN-cv-appendix-figures-v2r1-2026-10-14.md`](RUN-cv-appendix-figures-v2r1-2026-10-14.md).
-Code `8ade10a`. D2 is still a preview of one H3-9 cell; D1 is still six
-illustrative chips, not a precision or recall result. v3 has not started.
+Code `8ade10a`. The usable chip sheet is
+`staging_v2r1_sheet/d1_candidate_sheet.png`. M3 and M4 wait for the
+owner's pick. v3 has not started.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
