@@ -73,13 +73,19 @@ standard errors and the shared cross-correlation window (best lag 2,
 Pearson 0.621, n = 64). **v2 was rejected by Opus on 2026-10-14 and was
 not uploaded.** The bounded rework **v2r1 was accepted with minor fixes
 on 2026-10-14. It is not uploaded.** The release tree is unchanged.
-The owner still has to ratify the D2 cell and the D1 chips. Package:
+The frozen package remains
 `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2r1/`. The
+owner on 2026-10-14 picked rank-2 cell `89ad3617603ffff` and kept the six
+D1 chips; that redraw is v2r2, below. The
 rejected tree `release_v2/` is unchanged (code `67a9c71`). Run note:
 [`RUN-cv-appendix-figures-v2r1-2026-10-14.md`](RUN-cv-appendix-figures-v2r1-2026-10-14.md).
 Code `8ade10a`. The usable chip sheet is
-`staging_v2r1_sheet/d1_candidate_sheet.png`. M3 and M4 wait for the
-owner's pick. **v3 (D6 only) was accepted with minor fixes on
+`staging_v2r1_sheet/d1_candidate_sheet.png`. **v2r2 is built locally and
+is awaiting acceptance. It is not uploaded.** It draws that rank-2 cell,
+applies M3 and M4, and leaves the v2r1 tree unchanged. Package:
+`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v2r2/`. Run note:
+[`RUN-cv-appendix-figures-v2r2-2026-10-14.md`](RUN-cv-appendix-figures-v2r2-2026-10-14.md).
+Render commit `c523bcf`. **v3 (D6 only) was accepted with minor fixes on
 2026-10-14. The tree was not modified and it is not uploaded.** Package:
 `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v3/`. Run note:
 [`RUN-cv-appendix-figures-v3-2026-10-14.md`](RUN-cv-appendix-figures-v3-2026-10-14.md).
@@ -91,11 +97,16 @@ of `release_v3r1/` only). Local package remains
 `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v3r1/`.
 `release_v3/` was not uploaded. Run note:
 [`RUN-cv-appendix-figures-v3r1-2026-10-14.md`](RUN-cv-appendix-figures-v3r1-2026-10-14.md).
-Render commit `9f5e692`. The owner still has to choose the primary
-contradiction count (619 or 1,008), the month length, whether mixed
-parcels stay out of the histogram, whether the two register-wide dates
-may be public, and whether a new 10 m census-polygon rule is allowed.
-v2r1 remains not uploaded.
+Render commit `9f5e692`. The owner on 2026-10-14 chose the headline
+contradiction count: 1,008 at tau of 90 days (dated 619 + census-bounded
+173 + mixed 216). The dated-only 619 is the sensitivity. A month stays
+365.2425/12 days. Mixed parcels stay out of the histogram. The register-wide
+dates 2011-11-26 and 2024-07-02 may be published. The alternative 10 m
+census-polygon rule is not approved. The uploaded v3r1 README still calls
+619 the main table, because that package was not rewritten and was not
+re-uploaded. No `release_v3r2/` was built. Q3 (the L1952–54 label offset)
+and Q4 (rounding the public D2 coordinates) stay open. v2r1 remains not
+uploaded.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker

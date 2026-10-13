@@ -3,7 +3,7 @@
 | 字段 | 值 |
 |---|---|
 | 日期 | 2026-10-14 |
-| 状态 | Opus 2026-10-14 **ACCEPT WITH MINOR FIXES**。`release_v2r1/` 按原样接受，等负责人追认 D2 格子和 D1 芯片。**没有上传。** M3、M4 还没做。v2 已被拒绝，`release_v2/` 原样保留 |
+| 状态 | Opus 2026-10-14 **ACCEPT WITH MINOR FIXES**。`release_v2r1/` 按原样接受。**没有上传。** 负责人已于 2026-10-14 08:14 NZDT 选定第 2 名格子 `89ad3617603ffff`，六张 D1 芯片保留。M3 和 M4 做在新目录 `release_v2r2/`，见 [`RUN-cv-appendix-figures-v2r2-2026-10-14.md`](RUN-cv-appendix-figures-v2r2-2026-10-14.md)。本目录不改。v2 已被拒绝，`release_v2/` 原样保留 |
 | 计划 | [`PLAN-cv-appendix-figures-execution-2026-10-13.md`](PLAN-cv-appendix-figures-execution-2026-10-13.md) §3 Phase 2 |
 | 验收意见 | 本包：`~/zasolar_data/geid_temporal/cv_appendix_20261013/acceptance/review_v2r1_opus_20261014T0322.md`。上一包的拒绝意见仍在同目录的 `review_v2_opus_20261014T0242.md` |
 | 代码 / 出图 | `8ade10ac9f633c06ad2806c9e9a061312b0651cd`。清单里的 `code_commit` 和 `render_commit` 都是这一次提交。脚本先提交，再出图 |
