@@ -755,8 +755,8 @@ def plot_d6(
     reference = bins["n_reference"].to_numpy()
     # 1.3 times the observed peak keeps the bars readable. The reference
     # spike is clipped at that line and named in the annotation.
-    fig = plt.figure(figsize=(FIG_WIDTH_IN, 4.05))
-    ax = fig.add_axes((0.10, 0.16, 0.86, 0.74))
+    fig = plt.figure(figsize=(FIG_WIDTH_IN, 4.55))
+    ax = fig.add_axes((0.10, 0.22, 0.86, 0.68))
     ax.bar(
         edges[:-1],
         observed,
@@ -807,7 +807,7 @@ def plot_d6(
     ax.set_axisbelow(True)
     fig.text(
         0.10,
-        0.028,
+        0.022,
         "Negative Δ means the midpoint is earlier than the commission date.\n"
         f"Outside −36 to 36 months: {_fmt_count(metrics['n_below_window'])} below, "
         f"{_fmt_count(metrics['n_above_window'])} above. Totals use every dated parcel.",
