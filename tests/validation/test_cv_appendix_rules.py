@@ -199,6 +199,7 @@ def test_figure_scripts_do_not_multiply_by_the_rejected_density():
         "cv_appendix_constants.py",
         "cv_appendix_d6.py",
         "build_cv_appendix_figures.py",
+        "build_cv_appendix_v2.py",
         "build_cv_appendix_v3.py",
     ):
         text = (root / name).read_text()
@@ -222,3 +223,68 @@ def test_interval_installed_rejects_unknown_rule():
     except ValueError:
         return
     raise AssertionError("expected ValueError")
+
+
+def test_v2_revision_refuses_frozen_directories():
+    from scripts.validation import build_cv_appendix_v2 as builder
+
+    frozen_staging = builder.WORK_ROOT / "staging_v2r1"
+    frozen_release = builder.WORK_ROOT / "release_v2r1"
+    for tag in (None, "", "v2r1", "v3r1", "v1r2", "../v2r2"):
+        try:
+            builder.bind_revision(tag)
+        except SystemExit:
+            continue
+        raise AssertionError(f"revision {tag!r} was accepted")
+    builder.bind_revision("v2r2")
+    assert builder.STAGING.name == "staging_v2r2"
+    assert builder.RELEASE.name == "release_v2r2"
+    assert builder.REVISION == "v2r2"
+    builder.STAGING = frozen_staging
+    builder.RELEASE = frozen_release
+    builder.REVISION = None
+
+
+def test_v2_collaborator_text_states_counts_as_prose():
+    from scripts.validation import build_cv_appendix_v2 as builder
+
+    builder.REVISION = "v2r2"
+    d2 = {
+        "cell": "89ad3617603ffff",
+        "cell_choice": "owner_override",
+        "n_residential_parcels": 143,
+        "n_new_parcels": 44,
+        "d3_model_parcels_midpoint": 45,
+        "d3_sseg_parcels": 7,
+        "top_share": 0.12,
+        "top_zone": "SR1",
+        "eskom_area_fraction": 0.0,
+        "vexcel_collection": "za-wc-rondebosch-2024",
+        "vexcel_first_capture": "2024-04-12T11:23:26",
+        "vexcel_gsd_cm": 6.2,
+        "n_already": 1,
+        "model_by_year": {"2020": 2, "2021": 4, "2022": 7, "2023": 10, "2024": 21},
+        "sseg_by_year": {"2020": 1, "2021": 0, "2022": 1, "2023": 1, "2024": 4},
+    }
+    picks = pd.DataFrame(
+        [
+            {
+                "slot": "TP residential",
+                "grid_id": "L1896",
+                "area_m2": 22.266194,
+                "iou": 0.913325,
+                "max_iou_other": 0.913325,
+            }
+        ]
+    )
+    readme, captions = builder._release_text(d2, picks, 2)
+    builder._assert_collaborator_text(readme, captions)
+    assert "2020: 2, 2021: 4, 2022: 7, 2023: 10, 2024: 21" in readme
+    assert "2020: 1, 2021: 0, 2022: 1, 2023: 1, 2024: 4" in readme
+    assert "owner's pick" in readme
+    assert "89ad3601c7bffff" in readme
+    assert "most parcels" not in readme
+    assert "revision v2r2" in readme
+    assert "6.2 cm" in captions
+    assert "most parcels" not in captions
+    builder.REVISION = None

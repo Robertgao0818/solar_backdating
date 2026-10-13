@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build CV appendix batch v2r1: D2 preview and D1 failure gallery.
+"""Build CV appendix batch v2: D2 preview and D1 failure gallery.
 
 D2 picks one H3-9 cell from the v1 analysis set and draws five aerial
 epochs plus a same-cell map and bar chart. The filename and the corner
@@ -7,14 +7,15 @@ text mark it PREVIEW. D1 draws six illustrative chips from Li grids that
 were not used to calibrate the threshold. Neither figure is an accuracy
 claim.
 
-    python scripts/validation/build_cv_appendix_v2.py rank
-    python scripts/validation/build_cv_appendix_v2.py d2 --cell 89ad3617603ffff
-    python scripts/validation/build_cv_appendix_v2.py d1 --d1-override "FN small=123"
-    python scripts/validation/build_cv_appendix_v2.py all
-    python scripts/validation/build_cv_appendix_v2.py assemble
+    python scripts/validation/build_cv_appendix_v2.py rank --revision v2r2
+    python scripts/validation/build_cv_appendix_v2.py d2 --revision v2r2 --cell 89ad3617603ffff
+    python scripts/validation/build_cv_appendix_v2.py d1 --revision v2r2 --d1-source v2r1
+    python scripts/validation/build_cv_appendix_v2.py all --revision v2r2 --cell 89ad3617603ffff --d1-source v2r1
+    python scripts/validation/build_cv_appendix_v2.py assemble --revision v2r2
 
-Outputs stay under ~/zasolar_data/geid_temporal/cv_appendix_20261013/staging_v2r1
-and release_v2r1. Nothing is uploaded from this script.
+--revision writes staging_<tag>/ and release_<tag>/. The v2r1 constants
+below stay pointed at the frozen tree, and a run that would write a
+frozen directory stops. Nothing is uploaded from this script.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import hashlib
 import io
 import json
 import math
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -56,7 +58,32 @@ if str(ZASOLAR_ROOT) not in sys.path:
 
 STAGING = WORK_ROOT / "staging_v2r1"
 RELEASE = WORK_ROOT / "release_v2r1"
-LEGACY_CHIPS = WORK_ROOT / "staging_v2" / "d2_chips"
+# These names already hold an accepted or uploaded batch. bind_revision
+# refuses a tag that would write any of them. The constants above stay
+# on v2r1 so a swap does not retarget this file by editing them.
+FROZEN_DIR_NAMES = frozenset(
+    {
+        "staging_v1",
+        "staging_v1r1",
+        "staging_v1r2",
+        "staging_v2",
+        "staging_v2r1",
+        "staging_v3",
+        "staging_v3r1",
+        "release_v1",
+        "release_v1r1",
+        "release_v1r2",
+        "release_v2",
+        "release_v2r1",
+        "release_v3",
+        "release_v3r1",
+    }
+)
+REVISION: str | None = None
+PRIOR_D2_CHIP_DIRS = (
+    WORK_ROOT / "staging_v2r1" / "d2_chips",
+    WORK_ROOT / "staging_v2" / "d2_chips",
+)
 INPUTS = WORK_ROOT / "v2_inputs"
 PHASE0 = WORK_ROOT / "phase0"
 CELLS_CSV = WORK_ROOT / "release_v1r2" / "data" / "fig_D3_cells.csv"
@@ -342,23 +369,118 @@ def cell_frame(cell: str) -> tuple[Polygon, tuple[float, float, float, float], f
     return poly, square_bbox(lon, lat, half), lat, lon
 
 
+def _is_frozen_path(path: Path) -> bool:
+    """True when any path component is an accepted or uploaded batch directory."""
+    return any(part in FROZEN_DIR_NAMES for part in path.resolve().parts)
+
+
+def bind_revision(tag: str | None) -> None:
+    """Point this process at staging_<tag> and release_<tag>.
+
+    The module constants stay on the frozen v2r1 paths. A missing tag, or a
+    tag that names a frozen directory, stops before any directory is created.
+    """
+    global STAGING, RELEASE, REVISION
+    if tag is None or str(tag).strip() == "":
+        raise Stop(
+            "STOP: --revision is required. staging_v2r1 and release_v2r1 are frozen "
+            "and this script will not write them."
+        )
+    cleaned = str(tag).strip()
+    if not re.fullmatch(r"v[0-9]+r[0-9]+", cleaned):
+        raise Stop(f"STOP: --revision must look like v2r2, got {cleaned!r}.")
+    staging_name = f"staging_{cleaned}"
+    release_name = f"release_{cleaned}"
+    if staging_name in FROZEN_DIR_NAMES or release_name in FROZEN_DIR_NAMES:
+        raise Stop(f"STOP: --revision {cleaned} resolves to a frozen directory.")
+    staging = WORK_ROOT / staging_name
+    release = WORK_ROOT / release_name
+    if _is_frozen_path(staging) or _is_frozen_path(release):
+        raise Stop(f"STOP: --revision {cleaned} resolves inside a frozen directory.")
+    STAGING = staging
+    RELEASE = release
+    REVISION = cleaned
+
+
 def reuse_saved_chip(dest: Path) -> bool:
-    """Keep a chip that is already on disk. v2r1 may copy the v2 chip; it does not rewrite v2."""
+    """Keep a chip that is already on disk. Copies are read from older staging trees.
+
+    The copy is written only under the revision selected by bind_revision.
+    The source directory is not opened for writing.
+    """
+    if _is_frozen_path(dest):
+        raise Stop(f"STOP: refusing to write a chip under a frozen directory: {dest}")
     if dest.exists() and dest.stat().st_size > 1000:
         if dest.suffix.lower() in {".tif", ".tiff"} and not dest.with_suffix(".json").exists():
             return False
         return True
-    legacy = LEGACY_CHIPS / dest.name
-    if not legacy.exists() or legacy.stat().st_size <= 1000:
-        return False
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(legacy.read_bytes())
-    if dest.suffix.lower() in {".tif", ".tiff"}:
-        side = legacy.with_suffix(".json")
-        if not side.exists():
-            return False
-        dest.with_suffix(".json").write_bytes(side.read_bytes())
-    return True
+    for folder in PRIOR_D2_CHIP_DIRS:
+        legacy = folder / dest.name
+        if not legacy.exists() or legacy.stat().st_size <= 1000:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(legacy.read_bytes())
+        if dest.suffix.lower() in {".tif", ".tiff"}:
+            side = legacy.with_suffix(".json")
+            if not side.exists():
+                dest.unlink()
+                continue
+            dest.with_suffix(".json").write_bytes(side.read_bytes())
+        return True
+    return False
+
+
+def measure_vexcel_ground_gsd(tif: Path) -> dict:
+    """Ground sample distance of this extract.
+
+    The GeoTIFF is in Web Mercator. A pixel width in that projection is not
+    a ground metre until it is multiplied by the cosine of latitude.
+    """
+    import rasterio
+    from pyproj import Transformer
+
+    with rasterio.open(tif) as src:
+        epsg = src.crs.to_epsg() if src.crs is not None else None
+        if epsg != 3857:
+            raise Stop(f"STOP: Vexcel chip {tif.name} is EPSG:{epsg}, expected EPSG:3857.")
+        res_x = float(src.res[0])
+        res_y = float(src.res[1])
+        if res_x <= 0 or abs(res_x - res_y) / res_x > 0.002:
+            raise Stop(f"STOP: Vexcel chip pixel size is not square: {res_x}, {res_y}.")
+        center_x = (src.bounds.left + src.bounds.right) / 2.0
+        center_y = (src.bounds.bottom + src.bounds.top) / 2.0
+    longitude, latitude = Transformer.from_crs(3857, 4326, always_xy=True).transform(center_x, center_y)
+    gsd_m = res_x * math.cos(math.radians(latitude))
+    if not math.isfinite(gsd_m) or gsd_m <= 0:
+        raise Stop(f"STOP: measured Vexcel ground sample distance is not usable: {gsd_m}.")
+    return {
+        "gsd_m": gsd_m,
+        "gsd_cm": round(gsd_m * 100.0, 1),
+        "gsd_projected_m": res_x,
+        "gsd_center_lon": float(longitude),
+        "gsd_center_lat": float(latitude),
+        "gsd_source": (
+            "measured on this chip: EPSG:3857 pixel size times cos(latitude); "
+            "the date call does not return a GSD"
+        ),
+    }
+
+
+def _stamp_measured_gsd(tif: Path, info: dict) -> dict:
+    """Replace the sidecar GSD with a measurement of this chip. Collection dates stay."""
+    if _is_frozen_path(tif):
+        raise Stop(f"STOP: refusing to rewrite a Vexcel sidecar under a frozen directory: {tif}")
+    measured = measure_vexcel_ground_gsd(tif)
+    stamped = {
+        "collection": info.get("collection"),
+        "first_capture": info.get("first_capture"),
+        "last_capture": info.get("last_capture"),
+        **measured,
+    }
+    if not stamped["collection"] or "2024" not in str(stamped["collection"]):
+        raise Stop(f"STOP: Vexcel sidecar has no 2024 collection: {stamped}")
+    tif.with_suffix(".json").write_text(json.dumps(_sanitize(stamped), indent=2, allow_nan=False) + "\n")
+    return stamped
 
 
 def wms_png(year: str, bounds, pixels: int, dest: Path) -> None:
@@ -447,8 +569,6 @@ def vexcel_extract(bounds, dest: Path) -> dict:
         "collection": collection,
         "first_capture": meta.get("first-capture-date"),
         "last_capture": meta.get("last-capture-date"),
-        "gsd_m": 0.062,
-        "gsd_source": "DATA-ct-vexcel-municipal-recheck-2026-10-13; the date call does not return a GSD",
     }
     dest.with_suffix(".json").write_text(json.dumps(info, indent=2) + "\n")
     return info
@@ -482,7 +602,8 @@ def fetch_d2(cell: str, out_dir: Path) -> dict:
     chip_dir = STAGING / "d2_chips"
     for year, _label, _source, _gsd in MUNI_EPOCHS:
         wms_png(year, bounds, 900, chip_dir / f"{cell}_{year}.png")
-    vexcel = vexcel_extract(bounds, chip_dir / f"{cell}_vexcel2024.tif")
+    tif = chip_dir / f"{cell}_vexcel2024.tif"
+    vexcel = _stamp_measured_gsd(tif, vexcel_extract(bounds, tif))
     payload = {"cell": cell, "bounds": bounds, "lat": lat, "lon": lon, "vexcel": vexcel}
     write_json(out_dir / "d2_fetch.json", payload)
     return payload
@@ -596,12 +717,17 @@ def plot_d2(rank: pd.DataFrame, cell: str, out_dir: Path, cell_choice: str) -> N
     poly = hex_polygon(cell)
     chip_dir = STAGING / "d2_chips"
     vexcel = fetch["vexcel"]
+    if "gsd_cm" not in vexcel or "gsd_source" not in vexcel:
+        raise Stop("STOP: D2 fetch has no ground sample distance measured on this chip.")
+    if "recheck" in str(vexcel.get("gsd_source", "")).lower():
+        raise Stop("STOP: D2 GSD source still cites a recheck note. Measure this chip.")
     capture = str(vexcel.get("first_capture") or "")[:10]
+    gsd_cm = float(vexcel["gsd_cm"])
     epochs = [
         ("2020Jan", "A1. 2020-01\nCoCT aerial, 8 cm", chip_dir / f"{cell}_2020Jan.png"),
         ("2021Mar", "A2. 2021-03\nCoCT aerial, 8 cm", chip_dir / f"{cell}_2021Mar.png"),
         ("2022Jan", "A3. 2022-01\nCoCT aerial, 8 cm", chip_dir / f"{cell}_2022Jan.png"),
-        ("vexcel", f"A4. {capture}\nVexcel ortho, 6.2 cm", chip_dir / f"{cell}_vexcel2024.tif"),
+        ("vexcel", f"A4. {capture}\nVexcel ortho, {gsd_cm:.1f} cm", chip_dir / f"{cell}_vexcel2024.tif"),
         ("2025Jan", "A5. 2025-01\nCoCT aerial, 5 cm", chip_dir / f"{cell}_2025Jan.png"),
     ]
     model, sseg_year = parcel_year_table(cell)
@@ -659,13 +785,17 @@ def plot_d2(rank: pd.DataFrame, cell: str, out_dir: Path, cell_choice: str) -> N
     bar_ax.set_xticks(xpos, [str(year) for year in years])
     bar_ax.set_ylabel("New parcels")
     bar_ax.set_xlabel("Year")
-    bar_ax.set_ylim(0, max(model_counts + sseg_counts + [1]) * 1.18)
+    peak = max(model_counts + sseg_counts + [1])
+    bar_ax.set_ylim(0, peak * 1.35)
     bar_ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     bar_title = "C. New parcels in this cell"
     if sum(sseg_counts) == 0:
         bar_title += "\n(no commissioned SSEG in this cell)"
     bar_ax.set_title(bar_title, pad=2)
-    bar_ax.legend(frameon=False, loc="upper right")
+    # The last two years are the right-hand bars. A legend in the upper right
+    # sits on those bars when they are the tallest.
+    legend_loc = "upper left" if max(model_counts[-2:] + sseg_counts[-2:] + [0]) == peak else "upper right"
+    bar_ax.legend(frameon=False, loc=legend_loc)
     fig.text(
         0.01,
         0.985,
@@ -701,6 +831,12 @@ def plot_d2(rank: pd.DataFrame, cell: str, out_dir: Path, cell_choice: str) -> N
         "vexcel_collection": vexcel["collection"],
         "vexcel_first_capture": vexcel["first_capture"],
         "vexcel_last_capture": vexcel["last_capture"],
+        "vexcel_gsd_m": float(vexcel["gsd_m"]),
+        "vexcel_gsd_cm": gsd_cm,
+        "vexcel_gsd_projected_m": float(vexcel["gsd_projected_m"]),
+        "vexcel_gsd_center_lat": float(vexcel["gsd_center_lat"]),
+        "vexcel_gsd_center_lon": float(vexcel["gsd_center_lon"]),
+        "vexcel_gsd_source": vexcel["gsd_source"],
         "bounds": list(bounds),
     }
     if sum(model_counts) != int(row["n_new_parcels"]):
@@ -1186,6 +1322,40 @@ def _input_record() -> dict:
     return record
 
 
+def _eligible_rank(cell: str) -> int:
+    rank = pd.read_csv(STAGING / "d2_cell_rank.csv")
+    keep = rank[~rank["dominated"]].reset_index(drop=True)
+    hit = keep.index[keep["h3_r9"] == cell]
+    if len(hit) != 1:
+        raise Stop(f"STOP: {cell} is not a single eligible row in d2_cell_rank.csv.")
+    return int(hit[0]) + 1
+
+
+def _same_d1_identity(left: pd.DataFrame, right: pd.DataFrame) -> bool:
+    keys = ["slot", "candidate_id", "grid_id", "kind"]
+    floats = ["area_m2", "iou", "max_iou_other"]
+    a = left.sort_values("slot").reset_index(drop=True)
+    b = right.sort_values("slot").reset_index(drop=True)
+    if len(a) != len(b) or not a[keys].astype(str).equals(b[keys].astype(str)):
+        return False
+    for column in floats:
+        if not np.allclose(a[column].astype(float), b[column].astype(float), rtol=0, atol=1e-6):
+            return False
+    return True
+
+
+def _assert_collaborator_text(readme: str, captions: str) -> None:
+    for label, text in (("README", readme), ("captions", captions)):
+        if "{" in text or "}" in text:
+            raise Stop(f"STOP: {label} contains a brace. Year counts must be prose.")
+        if "before this batch is uploaded" in text or "build_cv_appendix_v2.py" in text:
+            raise Stop(f"STOP: {label} still contains an internal instruction.")
+        if "DATA-ct-vexcel-municipal-recheck" in text:
+            raise Stop(f"STOP: {label} cites the municipal recheck note for the ground sample distance.")
+        if "accuracy" in text.lower():
+            raise Stop(f"STOP: {label} uses the word accuracy.")
+
+
 def assemble() -> None:
     required = [
         STAGING / "fig_D2_example_cell_preview.png",
@@ -1212,8 +1382,19 @@ def assemble() -> None:
             f"before assemble.\nHEAD {head}\nD2 {d2.get('render_commit')}\n"
             f"D1 {sorted(set(picks['render_commit']))}"
         )
+    if REVISION is None:
+        raise Stop("STOP: revision is not set.")
     rank = pd.read_csv(STAGING / "d2_cell_rank.csv")
     top3 = rank[~rank["dominated"]].head(3)
+    position = _eligible_rank(str(d2["cell"]))
+    if str(d2["cell_choice"]) == "owner_override" and str(d2["cell"]) == COMPARE_CELL and position != 2:
+        raise Stop(f"STOP: {COMPARE_CELL} is no longer rank 2 (found rank {position}).")
+    if REVISION == "v2r2":
+        frozen_picks = pd.read_csv(WORK_ROOT / "release_v2r1" / "data" / "d1_picks.csv")
+        if not _same_d1_identity(picks, frozen_picks):
+            raise Stop("STOP: v2r2 D1 picks do not match the accepted v2r1 gallery.")
+        if str(d2["cell"]) != COMPARE_CELL or str(d2["cell_choice"]) != "owner_override":
+            raise Stop("STOP: v2r2 must draw the owner's rank-2 cell 89ad3617603ffff.")
     RELEASE.mkdir(parents=True)
     (RELEASE / "figs").mkdir()
     (RELEASE / "data").mkdir()
@@ -1229,12 +1410,15 @@ def assemble() -> None:
         if "wkt" in frame.columns:
             frame = frame.drop(columns=["wkt"])
         frame.to_csv(RELEASE / "data" / name, index=False)
-    readme, captions = _release_text(d2, picks, top3)
+    readme, captions = _release_text(d2, picks, position)
+    _assert_collaborator_text(readme, captions)
     (RELEASE / "README.md").write_text(readme)
     (RELEASE / "captions.md").write_text(captions)
+    gsd_m = float(d2["vexcel_gsd_m"])
+    gsd_cm = float(d2["vexcel_gsd_cm"])
     manifest = {
         "batch": "v2",
-        "revision": "v2r1",
+        "revision": REVISION,
         "revision_date": "2026-10-14",
         "date": "2026-10-14",
         "code_commit": head,
@@ -1255,9 +1439,20 @@ def assemble() -> None:
             "D1 uses the 16 Li reporting grids. The other five of the nominal 21 are not in unifiedA_li_clsonly_v2_all.",
             "L1952, L1953 and L1954 are excluded from the FP and FN pools because their Li polygons sit about 1.4 m north of the detections. An FP or FN also has to have max IoU against the other layer below 0.10.",
             "D1 slots are illustrations. The plan slot 'FN low contrast' is drawn as 'FN larger miss': an unmatched Li polygon of 20–80 m², not a labelled low-contrast class. FP and FN names are area and brightness sorts.",
-            "Vexcel GSD is the 6.2 cm figure from the 2026-10-13 recheck. The date call does not return a GSD.",
+            (
+                "Vexcel ground sample distance is measured on this cell's 2024 extract: "
+                f"EPSG:3857 pixel size {float(d2['vexcel_gsd_projected_m']):.6f} m times cos(latitude "
+                f"{float(d2['vexcel_gsd_center_lat']):.6f}) = {gsd_m:.5f} m "
+                f"({gsd_cm:.1f} cm at one decimal). The date call does not return a GSD."
+            ),
         ],
     }
+    frozen_picks = WORK_ROOT / "release_v2r1" / "data" / "d1_picks.csv"
+    if frozen_picks.exists() and _same_d1_identity(picks, pd.read_csv(frozen_picks)):
+        manifest["deviations"].append(
+            "D1 keeps the six accepted v2r1 slot identities (same grid, candidate id, area and IoU). "
+            "This commit redraws the gallery from those chips. The objects were not re-selected."
+        )
     write_json(RELEASE / "release_manifest.json", manifest)
     lines = []
     for path in sorted(RELEASE.rglob("*")):
@@ -1267,6 +1462,11 @@ def assemble() -> None:
     print("ASSEMBLED", RELEASE, flush=True)
 
 
+def _year_prose(counts: dict) -> str:
+    """Year counts as a sentence fragment. A Python dict repr is not collaborator text."""
+    return ", ".join(f"{year}: {int(counts[year])}" for year in counts)
+
+
 def _sseg_sentence(d2: dict) -> str:
     """The zero-SSEG sentence is printed only when that cell's bars sum to zero."""
     total = sum(int(value) for value in d2["sseg_by_year"].values())
@@ -1274,7 +1474,7 @@ def _sseg_sentence(d2: dict) -> str:
         return "This cell has no commissioned SSEG parcel in 2020–2024, so only the model bars are drawn."
     return (
         "Commissioned SSEG parcels in the same window are drawn beside the model bars "
-        f"({d2['sseg_by_year']})."
+        f"({_year_prose(d2['sseg_by_year'])})."
     )
 
 
@@ -1284,13 +1484,43 @@ def _eskom_sentence(d2: dict) -> str:
     return ""
 
 
-def _release_text(d2: dict, picks: pd.DataFrame, top3: pd.DataFrame) -> tuple[str, str]:
-    cards = "\n".join(
-        f"- `{row.h3_r9}`: {int(row.n_new_parcels)} new PV parcels, "
-        f"{int(row.n_residential_parcels)} residential parcels, "
-        f"largest new parcel share {row.top_share:.1%} ({row.top_zone})."
-        for row in top3.itertuples(index=False)
-    )
+def _cell_lead(d2: dict, rank_position: int) -> str:
+    """Opening cell sentence. An owner pick is not described as automatic rank 1."""
+    if d2["cell_choice"] == "owner_override":
+        return (
+            f"The cell is H3-9 `{d2['cell']}` (`cell_choice` `owner_override`). "
+            f"It is the owner's pick and ranks {rank_position} among analysis cells "
+            f"with at least {MIN_RESIDENTIAL_PARCELS} residential parcels, ordered by the number of parcels "
+            f"whose first dated install falls in January 2020 through June 2024. "
+            f"The automatic rank-1 cell `{REQUIRED_AUTO_CELL}` remains in the rank table. "
+            f"This figure shows the owner's rank-{rank_position} cell."
+        )
+    if d2["cell_choice"] == "auto_rank1":
+        return (
+            f"The cell is H3-9 `{d2['cell']}` (`cell_choice` `auto_rank1`), "
+            f"the analysis cell with the most parcels whose first dated install falls in "
+            f"January 2020 through June 2024, among cells with at least {MIN_RESIDENTIAL_PARCELS} residential parcels."
+        )
+    raise Stop(f"STOP: unknown cell_choice {d2['cell_choice']!r}.")
+
+
+def _caption_choice(d2: dict, rank_position: int) -> str:
+    if d2["cell_choice"] == "owner_override":
+        return (
+            f"the owner's pick, rank {rank_position} among analysis cells with at least 50 residential parcels. "
+            f"The automatic rank-1 cell `{REQUIRED_AUTO_CELL}` remains in the rank table"
+        )
+    if d2["cell_choice"] == "auto_rank1":
+        return (
+            "the analysis cell with the most parcels whose first dated install falls between "
+            "January 2020 and June 2024, among cells with at least 50 residential parcels"
+        )
+    raise Stop(f"STOP: unknown cell_choice {d2['cell_choice']!r}.")
+
+
+def _release_text(d2: dict, picks: pd.DataFrame, rank_position: int) -> tuple[str, str]:
+    if REVISION is None:
+        raise Stop("STOP: revision is not set.")
     slots = "\n".join(
         f"- {row.slot}: grid {row.grid_id}, area {row.area_m2:.1f} m², "
         f"IoU {row.iou:.2f}, max IoU against the other layer {row.max_iou_other:.2f}."
@@ -1302,26 +1532,23 @@ def _release_text(d2: dict, picks: pd.DataFrame, top3: pd.DataFrame) -> tuple[st
     eskom_note = f" Its Eskom supply-authority area fraction is {float(d2['eskom_area_fraction']):.3f}."
     if eskom_sentence:
         eskom_note += " " + eskom_sentence
-    readme = f"""# Cape Town CV appendix figures, batch v2 revision v2r1 (2026-10-14)
+    gsd_cm = float(d2["vexcel_gsd_cm"])
+    cell_lead = _cell_lead(d2, rank_position)
+    model_prose = _year_prose(d2["model_by_year"])
+    readme = f"""# Cape Town CV appendix figures, batch v2 revision {REVISION} (2026-10-14)
 
 This folder has two figures: D2 (one example cell, preview) and D1 (six illustrative detection chips).
 It is a draft for comment. D1 is not a precision or recall result. D2 is not cleared for publication.
 
-The cell is H3-9 `{d2['cell']}` (`cell_choice` `{d2['cell_choice']}`), the analysis cell with the most parcels whose first dated install falls in January 2020 through June 2024, among cells with at least {MIN_RESIDENTIAL_PARCELS} residential parcels. A parcel is counted in the cell stored on `parcel_attr.h3_r9`, which is the same cell D3 uses. It has {d2['n_residential_parcels']} residential parcels and {d2['n_new_parcels']} new PV parcels. The D3 midpoint stock for this cell is {float(d2['d3_model_parcels_midpoint']):.0f} parcels, and the D3 commissioned SSEG count is {float(d2['d3_sseg_parcels']):.0f}. The drawn new-parcel count and the D3 stock are the same quantity only when every stock parcel is a first appearance inside this window. The largest new parcel is {d2['top_share']:.1%} of the new area ({d2['top_zone']}).{eskom_note}
+{cell_lead} A parcel is counted in the cell stored on `parcel_attr.h3_r9`, which is the same cell D3 uses. It has {d2['n_residential_parcels']} residential parcels and {d2['n_new_parcels']} new PV parcels. The D3 midpoint stock for this cell is {float(d2['d3_model_parcels_midpoint']):.0f} parcels, and the D3 commissioned SSEG count is {float(d2['d3_sseg_parcels']):.0f}. The drawn new-parcel count and the D3 stock are the same quantity only when every stock parcel is a first appearance inside this window. The largest new parcel is {d2['top_share']:.1%} of the new area ({d2['top_zone']}).{eskom_note}
 
-The top three cells, including the one drawn above, are listed so it can be swapped before this batch is uploaded:
-
-{cards}
-
-Another eligible cell can be drawn with `python scripts/validation/build_cv_appendix_v2.py d2 --cell <h3>`. That command rewrites the staging figures. It does not overwrite this folder. One gallery chip can be swapped with `python scripts/validation/build_cv_appendix_v2.py d1 --d1-override "<slot>=<candidate_id>"`. The slot name is the label in the list below. The candidate id is printed on the contact sheet. An FP or FN override is refused when the row is in L1952, L1953 or L1954, or when its max IoU against the other layer is 0.10 or higher.
-
-Panel A uses five aerial epochs of that cell. 2023 is omitted: the municipal layer named 2023 is a 2022 image at 25 cm. 2024 is Vexcel collection `{d2['vexcel_collection']}`, first capture {capture}, not the partial municipal 2024 mosaic. The corner text says the imagery licence is not cleared.
+Panel A uses five aerial epochs of that cell. 2023 is omitted: the municipal layer named 2023 is a 2022 image at 25 cm. 2024 is Vexcel collection `{d2['vexcel_collection']}`, first capture {capture}, not the partial municipal 2024 mosaic. The ground sample distance printed on that panel is {gsd_cm:.1f} cm, measured on this cell's extract. The corner text says the imagery licence is not cleared.
 
 Panel B colours one point per model parcel by the year of its first dated midpoint. Grey points were already present by 2019 ({d2['n_already']} parcels) and are not in the bars. Census-bounded parcels have no year and are not drawn. The black line is the H3-9 boundary.
 
-Panel C counts new model parcels and commissioned SSEG parcels in the cell, through {WINDOW_END.date().isoformat()}. Model counts by year: {d2['model_by_year']}. SSEG counts by year: {d2['sseg_by_year']}. {sseg_sentence}
+Panel C counts new model parcels and commissioned SSEG parcels in the cell, through {WINDOW_END.date().isoformat()}. Model counts by year: {model_prose}. {sseg_sentence}
 
-D1 is drawn from the 16 Li grids that were held out of threshold calibration. Detections are the on-disk census run `unifiedA_li_clsonly_v2_all`. A detection matches a Li polygon when the intersection-over-union is at least 0.5. False positives and false negatives also have to stay below 0.10 IoU against every polygon on the other layer, and they are not taken from L1952, L1953 or L1954. The six chips share one ground scale. Green is a match, orange is a detection with no Li polygon, blue is a Li polygon with no detection. Only the selected object is outlined; other panels visible in a chip are not marked and may be matched or unmatched.
+D1 is drawn from the 16 Li grids that were held out of threshold calibration. Detections are the on-disk census run `unifiedA_li_clsonly_v2_all`. A detection matches a Li polygon when the intersection-over-union is at least 0.5. False positives and false negatives also have to stay below 0.10 IoU against every polygon on the other layer, and they are not taken from L1952, L1953 or L1954. The six chips share one ground scale. Green is a match, orange is a detection with no Li polygon, blue is a Li polygon with no detection. Only the selected object is outlined; other panels visible in a chip are not marked and may be matched or unmatched. The six chips are the same objects as the previous accepted gallery.
 
 {slots}
 
@@ -1332,11 +1559,12 @@ On the uploaded D4 map, a small enclosed hole inside the black outline is outsid
 The D3 upper-stock slope is lower than the midpoint slope because census-bounded polygons pile up between August and September 2024, after the 2024-06-30 snapshot used on the main panel. That scatter was not redrawn here.
 """
     eskom_caption = f" {eskom_sentence}" if eskom_sentence else ""
-    captions = f"""# Captions, batch v2 revision v2r1
+    choice = _caption_choice(d2, rank_position)
+    captions = f"""# Captions, batch v2 revision {REVISION}
 
 ## Figure D2
 
-PREVIEW. Imagery licence not cleared. One H3-9 cell in Cape Town (`{d2['cell']}`), chosen as the analysis cell with the most parcels whose first dated install falls between January 2020 and June 2024, among cells with at least 50 residential parcels. (A) The same ground extent in five epochs: City of Cape Town aerial 2020-01, 2021-03 and 2022-01 at 8 cm; Vexcel ortho {capture} (collection `{d2['vexcel_collection']}`) at 6.2 cm; City of Cape Town aerial 2025-01 at 5 cm, which is the census layer. There is no 2023 epoch. (B) The 2025-01 frame, desaturated, with one point per model parcel coloured by the year that parcel first has a dated midpoint. Grey means already present by 2019. The black line is the H3-9 boundary. The scale bar is 50 m. (C) New parcels by calendar year for the model and for commissioned SSEG registrations in the same cell. {sseg_sentence}{eskom_caption}
+PREVIEW. Imagery licence not cleared. One H3-9 cell in Cape Town (`{d2['cell']}`), {choice}. (A) The same ground extent in five epochs: City of Cape Town aerial 2020-01, 2021-03 and 2022-01 at 8 cm; Vexcel ortho {capture} (collection `{d2['vexcel_collection']}`) at {gsd_cm:.1f} cm; City of Cape Town aerial 2025-01 at 5 cm, which is the census layer. There is no 2023 epoch. (B) The 2025-01 frame, desaturated, with one point per model parcel coloured by the year that parcel first has a dated midpoint. Grey means already present by 2019. The black line is the H3-9 boundary. The scale bar is 50 m. (C) New parcels by calendar year for the model and for commissioned SSEG registrations in the same cell. Model counts by year: {model_prose}. {sseg_sentence}{eskom_caption}
 
 ## Figure D1
 
@@ -1379,14 +1607,64 @@ def _draw_compare(rank: pd.DataFrame) -> None:
     plot_d2(rank, COMPARE_CELL, compare, "owner_override")
 
 
+def reuse_d1_picks(source_tag: str) -> pd.DataFrame:
+    """Copy the accepted gallery's chips and rows, then stamp this commit.
+
+    Selection is not run again. The source staging tree is only read.
+    """
+    if source_tag != "v2r1":
+        raise Stop("STOP: --d1-source may only read the frozen v2r1 staging.")
+    source = WORK_ROOT / "staging_v2r1"
+    if STAGING.resolve() == source.resolve() or _is_frozen_path(STAGING):
+        raise Stop("STOP: refusing to reuse D1 into a frozen or identical staging.")
+    picks = pd.read_csv(source / "d1_picks.csv")
+    frozen = pd.read_csv(WORK_ROOT / "release_v2r1" / "data" / "d1_picks.csv")
+    if not _same_d1_identity(picks, frozen):
+        raise Stop("STOP: staging_v2r1 D1 picks do not match release_v2r1.")
+    expected = {
+        "TP residential",
+        "TP commercial",
+        "FP small bright",
+        "FP darker roof object",
+        "FN small",
+        "FN larger miss",
+    }
+    if set(picks["slot"]) != expected:
+        raise Stop(f"STOP: D1 slots changed: {sorted(picks['slot'])}.")
+    candidates = source / "d1_candidates.csv"
+    if not candidates.exists():
+        raise Stop(f"STOP: missing {candidates}.")
+    (STAGING / "d1_candidates.csv").write_bytes(candidates.read_bytes())
+    out_chips = STAGING / "d1_chips"
+    out_chips.mkdir(parents=True, exist_ok=True)
+    for row in picks.itertuples(index=False):
+        name = f"{str(row.slot).replace(' ', '_')}.png"
+        src = source / "d1_chips" / name
+        if not src.exists() or src.stat().st_size <= 1000:
+            raise Stop(f"STOP: missing D1 chip {src}.")
+        dest = out_chips / name
+        dest.write_bytes(src.read_bytes())
+        if sha256_file(dest) != sha256_file(src):
+            raise Stop(f"STOP: copied D1 chip does not match {src}.")
+    picks = picks.copy()
+    picks["render_commit"] = git_commit()
+    picks.to_csv(STAGING / "d1_picks.csv", index=False)
+    return picks
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("step", choices=["rank", "d2", "d1", "all", "assemble"])
     parser.add_argument("--cell", default=None)
     parser.add_argument("--d1-override", action="append", default=[])
+    parser.add_argument("--revision", default=None)
+    parser.add_argument("--d1-source", default=None)
     args = parser.parse_args()
-    STAGING.mkdir(parents=True, exist_ok=True)
     try:
+        bind_revision(args.revision)
+        if _is_frozen_path(STAGING) or _is_frozen_path(RELEASE):
+            raise Stop(f"STOP: revision {REVISION} still points at a frozen directory.")
+        STAGING.mkdir(parents=True, exist_ok=True)
         head = git_commit()
         if args.step == "assemble":
             assemble()
@@ -1400,22 +1678,30 @@ def main() -> int:
                 "Fall back to the centroid rule and one README sentence, then commit again "
                 "before rendering."
             )
-        print("D2 cell", cell, choice, "HEAD", head, flush=True)
+        print("D2 cell", cell, choice, "HEAD", head, "revision", REVISION, flush=True)
         if args.step == "rank":
             print(rank[~rank["dominated"]].head(3).to_string(index=False))
             return 0
         if args.step in ("d2", "all"):
             fetch_d2(cell, STAGING)
             plot_d2(rank, cell, STAGING, choice)
-            if args.cell is None:
+            # The owner's cell is the former compare cell. Drawing compare as well
+            # would write a second copy of the same figure.
+            if args.cell is None and cell != COMPARE_CELL:
                 _draw_compare(rank)
         if args.step in ("d1", "all"):
-            _clear_d1_images()
-            candidates = build_d1_candidates()
-            contact_sheet(candidates)
-            chosen = select_d1(candidates, _parse_overrides(args.d1_override))
-            fetch_d1_chips(chosen)
-            plot_d1(chosen)
+            if args.d1_source:
+                if args.d1_override:
+                    raise Stop("STOP: --d1-source reuses the frozen picks and does not take overrides.")
+                chosen = reuse_d1_picks(args.d1_source)
+                plot_d1(chosen)
+            else:
+                _clear_d1_images()
+                candidates = build_d1_candidates()
+                contact_sheet(candidates)
+                chosen = select_d1(candidates, _parse_overrides(args.d1_override))
+                fetch_d1_chips(chosen)
+                plot_d1(chosen)
     except Stop as exc:
         print(exc, flush=True)
         return 2
