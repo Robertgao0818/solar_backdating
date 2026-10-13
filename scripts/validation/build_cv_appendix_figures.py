@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import struct
 import subprocess
 import sys
 import urllib.parse
@@ -35,6 +36,8 @@ import geopandas as gpd
 import shapely
 import statsmodels.api as sm
 from matplotlib.colors import LogNorm, TwoSlopeNorm
+from matplotlib.patches import Patch
+from matplotlib.ticker import FixedFormatter, FixedLocator
 from scipy import stats
 from shapely.geometry import shape as shapely_shape
 
@@ -99,7 +102,10 @@ from scripts.validation.cv_appendix_rules import (
 
 PHASE0 = WORK_ROOT / "phase0"
 STAGING = WORK_ROOT / "staging_v1"
-RELEASE = WORK_ROOT / "release_v1"
+# release_v1/ is the pre-fix baseline. This revision writes a new tree.
+RELEASE_REVISION = "v1r1"
+RELEASE_REVISION_DATE = "2026-10-14"
+RELEASE = WORK_ROOT / "release_v1r1"
 PARCEL_GPKG = WORK_ROOT / "parcels" / "parcels.gpkg"
 FIG_WIDTH_IN = FIG_WIDTH_MM / 25.4
 MONTHS = month_index_range(HISTOGRAM_MONTH_START, HISTOGRAM_MONTH_END)
@@ -184,6 +190,29 @@ def save_figure(fig: plt.Figure, stem: Path) -> None:
     fig.savefig(stem.with_suffix(".png"), dpi=FIG_DPI)
     fig.savefig(stem.with_suffix(".pdf"))
     plt.close(fig)
+
+
+def _png_mm(path: Path) -> tuple[float, float]:
+    raw = path.read_bytes()
+    if raw[:8] != b"\x89PNG\r\n\x1a\n":
+        raise Stop(f"STOP: {path} is not a PNG.")
+    width, height = struct.unpack(">II", raw[16:24])
+    return width / FIG_DPI * 25.4, height / FIG_DPI * 25.4
+
+
+def _assert_png_ink(path: Path, min_span_x: float, min_span_y: float) -> None:
+    """Reject a canvas whose non-white pixels leave a large empty band."""
+    image = plt.imread(path)
+    rgb = image[..., :3] if image.ndim == 3 else image
+    ink = (rgb < 0.98).any(axis=-1) if rgb.ndim == 3 else (rgb < 0.98)
+    rows, cols = np.nonzero(ink)
+    if len(cols) == 0:
+        raise Stop(f"STOP: {path.name} has no ink.")
+    span_x = (int(cols.max()) - int(cols.min()) + 1) / rgb.shape[1]
+    span_y = (int(rows.max()) - int(rows.min()) + 1) / rgb.shape[0]
+    print(f"ink {path.name} span_x={span_x:.3f} span_y={span_y:.3f}", flush=True)
+    if span_x < min_span_x or span_y < min_span_y:
+        raise Stop(f"STOP: {path.name} leaves a large blank (span {span_x:.3f} by {span_y:.3f}).")
 
 
 def classify_census(df: pd.DataFrame) -> pd.DataFrame:
@@ -392,14 +421,16 @@ def run_d5() -> dict:
             }
         )
     monthly = pd.DataFrame(rows)
-    # Cross-correlation uses zeros inside each series' observed span.
+    # Both series stop at the cumulative month. A later stub month, such as
+    # 2024-07 with only a few commissions, must not enter one side only.
     model_span = {key: model_flow.get(key, 0.0) for key in MONTHS if key <= CUM_END_INDEX}
     if len(sseg_index):
         sseg_keys = range(int(sseg_index.min()), int(sseg_index.max()) + 1)
-        sseg_span = {key: sseg_flow.get(key, 0.0) for key in sseg_keys}
+        sseg_span = {key: sseg_flow.get(key, 0.0) for key in sseg_keys if key <= CUM_END_INDEX}
     else:
         sseg_span = {}
     cross = pd.DataFrame(lagged_pearson(model_span, sseg_span, CROSSCORR_MAX_LAG))
+    _check_crosscorr(cross)
     ranked = cross.dropna(subset=["pearson"]).sort_values(["pearson", "lag_months"], ascending=[False, True])
     best = ranked.iloc[0].to_dict() if len(ranked) else {"lag_months": None, "pearson": None, "n_months": 0}
 
@@ -437,6 +468,7 @@ def run_d5() -> dict:
         "crosscorr_best_pearson": None if best["pearson"] is None else float(best["pearson"]),
         "crosscorr_best_n": int(best["n_months"]),
         "crosscorr_lag0": None if cross.loc[0, "pearson"] is None else float(cross.loc[0, "pearson"]),
+        "crosscorr_lag0_n": int(cross.loc[0, "n_months"]),
         "imaging_visits": int(len(visits)),
         "visits_sha256": visit_sha,
         "sseg_commission_min": str(sseg.loc[comm, "commission_date"].min().date()),
@@ -463,22 +495,51 @@ def run_d5() -> dict:
     return totals
 
 
+def _check_crosscorr(cross: pd.DataFrame) -> None:
+    """The revised window should put the peak at lag 2 with n = 64."""
+
+    def at(lag: int) -> tuple[float, int]:
+        row = cross.loc[cross["lag_months"] == lag].iloc[0]
+        return float(row["pearson"]), int(row["n_months"])
+
+    lag0, n0 = at(0)
+    lag2, n2 = at(2)
+    lag4, _n4 = at(4)
+    lag12, _n12 = at(12)
+    print(
+        f"crosscorr lag0={lag0:.6f} n={n0} lag2={lag2:.6f} n={n2} "
+        f"lag4={lag4:.6f} lag12={lag12:.6f}",
+        flush=True,
+    )
+    if abs(lag0 - 0.2686) > 0.002 or n0 != 66:
+        raise Stop("STOP: D5 lag-0 correlation is outside the shared-window check.")
+    if abs(lag2 - 0.6208) > 0.002 or n2 != 64:
+        raise Stop("STOP: D5 lag-2 correlation is outside the shared-window check.")
+    if abs(lag4 - 0.503) > 0.01 or abs(lag12 - 0.460) > 0.01:
+        raise Stop("STOP: D5 lag-4 or lag-12 correlation is outside the shared-window check.")
+    best = cross.dropna(subset=["pearson"]).sort_values(["pearson", "lag_months"], ascending=[False, True]).iloc[0]
+    if int(best["lag_months"]) != 2:
+        raise Stop("STOP: D5 best cross-correlation lag is not 2.")
+
+
 def plot_d5(monthly: pd.DataFrame, totals: dict, stem: Path) -> None:
     apply_style()
     labels = monthly["month"].tolist()
     x = np.arange(len(labels))
     cum_x = x[monthly.model_dated_cumulative.notna().to_numpy()]
-    # Height is free to grow. Width stays at the journal measure, and the
-    # side-bar labels sit inside the axes so they are not clipped at 180 mm.
-    fig = plt.figure(figsize=(FIG_WIDTH_IN, 10.6))
+    # One x window for every panel, including the side bars on A.
+    # Height stays under about 240 mm. Month names sit on the bottom panel only.
+    shared_xlim = (-4.0, len(x) + 2.6)
+    fig_h = 8.8
+    fig = plt.figure(figsize=(FIG_WIDTH_IN, fig_h))
     gs = fig.add_gridspec(
         4, 1,
-        height_ratios=[1.28, 1.12, 1.18, 0.78],
-        hspace=0.78,
-        left=0.16,
-        right=0.86,
+        height_ratios=[1.15, 1.05, 1.15, 0.95],
+        hspace=0.32,
+        left=0.14,
+        right=0.88,
         top=0.96,
-        bottom=0.07,
+        bottom=0.10,
     )
     axes = [fig.add_subplot(gs[i]) for i in range(4)]
     blue = "#4C78A8"
@@ -489,8 +550,8 @@ def plot_d5(monthly: pd.DataFrame, totals: dict, stem: Path) -> None:
     ax.bar(x, monthly.model_dated_flow, width=0.86, color=blue, label="Dated midpoint")
     ax.bar([-2.2], [totals["n_left_censored"]], width=1.15, color=grey, label="Not a month")
     ax.bar([len(x) + 1.2], [totals["n_census_bound"]], width=1.15, color=grey)
-    _month_ticks(ax, x, labels)
-    ax.set_xlim(-4.0, len(x) + 2.6)
+    _month_ticks(ax, x, labels, show_labels=False)
+    ax.set_xlim(*shared_xlim)
     top = max(float(totals["n_census_bound"]), float(monthly.model_dated_flow.max()), 1.0)
     ax.set_ylim(0, top * 1.20)
     ax.set_ylabel("Census polygons")
@@ -518,8 +579,8 @@ def plot_d5(monthly: pd.DataFrame, totals: dict, stem: Path) -> None:
     ax = axes[1]
     ax.bar(x, monthly.sseg_flow, width=0.86, color=orange, label="Commission month")
     ax.bar([-2.2], [totals["pre_2019_sseg"]], width=1.15, color=grey, label="Before 2019")
-    _month_ticks(ax, x, labels)
-    ax.set_xlim(-4.0, len(x) + 1.2)
+    _month_ticks(ax, x, labels, show_labels=False)
+    ax.set_xlim(*shared_xlim)
     sseg_top = max(float(totals["pre_2019_sseg"]), float(monthly.sseg_flow.max()), 1.0)
     ax.set_ylim(0, sseg_top * 1.18)
     ax.set_ylabel("SSEG registrations")
@@ -543,9 +604,9 @@ def plot_d5(monthly: pd.DataFrame, totals: dict, stem: Path) -> None:
     ax2.plot(cum_x, monthly.loc[monthly.sseg_cumulative.notna(), "sseg_cumulative"], color=orange, lw=1.4, label="SSEG commissions")
     ax2.set_ylabel("SSEG cumulative count", color=orange)
     ax2.tick_params(axis="y", colors=orange)
-    _month_ticks(ax, x, labels)
-    ax.set_xlim(-0.5, len(x) - 0.5)
-    ax.set_title("C. Cumulative counts through 2024-06")
+    _month_ticks(ax, x, labels, show_labels=False)
+    ax.set_xlim(*shared_xlim)
+    ax.set_title(f"C. Cumulative counts through {CUMULATIVE_MONTH_END}")
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
     ax.legend(h1 + h2, l1 + l2, frameon=False, loc="upper left")
@@ -553,19 +614,28 @@ def plot_d5(monthly: pd.DataFrame, totals: dict, stem: Path) -> None:
 
     ax = axes[3]
     ax.bar(x, monthly.imaging_anchor_visits, width=0.86, color="#c8c8c8")
-    _month_ticks(ax, x, labels)
-    ax.set_xlim(-0.5, len(x) - 0.5)
+    _month_ticks(ax, x, labels, show_labels=True)
+    ax.set_xlim(*shared_xlim)
     ax.set_ylabel("Anchor-visits")
     ax.set_xlabel("Month")
     ax.set_title("C, continued. Imaging dates in the 27-wave stack")
     save_figure(fig, stem)
+    width_mm, height_mm = _png_mm(stem.with_suffix(".png"))
+    print(f"D5 canvas {width_mm:.2f} x {height_mm:.2f} mm", flush=True)
+    if height_mm > 240.5:
+        raise Stop(f"STOP: D5 height is {height_mm:.1f} mm, above 240 mm.")
+    if abs(width_mm - FIG_WIDTH_MM) > 0.2:
+        raise Stop(f"STOP: D5 width is {width_mm:.2f} mm, not {FIG_WIDTH_MM} mm.")
 
 
-def _month_ticks(ax, x, labels: list[str]) -> None:
+def _month_ticks(ax, x, labels: list[str], show_labels: bool) -> None:
     step = 6
     pos = list(range(0, len(labels), step))
     ax.set_xticks([x[i] for i in pos])
-    ax.set_xticklabels([labels[i] for i in pos], rotation=90)
+    if show_labels:
+        ax.set_xticklabels([labels[i] for i in pos], rotation=90)
+    else:
+        ax.set_xticklabels([""] * len(pos))
 
 
 def _cells_from_geom(geom) -> set[str]:
@@ -1059,28 +1129,75 @@ def build_stock_tables() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     return cells_main, panel, {"n_analysis": int(len(cells_main))}
 
 
-def fit_ols(x: np.ndarray, y: np.ndarray, groups: pd.Series | None = None) -> dict:
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    design = sm.add_constant(x)
+def fit_ols(
+    x: np.ndarray,
+    y: np.ndarray,
+    groups: pd.Series | None = None,
+    cluster: pd.Series | None = None,
+) -> dict:
+    """OLS slope of y on x.
+
+    Cross-section rows are one per cell and use HC1. That matches clustering
+    by cell. Panel rows repeat a cell across snapshots, so pass cluster ids
+    and the covariance is clustered on those ids. Fixed-effect dummies are
+    appended after the slope column, so params[1] stays the slope on x.
+    """
+    x_arr = np.asarray(x, dtype=float).reshape(-1)
+    y_arr = np.asarray(y, dtype=float).reshape(-1)
+    if x_arr.shape != y_arr.shape:
+        raise Stop("STOP: OLS x and y have different lengths.")
+    frame = pd.DataFrame({"x": x_arr, "y": y_arr})
     if groups is not None:
-        dummies = pd.get_dummies(groups, drop_first=True, dtype=float)
+        group_arr = np.asarray(groups)
+        if len(group_arr) != len(frame):
+            raise Stop("STOP: OLS groups do not match the estimation rows.")
+        frame["group"] = group_arr
+    if cluster is not None:
+        cluster_arr = np.asarray(cluster)
+        if len(cluster_arr) != len(frame):
+            raise Stop("STOP: OLS cluster ids do not match the estimation rows.")
+        frame["cluster"] = cluster_arr
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna()
+    blank = {
+        "n": int(len(frame)),
+        "slope": None,
+        "se": None,
+        "se_type": None,
+        "intercept": None,
+        "r2": None,
+        "pearson": None,
+        "spearman": None,
+        "zero_share": None,
+    }
+    if len(frame) < 3 or float(frame["x"].std(ddof=0)) == 0:
+        return blank
+    # Constant, then x, then any snapshot dummies. Do not put dummies first.
+    design = sm.add_constant(frame["x"].to_numpy(), has_constant="add")
+    if groups is not None:
+        dummies = pd.get_dummies(frame["group"], drop_first=True, dtype=float)
         if len(dummies.columns):
             design = np.column_stack([design, dummies.to_numpy()])
-    if np.nanstd(x) == 0 or len(x) < 3:
-        return {"n": int(len(x)), "slope": None, "se": None, "intercept": None, "r2": None, "pearson": None, "spearman": None}
-    fit = sm.OLS(y, design, missing="drop").fit(cov_type="HC1")
-    pearson = float(stats.pearsonr(x, y).statistic)
-    spearman = float(stats.spearmanr(x, y).statistic)
+    se_type = "HC1"
+    fit_kwargs: dict = {"cov_type": "HC1"}
+    if cluster is not None:
+        se_type = "cluster_h3_r9"
+        fit_kwargs = {
+            "cov_type": "cluster",
+            "cov_kwds": {"groups": frame["cluster"].to_numpy()},
+        }
+    fit = sm.OLS(frame["y"].to_numpy(), design).fit(**fit_kwargs)
+    x_used = frame["x"].to_numpy()
+    y_used = frame["y"].to_numpy()
     return {
         "n": int(fit.nobs),
         "slope": float(fit.params[1]),
         "se": float(fit.bse[1]),
+        "se_type": se_type,
         "intercept": float(fit.params[0]),
         "r2": float(fit.rsquared),
-        "pearson": pearson,
-        "spearman": spearman,
-        "zero_share": float(np.mean((x == 0) & (y == 0))),
+        "pearson": float(stats.pearsonr(x_used, y_used).statistic),
+        "spearman": float(stats.spearmanr(x_used, y_used).statistic),
+        "zero_share": float(np.mean((x_used == 0) & (y_used == 0))),
     }
 
 
@@ -1128,16 +1245,27 @@ def run_d3() -> dict:
         {
             "spec": "counts_panel_snapshot_fe",
             "panel": "A",
-            **fit_ols(panel["model_parcels_midpoint"], panel["sseg_parcels"], panel["snapshot"]),
+            **fit_ols(
+                panel["model_parcels_midpoint"],
+                panel["sseg_parcels"],
+                groups=panel["snapshot"],
+                cluster=panel["h3_r9"],
+            ),
         }
     )
     specs.append(
         {
             "spec": "capacity_panel_snapshot_fe",
             "panel": "B",
-            **fit_ols(panel["model_kwp_midpoint"], panel["sseg_kva"], panel["snapshot"]),
+            **fit_ols(
+                panel["model_kwp_midpoint"],
+                panel["sseg_kva"],
+                groups=panel["snapshot"],
+                cluster=panel["h3_r9"],
+            ),
         }
     )
+    _check_panel_se(specs)
     ols = pd.DataFrame(specs)
     bins_a = quantile_bin_means(main_x, main_y, N_QUANTILE_BINS)
     bins_a.insert(0, "panel", "A")
@@ -1170,6 +1298,31 @@ def run_d3() -> dict:
     plot_d3(cells, bins, numbers, STAGING / "fig_D3_hex_scatter")
     print("D3 wrote", numbers["counts"], flush=True)
     return numbers
+
+
+def _check_panel_se(specs: list[dict]) -> None:
+    """Clustered panel SEs widen; the slope itself must not move."""
+    by_spec = {row["spec"]: row for row in specs}
+    counts = by_spec["counts_panel_snapshot_fe"]
+    capacity = by_spec["capacity_panel_snapshot_fe"]
+    print(
+        f"panel counts slope={counts['slope']:.6f} se={counts['se']:.6f} "
+        f"capacity slope={capacity['slope']:.6f} se={capacity['se']:.6f}",
+        flush=True,
+    )
+    if counts["se_type"] != "cluster_h3_r9" or capacity["se_type"] != "cluster_h3_r9":
+        raise Stop("STOP: panel standard errors are not clustered by H3-9.")
+    if not (0.003 <= counts["se"] <= 0.005 and 0.028 <= capacity["se"] <= 0.040):
+        raise Stop("STOP: clustered panel standard errors are outside the expected range.")
+    if abs(counts["slope"] - 0.13343454966048918) > 1e-8:
+        raise Stop("STOP: clustered count slope does not match the HC1 point estimate.")
+    if abs(capacity["slope"] - 0.19163237711157832) > 1e-8:
+        raise Stop("STOP: clustered capacity slope does not match the HC1 point estimate.")
+    for row in specs:
+        if row["spec"].endswith("panel_snapshot_fe"):
+            continue
+        if row["se_type"] != "HC1":
+            raise Stop(f"STOP: {row['spec']} should stay on HC1.")
 
 
 def _annotate(ax, text: str) -> None:
@@ -1267,45 +1420,110 @@ def _scalebar(ax, kilometers: float = 10) -> None:
     ax.text(x + width / 2, y + 0.015 * (y1 - y0), f"{kilometers:.0f} km", ha="center", va="bottom", fontsize=8, zorder=5)
 
 
+def _axes_inches(fig: plt.Figure, x_in: float, y_in: float, w_in: float, h_in: float) -> plt.Axes:
+    fig_w, fig_h = fig.get_size_inches()
+    return fig.add_axes([x_in / fig_w, y_in / fig_h, w_in / fig_w, h_in / fig_h])
+
+
 def plot_d4(frame: gpd.GeoDataFrame, city: gpd.GeoDataFrame, numbers: dict, stem: Path) -> None:
-    fig, axes = plt.subplots(3, 1, figsize=(FIG_WIDTH_IN, 9.3))
-    norm = LogNorm(vmin=1, vmax=numbers["vmax_parcels"])
-    ratio_norm = TwoSlopeNorm(vmin=-numbers["log_ratio_clip"], vcenter=0, vmax=numbers["log_ratio_clip"])
-    panels = [
-        ("model_parcels_midpoint", "A. Model parcels with PV", norm, "viridis", "Parcels"),
-        ("sseg_parcels", "B. SSEG parcels with PV", norm, "viridis", "Parcels"),
-        ("log_ratio", "C. log((1 + model) / (1 + SSEG))", ratio_norm, "RdBu_r", "Log ratio"),
-    ]
+    """Three maps across the 180 mm width. Each map is at least 55 mm wide.
+
+    A colour bar on the right of a one-row layout would push the maps under
+    55 mm, so A and B share a horizontal log bar and C has its own bar.
+    The axes box is sized to the data aspect before set_aspect('equal'),
+    which is what previously shrank each map and left a blank left side.
+    """
+    apply_style()
     bounds = frame.total_bounds
     pad_x = (bounds[2] - bounds[0]) * 0.03
     pad_y = (bounds[3] - bounds[1]) * 0.03
-    for ax, (column, title, color_norm, cmap, label) in zip(axes, panels):
-        city.plot(ax=ax, facecolor="#f4f4f4", edgecolor="#666666", linewidth=0.4, zorder=0)
-        frame.plot(ax=ax, color="#e8e8e8", linewidth=0, zorder=1)
-        drawn = frame if column == "log_ratio" else frame.loc[frame[column] > 0]
-        drawn.plot(
-            ax=ax,
-            column=column,
-            cmap=cmap,
-            norm=color_norm,
-            linewidth=0,
-            zorder=2,
-            legend=False,
-        )
-        ax.set_xlim(bounds[0] - pad_x, bounds[2] + pad_x)
-        ax.set_ylim(bounds[1] - pad_y, bounds[3] + pad_y)
+    xlim = (bounds[0] - pad_x, bounds[2] + pad_x)
+    ylim = (bounds[1] - pad_y, bounds[3] + pad_y)
+    lon_span = xlim[1] - xlim[0]
+    lat_span = ylim[1] - ylim[0]
+    left_in = 0.36
+    right_in = 0.04
+    gap_in = 0.05
+    map_w = (FIG_WIDTH_IN - left_in - right_in - 2 * gap_in) / 3
+    map_h = map_w * (lat_span / lon_span)
+    bottom_in = 0.46
+    cbar_h = 0.14
+    xlabel_in = 0.28
+    title_in = 0.26
+    legend_in = 0.32
+    top_in = 0.02
+    y_cbar = bottom_in
+    y_map = bottom_in + cbar_h + xlabel_in
+    fig_h = y_map + map_h + title_in + legend_in + top_in
+    fig = plt.figure(figsize=(FIG_WIDTH_IN, fig_h))
+    xs = [left_in + i * (map_w + gap_in) for i in range(3)]
+    axes = [_axes_inches(fig, x_in, y_map, map_w, map_h) for x_in in xs]
+    cbar_ab = _axes_inches(fig, xs[0], y_cbar, xs[1] + map_w - xs[0], cbar_h)
+    cbar_c = _axes_inches(fig, xs[2], y_cbar, map_w, cbar_h)
+
+    norm = LogNorm(vmin=1, vmax=numbers["vmax_parcels"])
+    ratio_norm = TwoSlopeNorm(vmin=-numbers["log_ratio_clip"], vcenter=0, vmax=numbers["log_ratio_clip"])
+    panels = [
+        ("model_parcels_midpoint", "A. Model parcels with PV", norm, "viridis"),
+        ("sseg_parcels", "B. SSEG parcels with PV", norm, "viridis"),
+        ("log_ratio", "C. log((1 + model) / (1 + SSEG))", ratio_norm, "RdBu_r"),
+    ]
+    footprint = frame.geometry.union_all()
+    outline = gpd.GeoSeries([footprint.boundary], crs=frame.crs)
+    zero_grey = "#8a8a8a"
+    for ax, (column, title, color_norm, cmap) in zip(axes, panels):
+        city.plot(ax=ax, facecolor="white", edgecolor="#b4b4b4", linewidth=0.0, hatch="////", zorder=0)
+        city.boundary.plot(ax=ax, color="#444444", linewidth=0.45, zorder=4)
+        if column != "log_ratio":
+            frame.plot(ax=ax, color=zero_grey, linewidth=0, zorder=1)
+            drawn = frame.loc[frame[column] > 0]
+        else:
+            drawn = frame
+        drawn.plot(ax=ax, column=column, cmap=cmap, norm=color_norm, linewidth=0, zorder=2, legend=False)
+        outline.plot(ax=ax, color="#222222", linewidth=0.45, zorder=5)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
         ax.set_aspect("equal", adjustable="box")
-        if column == "sseg_parcels" and not numbers.get("supply_layer_covers_city", True):
-            title = "B. SSEG parcels (grey = zero; not an Eskom mask)"
-        ax.set_title(title)
+        ax.set_title(title, pad=2)
         ax.set_xlabel("Longitude (degrees)")
-        ax.set_ylabel("Latitude (degrees)")
         _scalebar(ax)
-        smap = plt.cm.ScalarMappable(norm=color_norm, cmap=cmap)
-        fig.colorbar(smap, ax=ax, fraction=0.035, pad=0.02, label=label)
-    fig.tight_layout()
-    fig.set_size_inches(FIG_WIDTH_IN, 9.3)
+    # A y-axis title would sit in the left margin and either clip or force the
+    # maps under 55 mm. Numeric latitude ticks stay on the left map only.
+    for ax in axes[1:]:
+        ax.tick_params(axis="y", labelleft=False)
+    log_mappable = plt.cm.ScalarMappable(norm=norm, cmap="viridis")
+    log_bar = fig.colorbar(log_mappable, cax=cbar_ab, orientation="horizontal")
+    log_ticks = [1, 2, 5, 10, 20, 48]
+    log_bar.ax.xaxis.set_major_locator(FixedLocator(log_ticks))
+    log_bar.ax.xaxis.set_major_formatter(FixedFormatter([str(tick) for tick in log_ticks]))
+    log_bar.set_label("Parcels (log scale)")
+    ratio_mappable = plt.cm.ScalarMappable(norm=ratio_norm, cmap="RdBu_r")
+    ratio_bar = fig.colorbar(ratio_mappable, cax=cbar_c, orientation="horizontal")
+    ratio_bar.set_label("Log ratio")
+    handles = [
+        Patch(facecolor=zero_grey, edgecolor=zero_grey, label="0 parcels (analysis cell)"),
+        Patch(facecolor="white", edgecolor="#b4b4b4", hatch="////", label="Outside analysis footprint"),
+    ]
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        bbox_to_anchor=(0.5, (y_map + map_h + title_in) / fig_h),
+        ncol=2,
+        frameon=False,
+        borderaxespad=0.0,
+    )
+    fig.canvas.draw()
+    for index, ax in enumerate(axes):
+        width_mm = ax.get_window_extent().width / fig.dpi * 25.4
+        print(f"D4 map {index} width {width_mm:.2f} mm", flush=True)
+        if width_mm < 55.0:
+            raise Stop(f"STOP: D4 map {index} is {width_mm:.2f} mm wide, under 55 mm.")
     save_figure(fig, stem)
+    width_mm, height_mm = _png_mm(stem.with_suffix(".png"))
+    print(f"D4 canvas {width_mm:.2f} x {height_mm:.2f} mm", flush=True)
+    if abs(width_mm - FIG_WIDTH_MM) > 0.2:
+        raise Stop(f"STOP: D4 width is {width_mm:.2f} mm, not {FIG_WIDTH_MM} mm.")
+    _assert_png_ink(stem.with_suffix(".png"), min_span_x=0.90, min_span_y=0.85)
 
 
 def _fmt(value, digits=3):
@@ -1371,17 +1589,19 @@ def _scope_text(cells_qa: dict) -> dict[str, str]:
             f"{cells_qa['supply_commissioned_with_wkt']:,} fall in neither polygon. Excluding hexes that "
             f"overlap the Eskom-labelled polygons would drop the wrong area, so the 0.5 area rule is not "
             f"applied. Of these hexes, {cells_qa['h3_outside_both_supply_areas']:,} have essentially no "
-            f"overlap with either published polygon. Grey cells on the SSEG map are zero registrations. "
-            f"A grey region cannot be separated into an Eskom direct-supply pocket and unregistered "
+            f"overlap with either published polygon. Mid-grey cells on the maps are analysis cells with "
+            f"zero registrations. Hatching inside the city boundary is outside the aerial-footprint "
+            f"sample. A mid-grey region cannot be separated into an Eskom direct-supply pocket and unregistered "
             f"systems inside the City supply area. The SSEG column `electricity_region` equals Eskom on "
             f"{cells_qa['sseg_electricity_region_eskom_n']:,} commissioned rows, which is not a cell "
             f"boundary. Using every CPT census cell, including partly imaged edge cells, would have "
             f"produced {n_loose:,} fully contained hexes."
         ),
         "limits": (
-            "No Eskom mask is applied, for the reason above. Grey cells on Figure D4 are zero "
-            "SSEG registrations, not a supply-authority boundary. Contiguous grey areas cannot, "
-            "by themselves, be read as missed Eskom pockets."
+            "No Eskom mask is applied, for the reason above. On Figure D4, mid-grey is an "
+            "analysis cell with zero parcels, and hatching inside the city boundary is outside "
+            "the aerial-footprint sample. Neither is a supply-authority boundary. Contiguous "
+            "zero-registration areas cannot, by themselves, be read as missed Eskom pockets."
         ),
         "caption_d3": (
             "H3 resolution-9 cells fully inside the January 2025 census aerial footprint. "
@@ -1389,14 +1609,17 @@ def _scope_text(cells_qa: dict) -> dict[str, str]:
             "polygons do not cover the metro"
         ),
         "caption_d4": (
-            " Grey cells are zero SSEG registrations and are not an Eskom mask: the published "
+            " Mid-grey is an analysis cell with zero parcels. Hatching inside the city boundary "
+            "is outside the aerial-footprint sample. Neither is an Eskom mask: the published "
             "supply-authority layer leaves most of the metro, including the CBD, outside both "
-            "its CCT and Eskom polygons, so a grey region cannot be read as direct Eskom supply."
+            "its CCT and Eskom polygons. On map C, a white cell inside the thin outline has "
+            "log ratio 0, including a cell that is zero on both counts."
         ),
         "deviation": (
             "ODP_SPLIT_1 layer 3 does not cover the metro: required city locations and most "
             "commissioned SSEG points fall outside both the CCT and Eskom polygons. Section 6 "
-            "fallback: no cell is dropped. Grey zero-SSEG cells on D4 are not an Eskom mask. "
+            "fallback: no cell is dropped. On D4, mid-grey analysis cells are zero registrations "
+            "and hatching is outside the aerial footprint. Neither is an Eskom mask. "
             "The 0.5 area rule stays in the code and is not applied."
         ),
     }
@@ -1406,9 +1629,10 @@ def write_release_text(d5: dict, d3: dict, d4: dict, match: dict, cells_qa: dict
     counts = d3["counts"]
     capacity = d3["capacity"]
     scope = _scope_text(cells_qa)
-    readme = f"""# Cape Town CV appendix figures, batch v1 ({BATCH_DATE})
+    readme = f"""# Cape Town CV appendix figures, batch v1 revision {RELEASE_REVISION} ({BATCH_DATE})
 
 This folder has three figures: D5 (timing), D3 (cell-level scatter) and D4 (cell-level maps).
+It is revision {RELEASE_REVISION} of batch v1, dated {RELEASE_REVISION_DATE}. The inputs and the stock rules are unchanged.
 It is a draft for comment. It is not a detection-accuracy result and it is not an
 install-date accuracy result.
 
@@ -1422,7 +1646,7 @@ again on every historical aerial year.
 These were not restated by the collaborator note, so they are marked as defaults.
 
 1. The counting unit is a cadastral parcel that contains PV, not a polygon and not a building.
-2. The stock snapshot is 2024-06-30. The SSEG commission dates in this extract end on {d5['sseg_commission_max']}, so a later snapshot would make the register look even smaller.
+2. The stock snapshot is {MAIN_SNAPSHOT}. The SSEG commission dates in this extract end on {d5['sseg_commission_max']}, so a later snapshot would make the register look even smaller.
 3. Model capacity is census-polygon area times {CAPACITY_KWP_PER_M2:.2f} kWp per square metre. A density near four hundredths of a kilowatt per square metre was fit to SSEG itself and is not used. Polygon area is not module area, so the slope is not a yield.
 4. National load-shedding hours are not drawn. They were not in the files used here. Panel C can take that series later without changing the other layers.
 
@@ -1432,7 +1656,7 @@ The census table has {d5['n_citywide']:,} polygons. Commissioned SSEG rows numbe
 
 ## What each figure uses
 
-The model is {MODEL_LABEL}. {MODEL_EXCLUDED}.
+The model is {MODEL_LABEL}. {MODEL_EXCLUDED}
 
 A dated polygon has a closed interval from the last absent satellite visit to the first present visit. The histogram uses the midpoint of that interval. {d5['n_left_censored']:,} polygons were already present before the 2019 satellite window (left-censored). {d5['n_census_bound']:,} are known only to have appeared by the census date {CENSUS_DATE} (census-bounded). {d5['n_undated']:,} are undated. The two censored classes are drawn beside the monthly axis and are not placed in a month. Putting either class on a single month, or treating the published sentinel dates as install months, creates a false spike.
 
@@ -1444,15 +1668,15 @@ D3 and D4 count parcels. A census polygon contributes to a parcel when its centr
 
 ## Figure notes
 
-D5 panel C cumulates the monthly bars in panels A and B and stops at 2024-06. The model curve therefore omits the left-censored and census-bounded classes. The SSEG curve includes {d5['pre_2019_sseg']:,} commissions from before 2019 in its level. At 2024-06 the dated-model cumulative is {d5['model_cumulative_2024_06']:,.0f} and the SSEG cumulative is {d5['sseg_cumulative_2024_06']:,.0f}. The system-level midpoint stock, which does include the censored classes under the stock rule, is {d5['model_stock_midpoint_2024_06']:,} at the same date (lower {d5['model_stock_lower_2024_06']:,}, upper {d5['model_stock_upper_2024_06']:,}). Those stock columns are in the monthly CSV and are not extra lines on the figure.
+D5 panel C cumulates the monthly bars in panels A and B and stops at {CUMULATIVE_MONTH_END}. The model curve therefore omits the left-censored and census-bounded classes. The SSEG curve includes {d5['pre_2019_sseg']:,} commissions from before 2019 in its level. At {CUMULATIVE_MONTH_END} the dated-model cumulative is {d5['model_cumulative_2024_06']:,.0f} and the SSEG cumulative is {d5['sseg_cumulative_2024_06']:,.0f}. The system-level midpoint stock, which does include the censored classes under the stock rule, is {d5['model_stock_midpoint_2024_06']:,} at the same date (lower {d5['model_stock_lower_2024_06']:,}, upper {d5['model_stock_upper_2024_06']:,}). Those stock columns are in the monthly CSV and are not extra lines on the figure. The two cumulative curves use separate y-axes. Their meeting at {CUMULATIVE_MONTH_END} is not agreement in level.
 
 The imaging strip is the count of anchor-visits by capture month in the 27-wave file ({d5['imaging_visits']:,} visits). The Top-52 cohort ({d5['n_top52']:,} polygons) has no visit sequence, so it is not in that strip.
 
-Monthly new counts, not the cumulative curves, give a Pearson correlation of {_fmt(d5['crosscorr_lag0'])} at lag 0. Shifting SSEG later by 0 to 12 months, the highest correlation is {_fmt(d5['crosscorr_best_pearson'])} at {d5['crosscorr_best_lag']} months (n = {d5['crosscorr_best_n']} months). This is a description of the two flow series. It is not a pass/fail threshold. Spreading each dated interval uniformly across the months it covers, instead of placing it on the midpoint, is the column `model_spread_flow`. It is not drawn.
+Monthly new counts, not the cumulative curves, give a Pearson correlation of {_fmt(d5['crosscorr_lag0'], 4)} at lag 0 (n = {d5['crosscorr_lag0_n']} months). Shifting SSEG later by 0 to 12 months, the highest correlation is {_fmt(d5['crosscorr_best_pearson'], 4)} at {d5['crosscorr_best_lag']} months (n = {d5['crosscorr_best_n']} months). Both series stop at {CUMULATIVE_MONTH_END}, so commissions after that month are outside this correlation. This is a description of the two flow series. It is not a pass/fail threshold. Spreading each dated interval uniformly across the months it covers, instead of placing it on the midpoint, is the column `model_spread_flow`. It is not drawn.
 
-D3 draws one point per analysis cell. The fit is OLS with an intercept and HC1 robust standard errors. For counts the slope is {_fmt(counts['slope'], 4)} (SE {_fmt(counts['se'], 4)}), R² {_fmt(counts['r2'])}, N {counts['n']:,}, and {counts['zero_share']:.1%} of cells are zero on both axes. For capacity the slope is {_fmt(capacity['slope'], 4)} (SE {_fmt(capacity['se'], 4)}), R² {_fmt(capacity['r2'])}. The black squares are bin means: a bin for cells with a zero model value, then up to {N_QUANTILE_BINS} quantile bins of the remaining cells. The dashed line is 45 degrees. The same CSV supports the checks that are not drawn: dropping zero-zero cells, keeping cells whose parcels are mostly residential, adding off-grid SSEG status `2.0`, using the lower and upper stock rules, and a stacked snapshot panel with snapshot fixed effects. Those fits are in `fig_D3_ols.csv`.
+D3 draws one point per analysis cell. The drawn fit is OLS with an intercept and HC1 robust standard errors. Cross-section HC1 matches clustering by cell, because each row is one cell. For counts the slope is {_fmt(counts['slope'], 4)} (SE {_fmt(counts['se'], 4)}), R² {_fmt(counts['r2'])}, N {counts['n']:,}, and {counts['zero_share']:.1%} of cells are zero on both axes. For capacity the slope is {_fmt(capacity['slope'], 4)} (SE {_fmt(capacity['se'], 4)}), R² {_fmt(capacity['r2'])}. The black squares are bin means: a bin for cells with a zero model value, then up to {N_QUANTILE_BINS} quantile bins of the remaining cells. The dashed line is 45 degrees. The same CSV supports the checks that are not drawn: dropping zero-zero cells, keeping cells whose parcels are mostly residential, adding off-grid SSEG status `2.0`, using the lower and upper stock rules, and a stacked snapshot panel with snapshot fixed effects. The panel rows cluster standard errors by H3-9 cell. The `se_type` column says which covariance was used. Those fits are in `fig_D3_ols.csv`.
 
-D4 uses the same cells and the same snapshot. The first two maps share a log scale from 1 to {d4['vmax_parcels']:.0f} parcels. Zero cells are grey. The third map is clipped for display at the 99th percentile of the absolute log ratio (±{d4['log_ratio_clip']:.2f}). The unclipped range is {d4['log_ratio_min']:.2f} to {d4['log_ratio_max']:.2f}, and the CSV has the unclipped value. Red means more model parcels than SSEG parcels.
+D4 uses the same cells and the same snapshot. The three maps sit in one row and share one longitude and latitude window, in degrees. There is no separate latitude axis title, so the maps can each stay at least 55 mm wide. The first two maps share one logarithmic colour bar underneath, with ticks at 1, 2, 5, 10, 20 and {d4['vmax_parcels']:.0f} parcels. An analysis cell with zero parcels is mid-grey. Area inside the city boundary but outside the aerial-footprint sample is hatched. The third map is clipped for display at the 99th percentile of the absolute log ratio (±{d4['log_ratio_clip']:.2f}). A white cell inside the thin analysis outline is a log ratio of 0, including a cell that is zero on both counts. Hatched area is outside the analysis footprint. The unclipped range is {d4['log_ratio_min']:.2f} to {d4['log_ratio_max']:.2f}, and the CSV has the unclipped value. Red means more model parcels than SSEG parcels.
 
 ## Limits
 
@@ -1470,11 +1694,11 @@ No claim is made about precision, recall, or date error. Those are later tables,
 
 Municipal parcels and the supply-authority layer are City of Cape Town open data, used under the City's terms and acknowledged here. Their geometries are not in this folder.
 """
-    captions = f"""# Captions, batch v1
+    captions = f"""# Captions, batch v1 revision {RELEASE_REVISION}
 
 ## Figure D5
 
-Timing of detected rooftop PV and municipal SSEG commissioning in Cape Town. (A) Monthly counts of census polygons whose install-date interval has a midpoint in that month. Only closed absent-to-present intervals are included (n = {d5['n_dated']:,}). Polygons already present before the 2019 satellite window (left-censored, n = {d5['n_left_censored']:,}) and polygons known only to have been installed by the {CENSUS_DATE} census aerial (census-bounded, n = {d5['n_census_bound']:,}) are the grey bars and are not assigned to a month. Undated polygons (n = {d5['n_undated']:,}) are omitted. (B) Monthly counts of commissioned SSEG registrations, status codes 1.0 and 4.0 (n = {d5['n_commissioned']:,}). The commission date is the municipal acceptance date. Commissions before 2019 (n = {d5['pre_2019_sseg']:,}) are the grey bar. (C) Cumulative counts of the series in A and B through {MAIN_SNAPSHOT}. The model curve does not include the two censored classes. The SSEG curve includes pre-2019 commissions in its level. At {MAIN_SNAPSHOT} the dated-model cumulative is {d5['model_cumulative_2024_06']:,.0f} and the SSEG cumulative is {d5['sseg_cumulative_2024_06']:,.0f}. The lower strip is the number of satellite anchor-visits by month in the 27-wave stack. The Top-52 cohort (n = {d5['n_top52']:,}) has no visit sequence and is not in that strip. Load-shedding hours are not shown. Install dates are from {MODEL_LABEL}. {MODEL_EXCLUDED}.
+Timing of detected rooftop PV and municipal SSEG commissioning in Cape Town. (A) Monthly counts of census polygons whose install-date interval has a midpoint in that month. Only closed absent-to-present intervals are included (n = {d5['n_dated']:,}). Polygons already present before the 2019 satellite window (left-censored, n = {d5['n_left_censored']:,}) and polygons known only to have been installed by the {CENSUS_DATE} census aerial (census-bounded, n = {d5['n_census_bound']:,}) are the grey bars and are not assigned to a month. Undated polygons (n = {d5['n_undated']:,}) are omitted. (B) Monthly counts of commissioned SSEG registrations, status codes 1.0 and 4.0 (n = {d5['n_commissioned']:,}). The commission date is the municipal acceptance date. Commissions before 2019 (n = {d5['pre_2019_sseg']:,}) are the grey bar. (C) Cumulative counts of the series in A and B through {MAIN_SNAPSHOT}. The model curve does not include the two censored classes. The SSEG curve includes pre-2019 commissions in its level. At {MAIN_SNAPSHOT} the dated-model cumulative is {d5['model_cumulative_2024_06']:,.0f} and the SSEG cumulative is {d5['sseg_cumulative_2024_06']:,.0f}. The two cumulative curves use separate y-axes; their meeting at {CUMULATIVE_MONTH_END} is not agreement in level. The lower strip is the number of satellite anchor-visits by month in the 27-wave stack. The Top-52 cohort (n = {d5['n_top52']:,}) has no visit sequence and is not in that strip. Load-shedding hours are not shown. Install dates are from {MODEL_LABEL}. {MODEL_EXCLUDED}
 
 ## Figure D3
 
@@ -1482,7 +1706,7 @@ Timing of detected rooftop PV and municipal SSEG commissioning in Cape Town. (A)
 
 ## Figure D4
 
-The same cells and snapshot as Figure D3. The first two maps share a logarithmic colour scale of parcel counts (1 to {d4['vmax_parcels']:.0f}); zero cells are grey. The third map is log((1 + model parcels) / (1 + SSEG parcels)), clipped for display at ±{d4['log_ratio_clip']:.2f} (the 99th percentile of the absolute value). Positive values are cells with more model parcels than SSEG parcels. The grey outline is the City of Cape Town boundary from geoBoundaries ADM2. The scale bar is 10 km.{scope['caption_d4']}
+The same cells and snapshot as Figure D3. The three maps share one longitude and latitude window, in degrees. The first two share a logarithmic colour bar with ticks at 1, 2, 5, 10, 20 and {d4['vmax_parcels']:.0f}. Mid-grey is an analysis cell with zero parcels. Hatching inside the city boundary is outside the analysis footprint. The third map is log((1 + model parcels) / (1 + SSEG parcels)), clipped for display at ±{d4['log_ratio_clip']:.2f} (the 99th percentile of the absolute value). A white cell inside the thin outline has log ratio 0. Positive values are cells with more model parcels than SSEG parcels. The darker outline around the metro is the City of Cape Town boundary from geoBoundaries ADM2. The scale bar is 10 km.{scope['caption_d4']}
 """
     return readme, captions
 
@@ -1567,6 +1791,8 @@ def assemble() -> Path:
     parcel_qa_path = WORK_ROOT / "parcels" / "parcels_qa.json"
     manifest = {
         "batch": "v1",
+        "revision": RELEASE_REVISION,
+        "revision_date": RELEASE_REVISION_DATE,
         "date": BATCH_DATE,
         "code_commit": git_commit(),
         "constants": constants_payload(),
@@ -1586,7 +1812,7 @@ def assemble() -> Path:
         "cells": cells_qa,
         "parcel_download": json.loads(parcel_qa_path.read_text()) if parcel_qa_path.exists() else None,
         "deviations": [
-            "OLS uses HC1 robust standard errors. The task list's clustered errors apply when the row is finer than the cell; here the row is the cell.",
+            "Cross-section OLS uses HC1 because each row is one cell, which matches clustering by cell. Panel specifications cluster standard errors by H3-9 cell.",
             "Quantile bins keep an explicit zero bin, then up to 20 quantile bins of positive model values.",
             "Panel C cumulates dated midpoints only. Left-censored and census-bounded polygons stay off that curve. SSEG's cumulative level includes pre-2019 commissions.",
             _scope_text(cells_qa)["deviation"],

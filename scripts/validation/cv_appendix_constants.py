@@ -51,7 +51,7 @@ CLASS_COUNTS = {
 # Citywide table: Gemini 3.1 Flash Lite, with 3.6-high rescue. 3.5 is the
 # ten-grid set only and is not an input to these figures.
 MODEL_LABEL = "Gemini 3.1 Flash Lite, with Gemini 3.6 high rescue"
-MODEL_EXCLUDED = "Gemini 3.5 Flash Lite (ten-grid only; not in these figures)"
+MODEL_EXCLUDED = "Gemini 3.5 Flash Lite covers only the ten-grid set and is not used here."
 
 # status startswith these prefixes (the trailing space avoids 10.0 / 40.0).
 COMMISSIONED_PREFIXES = ("1.0 ", "4.0 ")
