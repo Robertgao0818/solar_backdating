@@ -2,26 +2,27 @@
 
 | 字段 | 值 |
 |---|---|
-| 日期 | 2026-10-13；rev1 图面修订 2026-10-14 |
-| 状态 | rev1 已在本地建好，等待复验，**尚未上传**。`release_v1/` 保留为修改前的基线 |
+| 日期 | 2026-10-13；rev1 与 rev2 的图面修订都在 2026-10-14 |
+| 状态 | rev2 已在本地建好，等待复验，**尚未上传**。`release_v1/` 和 `release_v1r1/` 都保留 |
 | 计划 | [`PLAN-cv-appendix-figures-execution-2026-10-13.md`](PLAN-cv-appendix-figures-execution-2026-10-13.md) |
-| 代码 | `530e71b8edbf70fe1020885f18571e531d87e2ca`（`release_v1r1/release_manifest.json` 的 `code_commit`。本 RUN 的文档提交在它之后，不改图） |
-| 本地包 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1r1/` |
+| 代码 | `712ae1b3c783952d973475e7f3a9e9c89969862f`（`release_v1r2/release_manifest.json` 的 `code_commit`。本 RUN 的文档提交在它之后，不改图） |
+| 本地包 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1r2/` |
+| 上一轮 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1r1/`（代码 `530e71b`，不覆盖） |
 | 修改前基线 | `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1/`（代码 `357dd9f`，不覆盖） |
 | 预定上传目录 | `dropbox:RA_Solar/appendix/ct_cv_appendix_figures_v1_2026-10-13/`（复验通过之前不要传） |
 
-这一批是三张图，不是检测准确率，也不是安装日期的误差。D5 看时间，D3 看格子里模型和市政登记是否一起变多，D4 看它们在地图上差在哪里。2026-10-14 的 rev1 只改标准误、相关的时间窗和图面，不改 §2 的存量口径。v2（D2 预览和 D1）和 v3（D6）没有开始。
+这一批是三张图，不是检测准确率，也不是安装日期的误差。D5 看时间，D3 看格子里模型和市政登记是否一起变多，D4 看它们在地图上差在哪里。2026-10-14 的 rev1 只改标准误、相关的时间窗和图面，不改 §2 的存量口径。同一天的 rev2 只改 D4 的图面，格子上的数字和 D5、D3 都没有变。v2（D2 预览和 D1）和 v3（D6）没有开始。
 
 ## 1. 包里有什么
 
-等待复验的是 `release_v1r1/`。`release_v1/` 是 2026-10-13 交出去的修改前基线，文件还在，没有覆盖。`release_v1r1/` 里有 `README.md`、`captions.md`、`release_manifest.json`、`SHA256SUMS.txt`，以及：
+等待复验的是 `release_v1r2/`。`release_v1/` 是 2026-10-13 的修改前基线，`release_v1r1/` 是上一轮复验包，两份都还在，没有覆盖。`release_v1r2/` 里有 `README.md`、`captions.md`、`release_manifest.json`、`SHA256SUMS.txt`，以及：
 
 - `figs/fig_D5_temporal.png` 和 `.pdf`
 - `figs/fig_D3_hex_scatter.png` 和 `.pdf`
 - `figs/fig_D4_hex_maps.png` 和 `.pdf`
 - `data/` 里是月度和格子汇总表，没有 SSEG 户、没有哈希账号、没有地块多边形
 
-三张 PNG 都是 300 dpi、宽 2125 像素，折合 179.92 mm。计划要求的期刊双栏宽度是 180 mm，差的 0.08 mm 是像素取整。rev1 的高度是 D5 223.52 mm、D3 90.17 mm、D4 98.64 mm。`sha256sum -c SHA256SUMS.txt` 在 `release_v1r1/` 全部通过。`release_v1/release_manifest.json` 的 sha256 仍是 `3e6198df79f4c7947a97c1061eebbe58f85e7694555c149af882cec13053ad66`，说明基线没有被改写。
+三张 PNG 都是 300 dpi、宽 2125 像素，折合 179.92 mm。计划要求的期刊双栏宽度是 180 mm，差的 0.08 mm 是像素取整。D5 高 223.52 mm，D3 高 90.17 mm，这两个文件和 rev1 字节相同。D4 高 105.16 mm（2125×1242 像素）。比 rev1 的 98.64 mm 多出来的高度，是经度轴标题和色标之间让出来的空隙。`sha256sum -c SHA256SUMS.txt` 在 `release_v1r2/` 全部通过。`release_v1/release_manifest.json` 的 sha256 仍是 `3e6198df79f4c7947a97c1061eebbe58f85e7694555c149af882cec13053ad66`，两份旧目录的修改时间也没有变。
 
 ## 2. 输入核对
 
@@ -108,7 +109,7 @@ OLS 是带截距的普通最小二乘。截面规格用 HC1，也就是不假设
 
 Pearson 相关（数量）是 0.702，Spearman 是 0.616。它们写在 CSV 里，不是另一张图。
 
-D4 改成一行三张地图，铺满 180 mm。每张地图宽 55.77 mm。A 和 B 共用图下方的对数色标，刻度是 1、2、5、10、20、48。C 用自己的发散色标。分析格子里的 0 是中灰色，图例写 "0 parcels (analysis cell)"。市界以内、航拍分析范围以外是浅斜线，图例写 "Outside analysis footprint"。C 里对数比为 0 的格子是白色，但落在分析范围的细外轮廓里面，和轮廓外的斜线不是同一种白。色标放在地图下方而不是右侧，是为了让每张地图达到 55 mm；右侧再加一条色标，地图就会窄于这条线。以前那句「上下留白，因为都市范围南北更长」说的是旧的三行竖排，rev1 已经不再是那样。灰色和斜线都不是 Eskom 掩膜。
+D4 是一行三张地图，铺满 180 mm。rev2 每张地图宽 55.26 mm，画布 179.92 × 105.16 mm。rev1 的 55.77 mm 和 98.64 mm 留在第 10 节，那是上一张图的尺寸。A 和 B 共用图下方的对数色标，刻度是 1、2、5、10、20、48。最后一格来自格子表里的最大地块数，这一批仍是 48。C 用自己的发散色标。经度轴标题在色标上方，没有被色条盖住。纬度只标在左边那张图上，负号完整。分析格子里的 0 是中灰色，图例写 "0 parcels (analysis cell)"。市界以内、航拍分析范围以外是浅斜线，图例写 "Outside analysis footprint"。斜线不再从六边形的缝里透出来。分析范围是黑色轮廓，市界是较细的灰色。C 里对数比为 0 的格子是白色，落在黑色轮廓里面，和轮廓外的斜线不是同一种白。色标放在地图下方而不是右侧，是为了让每张地图达到 55 mm；右侧再加一条色标，地图就会窄于这条线。以前那句「上下留白，因为都市范围南北更长」说的是旧的三行竖排，rev1 已经不再是那样。灰色和斜线都不是 Eskom 掩膜。格子上的计数和 rev1 相同。
 
 ## 7. 和 §2 不同、但写明了的做法
 
@@ -181,3 +182,23 @@ D4 同时把 0 和分析范围外分开。分析格子里的 0 是中灰。市�
 ### 句子
 
 `MODEL_EXCLUDED` 原来被原样拼进 README 和 D5 图注，读出来是不成句的 "Gemini 3.5 Flash Lite (ten-grid only; not in these figures)."。现为 "Gemini 3.5 Flash Lite covers only the ten-grid set and is not used here." 标题和 README 里的快照日、累计终点改为从 `MAIN_SNAPSHOT` 和 `CUMULATIVE_MONTH_END` 读出，打印结果仍是 2024-06-30 和 2024-06。
+
+## 11. rev2（2026-10-14）
+
+Opus 对 v1r1 的结论是 ACCEPT WITH MINOR FIXES，只剩 D4 的图面，还不能上传。这一节不改任何数字。存量规则、输入哈希、类别计数、地块匹配率、面板标准误、交叉相关，以及 Eskom 不剔格子的决定，都与第 10 节相同。`release_v1/` 和 `release_v1r1/` 都留着。清单里的批次仍是 v1，`revision` 是 `v1r2`，`code_commit` 是 `712ae1b3c783952d973475e7f3a9e9c89969862f`。
+
+变的只有 D4 怎么画。
+
+纬度刻度的负号以前被画布左缘切掉。开普敦在南纬，负号没了就会被读成北纬。现在左边留出 0.46 英寸，刻度是 −33.7 到 −34.3，负号完整。PNG 最左边 8 列像素是空白，宽于要求的 3 列。如果再把负号切掉，合作者会把开普敦看成北半球。
+
+经度轴标题 "Longitude (degrees)" 以前压在色标下面。标题被盖住之后，轴上就只剩 18.4 这样的数字，单位是不是度要靠猜。现在标题和色标之间留了 0.56 英寸。三张图的标题都完整，和色标、刻度都不重叠。
+
+默认刻度会把 18.2、19.0 和 −34.4、−33.6 放在视野外面。这些标签不裁剪，于是左边的 18.2 画出画布，右边的 19.0 也画出画布。rev2 只保留视野内部的刻度：经度 18.4、18.6、18.8，纬度 −34.3 到 −33.7。地图范围本身没有变。
+
+分析范围先铺一层实心底，A 和 B 是 #8a8a8a，C 是白色，再在上面画六边形。斜线只留在分析范围以外。A 和 B 的灰色区域里，被至少五个灰色邻居围住的浅斜线像素占比是 0.0000，低于 2% 这条线。如果斜线从六边形的缝里透出来，图例里的「范围外」会把范围里的空缝也算进去。
+
+市界是细灰 #777，分析范围轮廓是黑色。图注写明 "Black = analysis footprint, grey = city boundary"。两条线如果一样深，读者分不出哪条是样本边界。对数色标最后一格用格子表里的最大地块数，这一批打印出来仍是 48。图注里「中灰是零、斜线是范围外、白格是对数比为 0」这三句只出现一次，Eskom 那句也只出现一次。
+
+画布仍宽 179.92 mm（2125 像素）。D4 高度从 rev1 的 98.64 mm 增到 105.16 mm（1242 像素），多出来的是经度标题让出的位置。每张地图宽 55.26 mm，仍不低于 55 mm。D5 仍是 179.92 × 223.52 mm，D3 仍是 179.92 × 90.17 mm。这两张图和全部 `data/` CSV 与 `release_v1r1/` 字节相同。`sha256sum -c SHA256SUMS.txt` 通过。
+
+复验只需要重看 D4 的 PNG 和 PDF、`captions.md` 里的 D4 段，以及 `SHA256SUMS.txt`。不要上传。v2 没有开始。

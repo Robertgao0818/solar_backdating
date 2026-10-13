@@ -61,15 +61,16 @@ created): v1 = D5/D3/D4, v2 = D2 preview (Vexcel allowed, PREVIEW
 watermark) + D1, v3 = D6. Grok Build executes (§7) and Opus 5.5 accepts
 (§8 checklist) before any upload. Phase 0 is the CoCT parcel download
 (835,018 parcels, ~420 requests) plus point-in-parcel joins.
-**v1 accepted with minor fixes on 2026-10-14. v1r1 is local and awaiting
-re-acceptance. Not uploaded.** D5, D3 and D4 revision is
-`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1r1/`.
-`release_v1/` stays as the pre-fix baseline. Run note:
+**v1r1 re-acceptance on 2026-10-14 was ACCEPT WITH MINOR FIXES, D4 layout
+only. v1r2 is local and awaiting re-acceptance. Not uploaded.** Package:
+`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1r2/`.
+`release_v1/` and `release_v1r1/` stay. Run note:
 [`RUN-cv-appendix-figures-v1-2026-10-13.md`](RUN-cv-appendix-figures-v1-2026-10-13.md)
-section rev1. Panel standard errors are clustered by H3-9 cell, and the
-cross-correlation window now ends in 2024-06 for both series (best lag 2,
-Pearson 0.621, n = 64). Do not copy either folder to
-`dropbox:RA_Solar/appendix/` until re-acceptance. v2 and v3 have not started.
+section rev2. Only the D4 figure styling changed. Published numbers are
+unchanged, including clustered panel standard errors and the shared
+cross-correlation window (best lag 2, Pearson 0.621, n = 64). Do not copy
+any release folder to `dropbox:RA_Solar/appendix/` until this re-acceptance.
+v2 and v3 have not started.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
