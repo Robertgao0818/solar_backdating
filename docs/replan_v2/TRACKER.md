@@ -83,11 +83,19 @@ owner's pick. **v3 (D6 only) was accepted with minor fixes on
 2026-10-14. The tree was not modified and it is not uploaded.** Package:
 `~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v3/`. Run note:
 [`RUN-cv-appendix-figures-v3-2026-10-14.md`](RUN-cv-appendix-figures-v3-2026-10-14.md).
-Render commit `3092979`. **v3r1 is assembled locally and is waiting for
-acceptance. It is not uploaded.** Package:
-`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v3r1/`. Run note:
+Render commit `3092979`. **v3r1 was accepted by Opus on 2026-10-14 and
+uploaded.** `rclone check --one-way` reported 0 differences and 10
+matching files. Remote:
+`dropbox:RA_Solar/appendix/ct_cv_appendix_figures_v3_2026-10-14/` (contents
+of `release_v3r1/` only). Local package remains
+`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v3r1/`.
+`release_v3/` was not uploaded. Run note:
 [`RUN-cv-appendix-figures-v3r1-2026-10-14.md`](RUN-cv-appendix-figures-v3r1-2026-10-14.md).
-Render commit `9f5e692`. v2r1 remains not uploaded.
+Render commit `9f5e692`. The owner still has to choose the primary
+contradiction count (619 or 1,008), the month length, whether mixed
+parcels stay out of the histogram, whether the two register-wide dates
+may be public, and whether a new 10 m census-polygon rule is allowed.
+v2r1 remains not uploaded.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
