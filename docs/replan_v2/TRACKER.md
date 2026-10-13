@@ -60,7 +60,17 @@ metric frozen with all bracketed defaults. Figures ship in three drops to
 created): v1 = D5/D3/D4, v2 = D2 preview (Vexcel allowed, PREVIEW
 watermark) + D1, v3 = D6. Grok Build executes (§7) and Opus 5.5 accepts
 (§8 checklist) before any upload. Phase 0 is the CoCT parcel download
-(835,018 parcels, ~420 requests) plus point-in-parcel joins. Not started.
+(835,018 parcels, ~420 requests) plus point-in-parcel joins.
+**v1 built locally on 2026-10-13, awaiting acceptance, not uploaded.**
+D5, D3 and D4 are in
+`~/zasolar_data/geid_temporal/cv_appendix_20261013/release_v1/`.
+Run note:
+[`RUN-cv-appendix-figures-v1-2026-10-13.md`](RUN-cv-appendix-figures-v1-2026-10-13.md).
+The published ODP_SPLIT_1 supply layer does not cover the metro, so no
+cell was dropped for Eskom supply (section 6 fallback). Commissioned
+parcel match rate is 5,146/5,458 = 94.3%, above the 90% stop. Do not
+copy the folder to `dropbox:RA_Solar/appendix/` until acceptance. v2 and
+v3 have not started.
 
 **Dropbox intermediate backup (2026-10-08, uploading):**
 Root was at 2.9G free. Chrome was quit, then Chrome's service-worker
